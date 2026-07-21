@@ -9,6 +9,7 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate {
     private var task: SFSpeechRecognitionTask?
     private var armed = false
     private var generation = 0
+    private let wakePhrases = ["hey orbit", "hay orbit", "hey orbid", "hey or bit"]
 
     override init() {
         super.init()
@@ -60,12 +61,16 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate {
     }
 
     private func consume(_ transcript: String, final: Bool) {
-        let lower = transcript.lowercased()
+        let normalized = transcript.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
         var command = ""
-        if let range = lower.range(of: "hey orbit") {
+        if let phrase = wakePhrases.first(where: { normalized.contains($0) }),
+           let range = normalized.range(of: phrase) {
             if !armed { armed = true; emit("wake") }
-            command = String(transcript[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-        } else if armed { command = transcript.trimmingCharacters(in: .whitespacesAndNewlines) }
+            command = String(normalized[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if armed { command = normalized.trimmingCharacters(in: .whitespacesAndNewlines) }
         guard !command.isEmpty else { return }
         generation += 1
         let current = generation

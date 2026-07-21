@@ -59,8 +59,14 @@ test("voice commands cross only registered IPC and typed planner boundaries", as
   const speech = await fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8");
   const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
   const preload = await fs.readFile(new URL("../preload.cjs", import.meta.url), "utf8");
-  assert.match(speech, /range\(of: "hey orbit"\)/);
+  assert.match(speech, /wakePhrases\.first/);
   assert.match(main, /CommandOrControl\+Shift\+Space/);
   assert.match(preload, /orbit:voice:command/);
   assert.doesNotMatch(preload, /child_process|exec\(|spawn\(/);
+});
+
+test("wake phrase recognition tolerates punctuation and common transcription variants", async () => {
+  const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8"));
+  assert.match(source, /CharacterSet\.alphanumerics\.inverted/);
+  assert.match(source, /"hey orbit", "hay orbit", "hey orbid", "hey or bit"/);
 });

@@ -147,7 +147,8 @@ async function planCommand(value: string) {
     return plan;
   } catch (error) {
     if (local.intent !== "unknown") return { ...local, reply: "OpenAI is unavailable, so I'm handling that command locally." };
-    throw error;
+    const reply = error instanceof Error ? error.message : "OpenAI is temporarily unavailable.";
+    return { intent: "clarify", confidence: 1, explanation: "Cloud planner unavailable", reply, query: value, source: "local" };
   }
 }
 

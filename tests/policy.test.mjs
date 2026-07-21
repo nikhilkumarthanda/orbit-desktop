@@ -52,6 +52,7 @@ test("OpenAI planning is structured and credentials remain main-process only", a
   assert.match(planner, /gpt-5\.6-terra/);
   assert.match(main, /safeStorage\.encryptString/);
   assert.doesNotMatch(preload, /readApiKey|decryptString|openai-key\.bin/);
+  assert.match(main, /Cloud planner unavailable/);
 });
 
 test("voice commands cross only registered IPC and typed planner boundaries", async () => {

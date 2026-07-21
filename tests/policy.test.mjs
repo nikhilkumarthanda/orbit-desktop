@@ -50,6 +50,8 @@ test("Ollama planning is local, structured, and requires no cloud credential", a
   assert.match(planner, /127\.0\.0\.1:11434/);
   assert.match(planner, /additionalProperties: false/);
   assert.match(planner, /qwen3:4b/);
+  assert.match(planner, /think: false/);
+  assert.match(planner, /keep_alive: "10m"/);
   assert.doesNotMatch(planner, /api\.openai\.com|Authorization|Bearer/);
   assert.doesNotMatch(main + preload, /saveApiKey|readApiKey|decryptString/);
   assert.match(main, /Local model unavailable/);

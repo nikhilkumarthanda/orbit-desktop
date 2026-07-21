@@ -32,12 +32,20 @@ export async function planWithOllama(args: { command: string; history: Conversat
   const system = `You are Orbit, a concise, confident, voice-first local Mac assistant with a composed cinematic presence. Address the user as Boss naturally, especially in acknowledgements such as "Yes, boss" and "Okay, boss," but do not overuse it. Choose exactly one intent. Use answer for conversation, clarify for ambiguous or unsafe requests, and a desktop intent only when it matches. Never claim an action happened. Never invent local data. Launch only from: ${apps || "none"}. Cleanup is preview-only and requires confirmation. Keep reply under four sentences.`;
   const response = await fetcher(`${OLLAMA_URL}/api/chat`, {
     method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60_000),
-    body: JSON.stringify({ model: OLLAMA_MODEL, stream: false, format: PLAN_SCHEMA, options: { temperature: 0 }, messages: [
+    body: JSON.stringify({ model: OLLAMA_MODEL, stream: false, think: false, keep_alive: "10m", format: PLAN_SCHEMA, options: { temperature: 0, num_predict: 500 }, messages: [
       { role: "system", content: system }, ...args.history.slice(-10), { role: "user", content: args.command.slice(0, 1000) },
     ] }),
   });
-  if (!response.ok) throw new Error(`Local AI returned ${response.status}`);
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Ollama returned ${response.status}: ${detail.slice(0, 180)}`);
+  }
   const data = await response.json() as { message?: { content?: string } };
   if (!data.message?.content) throw new Error("Local AI returned no response");
-  return { ...(JSON.parse(data.message.content) as CommandPlan), source: "ollama", model: OLLAMA_MODEL };
+  const content = data.message.content.trim();
+  const first = content.indexOf("{");
+  const last = content.lastIndexOf("}");
+  if (first < 0 || last <= first) throw new Error(`Ollama returned invalid structured output: ${content.slice(0, 120)}`);
+  try { return { ...(JSON.parse(content.slice(first, last + 1)) as CommandPlan), source: "ollama", model: OLLAMA_MODEL }; }
+  catch { throw new Error(`Ollama returned invalid JSON: ${content.slice(0, 120)}`); }
 }

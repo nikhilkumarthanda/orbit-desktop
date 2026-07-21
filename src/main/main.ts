@@ -131,7 +131,8 @@ async function planCommand(value: string) {
     return plan;
   } catch (error) {
     if (local.intent !== "unknown") return { ...local, reply: "Local AI is unavailable, so I'm handling that command with Orbit's offline planner." };
-    return { intent: "clarify", confidence: 1, explanation: "Local model unavailable", reply: "Orbit's local model is unavailable. Open Settings to check Ollama and qwen3:4b.", query: value, source: "local" };
+    const detail = error instanceof Error ? error.message : "Unknown local inference error";
+    return { intent: "clarify", confidence: 1, explanation: "Local model unavailable", reply: `Boss, Ollama is installed but inference failed. ${detail}`, query: value, source: "local" };
   }
 }
 

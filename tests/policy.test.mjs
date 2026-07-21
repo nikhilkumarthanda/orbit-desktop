@@ -42,17 +42,17 @@ test("application launching is constrained to discovered installed apps and stor
   assert.match(renderer, /Storage volumes/);
 });
 
-test("OpenAI planning is structured and credentials remain main-process only", async () => {
+test("Ollama planning is local, structured, and requires no cloud credential", async () => {
   const fs = await import("node:fs/promises");
-  const planner = await fs.readFile(new URL("../src/main/openai.ts", import.meta.url), "utf8");
+  const planner = await fs.readFile(new URL("../src/main/ollama.ts", import.meta.url), "utf8");
   const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
   const preload = await fs.readFile(new URL("../preload.cjs", import.meta.url), "utf8");
-  assert.match(planner, /type: "json_schema"/);
+  assert.match(planner, /127\.0\.0\.1:11434/);
   assert.match(planner, /additionalProperties: false/);
-  assert.match(planner, /gpt-5\.6-terra/);
-  assert.match(main, /safeStorage\.encryptString/);
-  assert.doesNotMatch(preload, /readApiKey|decryptString|openai-key\.bin/);
-  assert.match(main, /Cloud planner unavailable/);
+  assert.match(planner, /qwen3:4b/);
+  assert.doesNotMatch(planner, /api\.openai\.com|Authorization|Bearer/);
+  assert.doesNotMatch(main + preload, /saveApiKey|readApiKey|decryptString/);
+  assert.match(main, /Local model unavailable/);
 });
 
 test("voice commands cross only registered IPC and typed planner boundaries", async () => {

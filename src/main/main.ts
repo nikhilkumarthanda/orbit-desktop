@@ -1,7 +1,7 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, shell } from "electron";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import os from "node:os";
 import updater from "electron-updater";
 import path from "node:path";
@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { AuditStore } from "./audit.js";
 import { policies, policy } from "./policy.js";
 import { cleanupPlan, gitContexts, recentWork, systemSnapshot } from "./tools.js";
-import { planWithOpenAI } from "./openai.js";
+import { ollamaStatus, OLLAMA_MODEL, planWithOllama } from "./ollama.js";
 import type { CommandPlan, ConversationTurn } from "../shared/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -18,30 +18,6 @@ let mainWindow: BrowserWindow | null = null;
 let speechProcess: ChildProcessWithoutNullStreams | null = null;
 const { autoUpdater } = updater;
 const conversation: ConversationTurn[] = [];
-const AI_MODEL = "gpt-5.6-terra";
-
-function keyPath() { return path.join(app.getPath("userData"), "openai-key.bin"); }
-
-async function readApiKey() {
-  if (!safeStorage.isEncryptionAvailable()) return null;
-  try { return safeStorage.decryptString(await readFile(keyPath())); } catch { return null; }
-}
-
-async function aiStatus() {
-  const configured = Boolean(await readApiKey());
-  return { configured, available: configured, model: AI_MODEL, encrypted: safeStorage.isEncryptionAvailable() };
-}
-
-async function saveApiKey(value: string) {
-  const key = value.trim();
-  if (key.length < 20 || !key.startsWith("sk-")) throw new Error("Enter a valid OpenAI API key beginning with sk-");
-  if (!safeStorage.isEncryptionAvailable()) throw new Error("Secure macOS key storage is unavailable");
-  await mkdir(app.getPath("userData"), { recursive: true });
-  await writeFile(keyPath(), safeStorage.encryptString(key), { mode: 0o600 });
-  return aiStatus();
-}
-
-async function clearApiKey() { try { await unlink(keyPath()); } catch {} conversation.length = 0; return aiStatus(); }
 
 async function installedApplications() {
   if (process.platform !== "darwin") return ["Google Chrome", "Visual Studio Code"];
@@ -136,19 +112,18 @@ function planLocal(value: string): CommandPlan {
 
 async function planCommand(value: string) {
   const local = planLocal(value);
-  const apiKey = await readApiKey();
-  if (!apiKey) return local;
+  const status = await ollamaStatus();
+  if (!status.available) return local;
   try {
     const applications = await installedApplications();
-    const plan = await planWithOpenAI({ apiKey, command: value, history: conversation, installedApplications: applications });
-    if (plan.intent === "launch" && (!plan.application || !applications.includes(plan.application))) return { intent: "clarify" as const, confidence: 1, explanation: "Application is not installed", reply: `I couldn't find ${plan.application || "that application"} on this Mac.`, query: value, source: "openai" as const, model: AI_MODEL };
+    const plan = await planWithOllama({ command: value, history: conversation, installedApplications: applications });
+    if (plan.intent === "launch" && (!plan.application || !applications.includes(plan.application))) return { intent: "clarify" as const, confidence: 1, explanation: "Application is not installed", reply: `I couldn't find ${plan.application || "that application"} on this Mac.`, query: value, source: "ollama" as const, model: OLLAMA_MODEL };
     conversation.push({ role: "user", content: value }, { role: "assistant", content: plan.reply || plan.explanation });
     if (conversation.length > 20) conversation.splice(0, conversation.length - 20);
     return plan;
   } catch (error) {
-    if (local.intent !== "unknown") return { ...local, reply: "OpenAI is unavailable, so I'm handling that command locally." };
-    const reply = error instanceof Error ? error.message : "OpenAI is temporarily unavailable.";
-    return { intent: "clarify", confidence: 1, explanation: "Cloud planner unavailable", reply, query: value, source: "local" };
+    if (local.intent !== "unknown") return { ...local, reply: "Local AI is unavailable, so I'm handling that command with Orbit's offline planner." };
+    return { intent: "clarify", confidence: 1, explanation: "Local model unavailable", reply: "Orbit's local model is unavailable. Open Settings to check Ollama and qwen3:4b.", query: value, source: "local" };
   }
 }
 
@@ -189,9 +164,7 @@ function registerIPC() {
   }));
   ipcMain.handle("orbit:knowledge:search", (_event, query: string) => traced("knowledge.search", () => retrieve({ operation: "search", query: String(query).slice(0, 300), limit: 8 })));
   ipcMain.handle("orbit:command:plan", (_event, command: string) => traced("command.plan", () => planCommand(String(command).slice(0, 1000))));
-  ipcMain.handle("orbit:ai:status", () => aiStatus());
-  ipcMain.handle("orbit:ai:save-key", (_event, key: string) => traced("ai.credentials", () => saveApiKey(String(key))));
-  ipcMain.handle("orbit:ai:clear-key", () => traced("ai.credentials", clearApiKey));
+  ipcMain.handle("orbit:ai:status", () => ollamaStatus());
   ipcMain.handle("orbit:path:open", (_event, target: string) => traced("files.open", async () => {
     const resolved = String(target).slice(0, 4096);
     if (!path.isAbsolute(resolved)) throw new Error("Orbit only opens absolute cited paths");

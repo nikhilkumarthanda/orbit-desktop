@@ -20,7 +20,5 @@ const api: OrbitAPI = {
   onVoiceEvent: callback => { const listener = (_event: Electron.IpcRendererEvent, payload: Parameters<typeof callback>[0]) => callback(payload); ipcRenderer.on("orbit:voice:event", listener); return () => ipcRenderer.removeListener("orbit:voice:event", listener); },
   onVoiceCommand: callback => { const listener = (_event: Electron.IpcRendererEvent, command: string) => callback(command); ipcRenderer.on("orbit:voice:command", listener); return () => ipcRenderer.removeListener("orbit:voice:command", listener); },
   aiStatus: () => ipcRenderer.invoke("orbit:ai:status"),
-  saveApiKey: apiKey => ipcRenderer.invoke("orbit:ai:save-key", apiKey),
-  clearApiKey: () => ipcRenderer.invoke("orbit:ai:clear-key"),
 };
 contextBridge.exposeInMainWorld("orbit", api);

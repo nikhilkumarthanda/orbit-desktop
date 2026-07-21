@@ -1,14 +1,14 @@
 # Orbit
 
-Orbit is a voice-first, local operating layer for macOS. It combines on-device speech recognition, permission-scoped desktop tools, and optional OpenAI reasoning so natural requests become safe, auditable actions.
+Orbit is a voice-first, zero-cost local operating layer for macOS. It combines on-device speech recognition, permission-scoped desktop tools, and local Ollama reasoning so natural requests become safe, auditable actions without cloud AI charges.
 
-## Orbit Intelligence
+## Local Orbit Intelligence
 
-Version 0.3 adds an optional OpenAI Responses API planner. In **Settings**, users can add an OpenAI API key; Electron encrypts it with macOS-backed `safeStorage`, stores it only in Orbit's local app-data directory, and never returns the secret to the renderer. Orbit uses `gpt-5.6-terra` with strict Structured Outputs to select one typed intent, answer conversational questions, or ask for clarification.
+Version 0.4 uses Ollama and `qwen3:4b` entirely on the user's Mac. There is no cloud AI provider, API key, subscription, per-request charge, or usage quota. Ollama's local structured-output API selects one typed intent, answers conversational questions, or asks for clarification.
 
-The model cannot execute arbitrary shell commands. It can only request Orbit's reviewed tools: system diagnostics, recent work, scoped knowledge search, repository context, cleanup preview, audit history, and installed-app launching. Cleanup remains explicitly confirmed and recoverable. Without a key—or during a temporary API failure—known commands continue through the deterministic local planner.
+The model cannot execute arbitrary shell commands. It can only request Orbit's reviewed tools: system diagnostics, recent work, scoped knowledge search, repository context, cleanup preview, audit history, and installed-app launching. Cleanup remains explicitly confirmed and recoverable. If Ollama is unavailable, known commands continue through the deterministic offline planner.
 
-OpenAI API usage is billed to the key owner's API account and requires internet access. No key is committed to this repository.
+Install Ollama once, open it, and run `ollama pull qwen3:4b`. The model download is reused by future Orbit updates.
 
 ## Product principles
 
@@ -28,7 +28,7 @@ OpenAI API usage is billed to the key owner's API account and requires internet 
 5. Move explicitly selected files to Trash after approval.
 6. Review a local action history.
 7. Index approved folders into SQLite FTS5 and retrieve cited passages without uploading files.
-8. Route natural-language commands through an optional OpenAI structured planner with a deterministic local fallback.
+8. Route natural-language commands through a local Ollama structured planner with a deterministic offline fallback.
 
 ## Signature wake experience
 

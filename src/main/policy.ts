@@ -9,7 +9,8 @@ export const policies: ToolPolicy[] = [
   { name: "knowledge.search", risk: "sensitive", approvalRequired: false, description: "Search the local document index" },
   { name: "command.plan", risk: "read", approvalRequired: false, description: "Classify a command locally into a typed Orbit workflow" },
   { name: "files.open", risk: "reversible", approvalRequired: false, description: "Open a cited local path with its default application" },
-  { name: "app.launch", risk: "external", approvalRequired: false, description: "Launch an application from Orbit's fixed allowlist" },
+  { name: "app.launch", risk: "external", approvalRequired: false, description: "Launch an installed application selected by Orbit's typed planner" },
+  { name: "ai.credentials", risk: "sensitive", approvalRequired: false, description: "Store or remove an encrypted OpenAI API key" },
   { name: "files.trash", risk: "destructive", approvalRequired: true, description: "Move explicitly selected files to operating-system Trash" },
 ];
 

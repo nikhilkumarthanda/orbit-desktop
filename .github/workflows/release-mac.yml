@@ -32,5 +32,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Orbit-macOS
-          path: dist/*
+          path: dist/*.dmg
           if-no-files-found: error

@@ -24,8 +24,10 @@ export interface GitContext { path: string; branch: string; status: string[]; la
 export interface CleanupCandidate extends RecentItem { reason: string; recoverable: true }
 export interface AuditEvent { id: string; at: string; tool: string; risk: Risk; status: string; summary: string }
 export interface SearchHit { path: string; title: string; excerpt: string; score: number; modified_at: number }
-export type Intent = "system" | "recent" | "knowledge" | "git" | "cleanup" | "audit" | "launch" | "unknown";
-export interface CommandPlan { intent: Intent; confidence: number; explanation: string; query?: string; application?: string }
+export type Intent = "system" | "recent" | "knowledge" | "git" | "cleanup" | "audit" | "launch" | "answer" | "clarify" | "unknown";
+export interface ConversationTurn { role: "user" | "assistant"; content: string }
+export interface CommandPlan { intent: Intent; confidence: number; explanation: string; query?: string; application?: string; reply?: string; requiresConfirmation?: boolean; source?: "local"|"openai"; model?: string }
+export interface AIStatus { configured: boolean; available: boolean; model: string; encrypted: boolean }
 export interface VoiceEvent { type: "ready"|"wake"|"partial"|"command"|"error"|"unavailable"|"stopped"; text?: string; message?: string; onDevice?: boolean }
 
 export interface OrbitAPI {
@@ -46,4 +48,7 @@ export interface OrbitAPI {
   speak(text: string): Promise<boolean>;
   onVoiceEvent(callback: (event: VoiceEvent) => void): () => void;
   onVoiceCommand(callback: (command: string) => void): () => void;
+  aiStatus(): Promise<AIStatus>;
+  saveApiKey(apiKey: string): Promise<AIStatus>;
+  clearApiKey(): Promise<AIStatus>;
 }

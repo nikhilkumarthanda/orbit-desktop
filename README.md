@@ -1,6 +1,14 @@
 # Orbit
 
-Orbit is a local-first desktop operating layer that helps users understand and safely act on their computer context. The first working release inspects system resources, recovers recent work, summarizes local Git context, prepares reversible cleanup plans, searches user-approved documents, and records every tool invocation in an audit log.
+Orbit is a voice-first, local operating layer for macOS. It combines on-device speech recognition, permission-scoped desktop tools, and optional OpenAI reasoning so natural requests become safe, auditable actions.
+
+## Orbit Intelligence
+
+Version 0.3 adds an optional OpenAI Responses API planner. In **Settings**, users can add an OpenAI API key; Electron encrypts it with macOS-backed `safeStorage`, stores it only in Orbit's local app-data directory, and never returns the secret to the renderer. Orbit uses `gpt-5.6-terra` with strict Structured Outputs to select one typed intent, answer conversational questions, or ask for clarification.
+
+The model cannot execute arbitrary shell commands. It can only request Orbit's reviewed tools: system diagnostics, recent work, scoped knowledge search, repository context, cleanup preview, audit history, and installed-app launching. Cleanup remains explicitly confirmed and recoverable. Without a key—or during a temporary API failure—known commands continue through the deterministic local planner.
+
+OpenAI API usage is billed to the key owner's API account and requires internet access. No key is committed to this repository.
 
 ## Product principles
 
@@ -20,7 +28,7 @@ Orbit is a local-first desktop operating layer that helps users understand and s
 5. Move explicitly selected files to Trash after approval.
 6. Review a local action history.
 7. Index approved folders into SQLite FTS5 and retrieve cited passages without uploading files.
-8. Route natural-language commands through a deterministic, typed intent planner that refuses unclear requests.
+8. Route natural-language commands through an optional OpenAI structured planner with a deterministic local fallback.
 
 ## Signature wake experience
 

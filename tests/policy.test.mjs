@@ -33,12 +33,25 @@ test("sandbox preload uses a CommonJS context bridge", async () => {
   assert.match(preload, /contextBridge\.exposeInMainWorld\("orbit"/);
 });
 
-test("application launching is allowlisted and storage is rendered", async () => {
+test("application launching is constrained to discovered installed apps and storage is rendered", async () => {
   const fs = await import("node:fs/promises");
   const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
   const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
-  assert.match(main, /new Set\(\["Google Chrome", "Safari", "Finder", "Terminal", "Visual Studio Code"\]\)/);
+  assert.match(main, /const allowed = new Set\(await installedApplications\(\)\)/);
+  assert.match(main, /entry\.name\.endsWith\("\.app"\)/);
   assert.match(renderer, /Storage volumes/);
+});
+
+test("OpenAI planning is structured and credentials remain main-process only", async () => {
+  const fs = await import("node:fs/promises");
+  const planner = await fs.readFile(new URL("../src/main/openai.ts", import.meta.url), "utf8");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const preload = await fs.readFile(new URL("../preload.cjs", import.meta.url), "utf8");
+  assert.match(planner, /type: "json_schema"/);
+  assert.match(planner, /additionalProperties: false/);
+  assert.match(planner, /gpt-5\.6-terra/);
+  assert.match(main, /safeStorage\.encryptString/);
+  assert.doesNotMatch(preload, /readApiKey|decryptString|openai-key\.bin/);
 });
 
 test("voice commands cross only registered IPC and typed planner boundaries", async () => {

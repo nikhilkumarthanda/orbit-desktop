@@ -1,0 +1,5 @@
+#!/bin/zsh
+set -euo pipefail
+mkdir -p release-sidecar
+xcrun swiftc native/macos/OrbitSpeech.swift -O -framework Speech -framework AVFoundation -o release-sidecar/orbit-speech
+chmod +x release-sidecar/orbit-speech

@@ -1,0 +1,49 @@
+export type Risk = "read" | "reversible" | "sensitive" | "external" | "destructive";
+
+export interface ToolPolicy {
+  name: string;
+  risk: Risk;
+  approvalRequired: boolean;
+  description: string;
+}
+
+export interface SystemSnapshot {
+  platform: string;
+  hostname: string;
+  uptimeHours: number;
+  cpuModel: string;
+  cpuUsagePct: number;
+  memory: { totalGb: number; usedGb: number; usedPct: number };
+  storage: { mount: string; totalGb: number; usedGb: number; usedPct: number }[];
+  processes: { pid: number; name: string; cpuPct: number; memoryPct: number }[];
+  capturedAt: string;
+}
+
+export interface RecentItem { path: string; name: string; modifiedAt: string; sizeBytes: number; kind: string }
+export interface GitContext { path: string; branch: string; status: string[]; lastCommit: string; lastCommitAt: string }
+export interface CleanupCandidate extends RecentItem { reason: string; recoverable: true }
+export interface AuditEvent { id: string; at: string; tool: string; risk: Risk; status: string; summary: string }
+export interface SearchHit { path: string; title: string; excerpt: string; score: number; modified_at: number }
+export type Intent = "system" | "recent" | "knowledge" | "git" | "cleanup" | "audit" | "launch" | "unknown";
+export interface CommandPlan { intent: Intent; confidence: number; explanation: string; query?: string; application?: string }
+export interface VoiceEvent { type: "ready"|"wake"|"partial"|"command"|"error"|"unavailable"|"stopped"; text?: string; message?: string; onDevice?: boolean }
+
+export interface OrbitAPI {
+  policies(): Promise<ToolPolicy[]>;
+  systemSnapshot(): Promise<SystemSnapshot>;
+  recentWork(): Promise<RecentItem[]>;
+  gitContext(): Promise<GitContext[]>;
+  cleanupPlan(): Promise<CleanupCandidate[]>;
+  trash(paths: string[]): Promise<{ moved: string[]; failed: string[] }>;
+  audit(): Promise<AuditEvent[]>;
+  indexKnowledge(): Promise<{ indexed: number; skipped: number; cancelled?: boolean }>;
+  searchKnowledge(query: string): Promise<{ hits: SearchHit[] }>;
+  planCommand(command: string): Promise<CommandPlan>;
+  openPath(path: string): Promise<boolean>;
+  launchApplication(application: string): Promise<{ launched: boolean; application: string }>;
+  startVoice(): Promise<{ started: boolean }>;
+  armVoice(): Promise<{ armed: boolean }>;
+  speak(text: string): Promise<boolean>;
+  onVoiceEvent(callback: (event: VoiceEvent) => void): () => void;
+  onVoiceCommand(callback: (command: string) => void): () => void;
+}

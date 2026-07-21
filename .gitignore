@@ -1,0 +1,14 @@
+node_modules/
+dist-electron/
+dist-renderer/
+release/
+dist/
+.electron-cache/
+release-sidecar/orbit-retrieval*
+release-sidecar/orbit-speech*
+.env
+*.log
+.npm-cache/
+.runtime-home/
+__pycache__/
+*.db

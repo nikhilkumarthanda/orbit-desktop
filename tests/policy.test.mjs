@@ -71,3 +71,15 @@ test("wake phrase recognition tolerates punctuation and common transcription var
   assert.match(source, /CharacterSet\.alphanumerics\.inverted/);
   assert.match(source, /"hey orbit", "hay orbit", "hey orbid", "hey or bit"/);
 });
+
+test("microphone can be released and Orbit uses the boss voice persona", async () => {
+  const fs = await import("node:fs/promises");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  const planner = await fs.readFile(new URL("../src/main/ollama.ts", import.meta.url), "utf8");
+  assert.match(main, /orbit:voice:stop/);
+  assert.match(main, /speechProcess\.kill\(\)/);
+  assert.match(main, /"-v", "Daniel", "-r", "168"/);
+  assert.match(renderer, /Mic on/);
+  assert.match(planner, /Address the user as Boss/);
+});

@@ -36,6 +36,8 @@ Orbit 0.2 adds a native macOS speech helper. While Orbit is running, say **Hey O
 
 Orbit cannot listen while the computer is physically asleep. It resumes listening when the app and Mac are awake. macOS will request Microphone and Speech Recognition permission on first use.
 
+Orbit 0.4.1 adds an authoritative Daniel voice at a measured speaking rate and addresses the user as Boss. The top-left **Mic on / Mic off** control now starts or terminates the native speech process; Mic off releases the microphone immediately and removes the macOS recording indicator. **Wake Orbit** or **⌘ Shift Space** can activate it again.
+
 ## Architecture
 
 ```text

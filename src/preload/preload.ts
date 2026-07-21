@@ -15,6 +15,7 @@ const api: OrbitAPI = {
   openPath: path => ipcRenderer.invoke("orbit:path:open", path),
   launchApplication: application => ipcRenderer.invoke("orbit:app:launch", application),
   startVoice: () => ipcRenderer.invoke("orbit:voice:start"),
+  stopVoice: () => ipcRenderer.invoke("orbit:voice:stop"),
   armVoice: () => ipcRenderer.invoke("orbit:voice:arm"),
   speak: text => ipcRenderer.invoke("orbit:voice:speak", text),
   onVoiceEvent: callback => { const listener = (_event: Electron.IpcRendererEvent, payload: Parameters<typeof callback>[0]) => callback(payload); ipcRenderer.on("orbit:voice:event", listener); return () => ipcRenderer.removeListener("orbit:voice:event", listener); },

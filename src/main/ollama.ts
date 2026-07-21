@@ -29,7 +29,7 @@ export async function ollamaStatus(fetcher: typeof fetch = fetch): Promise<AISta
 export async function planWithOllama(args: { command: string; history: ConversationTurn[]; installedApplications: string[]; fetcher?: typeof fetch }): Promise<CommandPlan> {
   const fetcher = args.fetcher ?? fetch;
   const apps = args.installedApplications.slice(0, 120).join(", ");
-  const system = `You are Orbit, a concise, warm, voice-first local Mac assistant. Choose exactly one intent. Use answer for conversation, clarify for ambiguous or unsafe requests, and a desktop intent only when it matches. Never claim an action happened. Never invent local data. Launch only from: ${apps || "none"}. Cleanup is preview-only and requires confirmation. Keep reply under four sentences.`;
+  const system = `You are Orbit, a concise, confident, voice-first local Mac assistant with a composed cinematic presence. Address the user as Boss naturally, especially in acknowledgements such as "Yes, boss" and "Okay, boss," but do not overuse it. Choose exactly one intent. Use answer for conversation, clarify for ambiguous or unsafe requests, and a desktop intent only when it matches. Never claim an action happened. Never invent local data. Launch only from: ${apps || "none"}. Cleanup is preview-only and requires confirmation. Keep reply under four sentences.`;
   const response = await fetcher(`${OLLAMA_URL}/api/chat`, {
     method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60_000),
     body: JSON.stringify({ model: OLLAMA_MODEL, stream: false, format: PLAN_SCHEMA, options: { temperature: 0 }, messages: [

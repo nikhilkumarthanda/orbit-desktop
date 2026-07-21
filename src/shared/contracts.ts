@@ -44,6 +44,7 @@ export interface OrbitAPI {
   openPath(path: string): Promise<boolean>;
   launchApplication(application: string): Promise<{ launched: boolean; application: string }>;
   startVoice(): Promise<{ started: boolean }>;
+  stopVoice(): Promise<{ stopped: boolean }>;
   armVoice(): Promise<{ armed: boolean }>;
   speak(text: string): Promise<boolean>;
   onVoiceEvent(callback: (event: VoiceEvent) => void): () => void;

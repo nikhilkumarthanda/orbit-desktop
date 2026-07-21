@@ -31,7 +31,9 @@ async function installedApplications() {
 
 function speak(text: string) {
   if (process.platform !== "darwin") return;
-  const child = spawn("/usr/bin/say", [String(text).slice(0, 500)], { detached: true, stdio: "ignore" });
+  const raw = String(text).slice(0, 470).trim();
+  const spoken = /\bboss\b/i.test(raw) ? raw : `Boss, ${raw}`;
+  const child = spawn("/usr/bin/say", ["-v", "Daniel", "-r", "168", spoken], { detached: true, stdio: "ignore" });
   child.unref();
 }
 
@@ -42,10 +44,16 @@ function sendVoice(type: string, payload: Record<string, unknown> = {}) {
 function showListening() {
   mainWindow?.show(); mainWindow?.focus();
   sendVoice("wake");
-  speak("Yes?");
+  speak("Yes, boss?");
+}
+
+function stopSpeech() {
+  if (speechProcess) { speechProcess.kill(); speechProcess = null; }
+  sendVoice("stopped", { message: "Microphone off" });
 }
 
 function armVoice() {
+  if (!speechProcess) startSpeech();
   if (speechProcess) speechProcess.stdin.write("arm\n");
   else { showListening(); sendVoice("unavailable", { message: "Native speech helper is not available" }); }
 }
@@ -173,6 +181,7 @@ function registerIPC() {
   ipcMain.handle("orbit:app:launch", (_event, application: string) => traced("app.launch", () => launchApplication(String(application))));
   ipcMain.handle("orbit:voice:speak", (_event, text: string) => { speak(text); return true; });
   ipcMain.handle("orbit:voice:start", () => { startSpeech(); return { started: Boolean(speechProcess) }; });
+  ipcMain.handle("orbit:voice:stop", () => { stopSpeech(); return { stopped: true }; });
   ipcMain.handle("orbit:voice:arm", () => { armVoice(); return { armed: Boolean(speechProcess) }; });
   ipcMain.handle("orbit:trash", async (_event, paths: string[]) => traced("files.trash", async () => {
     const approval = await dialog.showMessageBox({ type: "warning", buttons: ["Cancel", "Move to Trash"], defaultId: 0, cancelId: 0, title: "Approve reversible cleanup", message: `Move ${Math.min(paths.length, 50)} selected file(s) to Trash?`, detail: "Orbit never permanently deletes these files. They remain recoverable from operating-system Trash." });

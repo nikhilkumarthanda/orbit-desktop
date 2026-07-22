@@ -20,6 +20,7 @@ const { autoUpdater } = updater;
 const conversation: ConversationTurn[] = [];
 let lastFailureDetail = "";
 let selectedVoice: string | null = null;
+let activeBrowserSite: { name: string; hostname: string } | null = null;
 
 function orbitVoice() {
   if (selectedVoice) return selectedVoice;
@@ -130,12 +131,12 @@ function planLocal(value: string): CommandPlan {
   if (/\b(open|visit|go to|navigate|search|look up|youtube|tesla|github|website|web site|\.com)\b/.test(command)) {
     const search = command.match(/(?:search|look up)(?:\s+(?:google|youtube))?\s+(?:for\s+)?(.+)/)?.[1]?.trim();
     const url = search && /\byoutube\b/.test(command) ? `https://www.youtube.com/results?search_query=${encodeURIComponent(search)}`
-      : search ? `https://www.google.com/search?q=${encodeURIComponent(search)}`
+      : search && /\bgoogle\b/.test(command) ? `https://www.google.com/search?q=${encodeURIComponent(search)}`
       : /\byoutube\b/.test(command) ? "https://www.youtube.com"
       : /\btesla\b/.test(command) ? "https://www.tesla.com"
       : /\bgithub\b/.test(command) ? "https://github.com"
       : command.match(/\b([a-z0-9-]+\.(?:com|org|net|io|ai|dev))\b/) ? `https://${command.match(/\b([a-z0-9-]+\.(?:com|org|net|io|ai|dev))\b/)?.[1]}` : "";
-    return { intent: "browser", confidence: .96, explanation: "Browser navigation request matched", url, query: url ? "" : value, source: "local" };
+    return { intent: "browser", confidence: .96, explanation: "Browser navigation request matched", url, query: url ? "" : (search || value), source: "local" };
   }
   const rules: [CommandPlan["intent"], RegExp, string][] = [
     ["launch", /\b(open|launch|start)\b.*\b(chrome|safari|finder|terminal|code|visual studio code)\b/, "Allowlisted application launch matched"],
@@ -184,6 +185,7 @@ async function githubWorkflow(repository = "nikhilkumarthanda/orbit-desktop"): P
   const state = !run ? "unknown" : run.status !== "completed" ? "pending" : run.conclusion === "success" ? "success" : "failure";
   const summary = state === "success" ? `Boss, the latest ${run?.name || "workflow"} completed successfully.` : state === "pending" ? `Boss, the latest ${run?.name || "workflow"} is still running.` : state === "failure" ? `Boss, the latest ${run?.name || "workflow"} failed. Would you like a brief?` : "Boss, I couldn't find a recent workflow run.";
   openChromeTab(url);
+  activeBrowserSite = { name: "GitHub", hostname: "github.com" };
   return { repository: safe, state, workflow: run?.name, url, summary };
 }
 
@@ -207,14 +209,25 @@ async function browserNavigate(request: { url?: string; query?: string; site?: s
   if (!target) {
     const terms = String(request.query || request.site || "").trim().slice(0, 300);
     if (!terms) throw new Error("Orbit needs a website or search phrase");
-    target = `https://www.google.com/search?q=${encodeURIComponent(terms)}`;
+    const context = activeBrowserSite;
+    if (context?.hostname.includes("youtube.com")) target = `https://www.youtube.com/results?search_query=${encodeURIComponent(terms)}`;
+    else if (context?.hostname === "github.com") target = `https://github.com/search?q=${encodeURIComponent(terms)}`;
+    else if (context?.hostname.includes("amazon.")) target = `https://${context.hostname}/s?k=${encodeURIComponent(terms)}`;
+    else if (context?.hostname.includes("reddit.com")) target = `https://www.reddit.com/search/?q=${encodeURIComponent(terms)}`;
+    else if (context?.hostname.includes("linkedin.com")) target = `https://www.linkedin.com/search/results/all/?keywords=${encodeURIComponent(terms)}`;
+    else if (context && context.hostname !== "www.google.com") target = `https://www.google.com/search?q=${encodeURIComponent(`site:${context.hostname} ${terms}`)}`;
+    else target = `https://www.google.com/search?q=${encodeURIComponent(terms)}`;
   }
   let parsed: URL;
   try { parsed = new URL(target); } catch { throw new Error("Orbit could not validate that web address"); }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("Orbit only opens HTTP or HTTPS websites");
   openChromeTab(parsed.toString());
   const destination = parsed.hostname.replace(/^www\./, "");
-  return { opened: true, url: parsed.toString(), summary: `Opening ${destination} in a new Chrome tab, boss.` };
+  const names: Record<string, string> = { "youtube.com": "YouTube", "github.com": "GitHub", "google.com": "Google", "tesla.com": "Tesla", "reddit.com": "Reddit", "linkedin.com": "LinkedIn" };
+  const matched = Object.entries(names).find(([domain]) => destination === domain || destination.endsWith(`.${domain}`));
+  activeBrowserSite = { name: matched?.[1] || destination, hostname: parsed.hostname };
+  const searched = Boolean(request.query && !request.url);
+  return { opened: true, url: parsed.toString(), site: activeBrowserSite.name, summary: searched ? `Searching ${activeBrowserSite.name} for ${String(request.query).slice(0, 80)}, boss.` : `Opening ${activeBrowserSite.name} in a new Chrome tab, boss.` };
 }
 
 async function launchApplication(application: string) {

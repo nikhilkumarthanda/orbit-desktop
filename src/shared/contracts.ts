@@ -45,7 +45,7 @@ export interface OrbitAPI {
   openPath(path: string): Promise<boolean>;
   launchApplication(application: string): Promise<{ launched: boolean; application: string }>;
   githubWorkflow(repository?: string): Promise<GitHubWorkflowStatus>;
-  browserNavigate(request: { url?: string; query?: string; site?: string }): Promise<{ opened: boolean; url: string; summary: string }>;
+  browserNavigate(request: { url?: string; query?: string; site?: string }): Promise<{ opened: boolean; url: string; site: string; summary: string }>;
   startVoice(): Promise<{ started: boolean }>;
   stopVoice(): Promise<{ stopped: boolean }>;
   armVoice(): Promise<{ armed: boolean }>;

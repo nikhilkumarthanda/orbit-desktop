@@ -103,3 +103,12 @@ test("A+C command deck keeps voice controls in sidebar flow", async () => {
   assert.match(deck, /deck-spin/);
   assert.match(deck, /core-orb/);
 });
+
+test("browser follow-ups use active site context with safe URL adapters", async () => {
+  const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8"));
+  assert.match(source, /activeBrowserSite/);
+  assert.match(source, /youtube\.com\/results\?search_query=/);
+  assert.match(source, /github\.com\/search\?q=/);
+  assert.match(source, /site:\$\{context\.hostname\}/);
+  assert.match(source, /parsed\.protocol !== "https:"/);
+});

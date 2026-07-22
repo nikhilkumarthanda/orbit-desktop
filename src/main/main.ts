@@ -150,6 +150,7 @@ function planLocal(value: string): CommandPlan {
   if (/\b(cricket|ipl|test match)\b.*\b(score|scores|result|match|update|live)\b|\b(score|scores)\b.*\b(cricket|ipl)\b/.test(command)) return { intent: "cricket", confidence: 1, explanation: "Live cricket request matched", query: value, source: "local" };
   if (/\b(news|headlines|top stories|world update)\b/.test(command)) return { intent: "news", confidence: 1, explanation: "Live news request matched", query: value, source: "local" };
   if (/\bgithub\b/.test(command) && /\b(workflow|actions?|deploy|build|status|complete|check|see)\b/.test(command)) return { intent: "github", confidence: .99, explanation: "GitHub workflow request matched", repository: "nikhilkumarthanda/orbit-desktop", query: value, source: "local" };
+  if (/\b(?:my|this|the)?\s*(cpu|memory|ram|storage|disk|system|process(?:es)?|computer|mac)\b/.test(command)) return { intent: "system", confidence: .98, explanation: "Native system request matched", query: value, source: "local" };
   if (/\b(open|visit|go to|navigate|search|look up|youtube|tesla|github|website|web site|\.com)\b/.test(command)) {
     const sameTab = /\b(?:same|current|this|active)\s+(?:youtube\s+)?tab\b/.test(command);
     const search = command.match(/(?:search|look up)(?:\s+(?:google|youtube))?\s+(?:for\s+)?(.+)/)?.[1]?.trim();

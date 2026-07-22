@@ -51,7 +51,7 @@ test("Ollama planning is local, structured, and requires no cloud credential", a
   assert.match(planner, /additionalProperties: false/);
   assert.match(planner, /qwen3:4b/);
   assert.match(planner, /think: false/);
-  assert.match(planner, /keep_alive: "10m"/);
+  assert.match(planner, /keep_alive: "30s"/);
   assert.match(planner, /num_predict: 1000/);
   assert.match(main, /Local greeting matched/);
   assert.doesNotMatch(planner, /api\.openai\.com|Authorization|Bearer/);
@@ -219,4 +219,15 @@ test("Adaptive Reactor maps voice and action states to violet gold and crimson",
   assert.match(theme, /data-orbit-state="executing"/);
   assert.match(theme, /--reactor:#e7b85c/);
   assert.match(theme, /--reactor:#ff4055/);
+});
+
+test("all Mac diagnostics route locally before general research", async () => {
+  const main = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8"));
+  assert.ok(main.indexOf('explanation: "Native system request matched"') < main.indexOf('explanation: "Knowledge question matched"'));
+});
+
+test("Ollama releases model memory shortly after fallback use", async () => {
+  const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/main/ollama.ts", import.meta.url), "utf8"));
+  assert.equal((source.match(/keep_alive: "30s"/g) || []).length, 2);
+  assert.equal(source.includes('keep_alive: "10m"'), false);
 });

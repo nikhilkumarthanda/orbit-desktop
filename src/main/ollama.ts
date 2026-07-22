@@ -42,7 +42,7 @@ export async function planWithOllama(args: { command: string; history: Conversat
   const system = `You are Orbit, a concise, confident, voice-first local Mac assistant with a composed cinematic presence. Address the user as Boss naturally. Choose exactly one intent. Greetings and casual conversation use answer. Questions requesting facts, explanations, recommendations, comparisons, or current information use research. Use notifications only for Mac/app notifications; never confuse notifications with news. Use weather, news, or cricket for those explicit live requests; never invent live facts. Use github when asked to inspect GitHub Actions, workflows, deployment, CI, or build status; default repository to nikhilkumarthanda/orbit-desktop when Orbit is implied. Use browser for opening any website or explicitly navigating/searching in Chrome. Put a safe https URL in url when known; otherwise put search terms in query. Use launch only for installed desktop apps, never for a website. Return every required JSON field. Keep explanation under 12 words and spoken reply under 2 short sentences. Use empty strings for unused query, application, repository, and url. Never read raw technical errors aloud. Never claim an action happened. Never invent local data. Launch only from: ${apps || "none"}. Cleanup is preview-only and requires confirmation.`;
   const response = await fetcher(`${OLLAMA_URL}/api/chat`, {
     method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60_000),
-    body: JSON.stringify({ model: OLLAMA_MODEL, stream: false, think: false, keep_alive: "10m", format: PLAN_SCHEMA, options: { temperature: 0, num_predict: 1000 }, messages: [
+    body: JSON.stringify({ model: OLLAMA_MODEL, stream: false, think: false, keep_alive: "30s", format: PLAN_SCHEMA, options: { temperature: 0, num_predict: 1000 }, messages: [
       { role: "system", content: system }, ...args.history.slice(-10), { role: "user", content: args.command.slice(0, 1000) },
     ] }),
   });
@@ -65,7 +65,7 @@ export async function answerWithOllama(args: { query: string; sources: ResearchS
   const evidence = args.sources.map((source, index) => `[${index + 1}] ${source.title}\n${source.excerpt}`).join("\n\n");
   const response = await fetcher(`${OLLAMA_URL}/api/chat`, {
     method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60_000),
-    body: JSON.stringify({ model: OLLAMA_MODEL, stream: false, think: false, keep_alive: "10m", options: { temperature: 0.15, num_predict: 500 }, messages: [
+    body: JSON.stringify({ model: OLLAMA_MODEL, stream: false, think: false, keep_alive: "30s", options: { temperature: 0.15, num_predict: 500 }, messages: [
       { role: "system", content: "Answer only from the supplied web evidence. Be concise, clear, and honest about uncertainty. Cite factual sentences with [1], [2], etc. Never invent a source or claim. Do not include URLs." },
       ...args.history.slice(-6), { role: "user", content: `Question: ${args.query}\n\nWeb evidence:\n${evidence}` },
     ] }),

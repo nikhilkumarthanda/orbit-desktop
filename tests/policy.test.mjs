@@ -135,10 +135,17 @@ test("Mac context routes before web research and Gemini keys stay in Keychain", 
   assert.match(main, /needsLiveWeb/);
   assert.match(gemini, /find-generic-password/);
   assert.match(gemini, /add-generic-password/);
+  assert.match(gemini, /x-goog-api-key/);
+  assert.doesNotMatch(gemini, /\^AIza/);
+  assert.match(gemini, /monthlyBudgetUsd/);
+  assert.match(gemini, /gemini-usage\.json/);
+  assert.match(main, /geminiStatus\(\)\.available/);
   assert.doesNotMatch(gemini, /const\s+\w*KEY\s*=\s*["']AIza/);
   assert.match(contracts, /configureGemini/);
   assert.match(preload, /orbit:gemini:configure/);
+  assert.match(preload, /orbit:gemini:budget/);
   assert.match(renderer, /type="password"/);
+  assert.match(renderer, /Set hard limit/);
   assert.match(policy, /screen\.describe/);
 });
 

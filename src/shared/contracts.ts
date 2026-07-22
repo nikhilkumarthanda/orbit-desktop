@@ -32,7 +32,8 @@ export interface LiveBrief { summary: string; source: string; updatedAt: string 
 export interface ResearchSource { title: string; url: string; excerpt: string }
 export interface ResearchAnswer { answer: string; spokenAnswer: string; sources: ResearchSource[]; updatedAt: string }
 export interface AIStatus { provider: "ollama"; configured: boolean; available: boolean; running: boolean; model: string; cost: "$0"; installCommand: string }
-export interface GeminiStatus { provider: "gemini"; configured: boolean; available: boolean; model: string; cost: "$0 free tier" }
+export interface GeminiUsageStatus { month: string; requests: number; inputTokens: number; outputTokens: number; estimatedCostUsd: number; monthlyBudgetUsd: number; remainingUsd: number; blocked: boolean }
+export interface GeminiStatus { provider: "gemini"; configured: boolean; available: boolean; model: string; cost: "$0 on Google free tier"; usage: GeminiUsageStatus }
 export interface BatteryStatus { percentage: number; charging: boolean; timeRemaining?: string; summary: string }
 export interface VoiceEvent { type: "ready"|"wake"|"listening"|"partial"|"command"|"error"|"unavailable"|"stopped"; text?: string; message?: string; onDevice?: boolean; mode?: "wake-word"|"command" }
 
@@ -66,4 +67,5 @@ export interface OrbitAPI {
   aiStatus(): Promise<AIStatus>;
   geminiStatus(): Promise<GeminiStatus>;
   configureGemini(apiKey: string): Promise<GeminiStatus>;
+  setGeminiBudget(monthlyBudgetUsd: number): Promise<GeminiStatus>;
 }

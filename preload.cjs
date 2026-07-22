@@ -30,4 +30,5 @@ contextBridge.exposeInMainWorld("orbit", Object.freeze({
   aiStatus: () => ipcRenderer.invoke("orbit:ai:status"),
   geminiStatus: () => ipcRenderer.invoke("orbit:gemini:status"),
   configureGemini: apiKey => ipcRenderer.invoke("orbit:gemini:configure", apiKey),
+  setGeminiBudget: monthlyBudgetUsd => ipcRenderer.invoke("orbit:gemini:budget", monthlyBudgetUsd),
 }));

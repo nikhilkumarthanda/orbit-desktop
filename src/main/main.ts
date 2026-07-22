@@ -10,7 +10,7 @@ import { AuditStore } from "./audit.js";
 import { policies, policy } from "./policy.js";
 import { cleanupPlan, gitContexts, recentWork, systemSnapshot } from "./tools.js";
 import { answerWithOllama, ollamaStatus, OLLAMA_MODEL, planWithOllama } from "./ollama.js";
-import { answerWithGemini, geminiKey, geminiStatus, saveGeminiKey } from "./gemini.js";
+import { answerWithGemini, geminiKey, geminiStatus, saveGeminiKey, setGeminiBudget } from "./gemini.js";
 import type { CommandPlan, ConversationTurn, GitHubWorkflowStatus, LiveBrief, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -400,7 +400,7 @@ async function research(query: string): Promise<ResearchAnswer> {
   const needsLiveWeb = /\b(today|tonight|now|current|currently|latest|recent|news|price|stock|score|weather|forecast|election|president|ceo|release|version|202[5-9])\b/i.test(clean);
   const sources = needsLiveWeb ? await searchPublicWeb(clean) : [];
   let answer: string;
-  if (geminiKey()) answer = await answerWithGemini({ query: clean, sources, history: conversation });
+  if (geminiStatus().available) answer = await answerWithGemini({ query: clean, sources, history: conversation });
   else {
     const status = await ollamaStatus();
     if (status.available) answer = await answerWithOllama({ query: clean, sources, history: conversation });
@@ -480,7 +480,8 @@ function registerIPC() {
   ipcMain.handle("orbit:system:battery", () => traced("system.battery", async () => batteryStatus()));
   ipcMain.handle("orbit:screen:describe", (_event, query: string) => traced("screen.describe", () => describeScreen(String(query).slice(0, 500))));
   ipcMain.handle("orbit:gemini:status", () => geminiStatus());
-  ipcMain.handle("orbit:gemini:configure", (_event, key: string) => traced("gemini.configure", async () => { saveGeminiKey(String(key)); return geminiStatus(); }));
+  ipcMain.handle("orbit:gemini:configure", (_event, key: string) => traced("gemini.configure", async () => { await saveGeminiKey(String(key)); return geminiStatus(); }));
+  ipcMain.handle("orbit:gemini:budget", (_event, value: number) => traced("gemini.budget", async () => { setGeminiBudget(Number(value)); return geminiStatus(); }));
   ipcMain.handle("orbit:voice:speak", (_event, text: string) => { speak(text); return true; });
   ipcMain.handle("orbit:voice:start", () => { startSpeech(); return { started: Boolean(speechProcess) }; });
   ipcMain.handle("orbit:voice:stop", () => { stopSpeech(); return { stopped: true }; });

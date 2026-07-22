@@ -124,7 +124,7 @@ function retrieve(request: Record<string, unknown>): Promise<any> {
 }
 
 function planLocal(value: string): CommandPlan {
-  const command = value.trim().toLowerCase();
+  const command = value.trim().toLowerCase().replace(/\b(?:git|get)\s+hub\b/g, "github").replace(/\bgethub\b/g, "github");
   if (/\b(brief|explain|tell me more|what happened)\b/.test(command) && lastFailureDetail) return { intent: "answer", confidence: 1, explanation: "Previous error briefing", reply: `Boss, the previous operation failed because ${lastFailureDetail}. I can retry when you're ready.`, query: value, source: "local" };
   if (/^(hi|hello|hey|good (morning|afternoon|evening))( orbit)?[!.?]*$/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local greeting matched", reply: "Yes, boss? At your service.", query: value, source: "local" };
   if (/\bgithub\b/.test(command) && /\b(open|go|workflow|action|deploy|build|status|complete|check|see)\b/.test(command)) return { intent: "github", confidence: .99, explanation: "GitHub workflow request matched", repository: "nikhilkumarthanda/orbit-desktop", query: value, source: "local" };
@@ -174,7 +174,18 @@ async function githubWorkflow(repository = "nikhilkumarthanda/orbit-desktop"): P
   const run = data.workflow_runs?.[0];
   const state = !run ? "unknown" : run.status !== "completed" ? "pending" : run.conclusion === "success" ? "success" : "failure";
   const summary = state === "success" ? `Boss, the latest ${run?.name || "workflow"} completed successfully.` : state === "pending" ? `Boss, the latest ${run?.name || "workflow"} is still running.` : state === "failure" ? `Boss, the latest ${run?.name || "workflow"} failed. Would you like a brief?` : "Boss, I couldn't find a recent workflow run.";
-  const child = spawn("/usr/bin/open", ["-a", "Google Chrome", url], { detached: true, stdio: "ignore" }); child.unref();
+  const script = `on run argv
+set targetUrl to item 1 of argv
+tell application "Google Chrome"
+activate
+if (count of windows) is 0 then make new window
+tell front window to make new tab with properties {URL:targetUrl}
+set active tab index of front window to count of tabs of front window
+end tell
+end run`;
+  const child = spawn("/usr/bin/osascript", ["-e", script, url], { detached: true, stdio: "ignore" });
+  child.once("error", () => { const fallback = spawn("/usr/bin/open", ["-a", "Google Chrome", url], { detached: true, stdio: "ignore" }); fallback.unref(); });
+  child.unref();
   return { repository: safe, state, workflow: run?.name, url, summary };
 }
 

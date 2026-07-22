@@ -13,6 +13,8 @@ Install Ollama once, open it, and run `ollama pull qwen3:4b`. The model download
 ## Product principles
 
 - Local by default: no cloud model is required for system tools.
+- Optional Gemini intelligence: a free-tier API key is stored in macOS Keychain and powers natural answers plus screen understanding.
+- Native context first: battery and screen requests use Mac capabilities instead of irrelevant web searches.
 - Typed tools: renderer code cannot access Node or the filesystem directly.
 - Least privilege: Electron uses context isolation, a sandboxed renderer, and an allowlisted preload API.
 - Controlled agency: destructive operations require explicit selection and approval.

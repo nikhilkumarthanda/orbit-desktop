@@ -6,7 +6,7 @@ const PLAN_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
-    intent: { type: "string", enum: ["system", "recent", "knowledge", "git", "github", "browser", "cleanup", "audit", "launch", "weather", "news", "cricket", "notifications", "research", "answer", "clarify"] },
+    intent: { type: "string", enum: ["battery", "screen", "system", "recent", "knowledge", "git", "github", "browser", "cleanup", "audit", "launch", "weather", "news", "cricket", "notifications", "research", "answer", "clarify"] },
     confidence: { type: "number", minimum: 0, maximum: 1 },
     explanation: { type: "string", maxLength: 100 }, reply: { type: "string", maxLength: 500 },
     query: { type: "string", maxLength: 200 }, application: { type: "string", maxLength: 100 }, repository: { type: "string", maxLength: 120 }, url: { type: "string", maxLength: 300 }, requiresConfirmation: { type: "boolean" },

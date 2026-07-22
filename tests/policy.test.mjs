@@ -118,7 +118,28 @@ test("browser follow-ups use active site context with safe URL adapters", async 
   assert.match(source, /sameTab/);
   assert.match(source, /input\[type=/);
   assert.match(source, /parsed\.protocol !== "https:"/);
-  assert.match(source, /\["answer", "clarify", "notifications", "research", "browser", "github", "weather", "news", "cricket"\]\.includes\(local\.intent\)/);
+  assert.match(source, /\["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "weather", "news", "cricket"\]\.includes\(local\.intent\)/);
+});
+
+test("Mac context routes before web research and Gemini keys stay in Keychain", async () => {
+  const read = path => import("node:fs/promises").then(fs => fs.readFile(new URL(`../${path}`, import.meta.url), "utf8"));
+  const [main, gemini, contracts, preload, renderer, policy] = await Promise.all([
+    read("src/main/main.ts"), read("src/main/gemini.ts"), read("src/shared/contracts.ts"),
+    read("preload.cjs"), read("src/renderer/src.tsx"), read("src/main/policy.ts"),
+  ]);
+  assert.match(main, /intent: "battery"/);
+  assert.match(main, /intent: "screen"/);
+  assert.ok(main.indexOf('intent: "battery"') < main.indexOf('intent: "research"'));
+  assert.match(main, /pmset/);
+  assert.match(main, /desktopCapturer\.getSources/);
+  assert.match(main, /needsLiveWeb/);
+  assert.match(gemini, /find-generic-password/);
+  assert.match(gemini, /add-generic-password/);
+  assert.doesNotMatch(gemini, /const\s+\w*KEY\s*=\s*["']AIza/);
+  assert.match(contracts, /configureGemini/);
+  assert.match(preload, /orbit:gemini:configure/);
+  assert.match(renderer, /type="password"/);
+  assert.match(policy, /screen\.describe/);
 });
 
 test("voice commands tolerate natural pauses before submitting", async () => {
@@ -154,6 +175,18 @@ test("Crimson Reactor is selectable and persists across restarts", async () => {
   assert.match(renderer, /localStorage\.setItem\("orbit-theme"/);
   assert.match(renderer, /Crimson Reactor/);
   assert.match(theme, /data-orbit-theme="crimson"/);
+});
+
+test("all six reference designs are selectable full visual presets", async () => {
+  const fs = await import("node:fs/promises");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  const theme = await fs.readFile(new URL("../src/renderer/adaptive-reactor.css", import.meta.url), "utf8");
+  for (const name of ["Cosmic Violet", "Cyber Cyan", "Obsidian Gold", "Aurora Glass", "Crimson Reactor", "Liquid Monochrome"]) {
+    assert.match(renderer, new RegExp(name));
+  }
+  for (const id of ["violet", "cyan", "gold", "aurora", "crimson", "monochrome"]) {
+    assert.match(theme, new RegExp(`data-orbit-theme="${id}"`));
+  }
 });
 
 test("live briefings use transient macOS location and public read-only sources", async () => {

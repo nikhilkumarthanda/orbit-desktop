@@ -20,6 +20,8 @@ const api: OrbitAPI = {
   liveNews: () => ipcRenderer.invoke("orbit:live:news"),
   liveCricket: () => ipcRenderer.invoke("orbit:live:cricket"),
   research: query => ipcRenderer.invoke("orbit:web:research", query),
+  batteryStatus: () => ipcRenderer.invoke("orbit:system:battery"),
+  describeScreen: query => ipcRenderer.invoke("orbit:screen:describe", query),
   startVoice: () => ipcRenderer.invoke("orbit:voice:start"),
   stopVoice: () => ipcRenderer.invoke("orbit:voice:stop"),
   armVoice: () => ipcRenderer.invoke("orbit:voice:arm"),
@@ -27,5 +29,7 @@ const api: OrbitAPI = {
   onVoiceEvent: callback => { const listener = (_event: Electron.IpcRendererEvent, payload: Parameters<typeof callback>[0]) => callback(payload); ipcRenderer.on("orbit:voice:event", listener); return () => ipcRenderer.removeListener("orbit:voice:event", listener); },
   onVoiceCommand: callback => { const listener = (_event: Electron.IpcRendererEvent, command: string) => callback(command); ipcRenderer.on("orbit:voice:command", listener); return () => ipcRenderer.removeListener("orbit:voice:command", listener); },
   aiStatus: () => ipcRenderer.invoke("orbit:ai:status"),
+  geminiStatus: () => ipcRenderer.invoke("orbit:gemini:status"),
+  configureGemini: apiKey => ipcRenderer.invoke("orbit:gemini:configure", apiKey),
 };
 contextBridge.exposeInMainWorld("orbit", api);

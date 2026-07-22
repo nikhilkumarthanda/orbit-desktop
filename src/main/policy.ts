@@ -16,6 +16,9 @@ export const policies: ToolPolicy[] = [
   { name: "live.news", risk: "external", approvalRequired: false, description: "Retrieve current public news headlines" },
   { name: "live.cricket", risk: "external", approvalRequired: false, description: "Retrieve the latest public cricket score update" },
   { name: "web.research", risk: "external", approvalRequired: false, description: "Search public web sources and synthesize a cited answer" },
+  { name: "system.battery", risk: "read", approvalRequired: false, description: "Read the Mac battery level and charging state" },
+  { name: "screen.describe", risk: "sensitive", approvalRequired: false, description: "Capture the current screen and send it to the configured vision model" },
+  { name: "gemini.configure", risk: "sensitive", approvalRequired: false, description: "Store a Gemini API key in macOS Keychain" },
   { name: "files.trash", risk: "destructive", approvalRequired: true, description: "Move explicitly selected files to operating-system Trash" },
 ];
 

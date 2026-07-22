@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, shell } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, screen, shell } from "electron";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
@@ -10,6 +10,7 @@ import { AuditStore } from "./audit.js";
 import { policies, policy } from "./policy.js";
 import { cleanupPlan, gitContexts, recentWork, systemSnapshot } from "./tools.js";
 import { answerWithOllama, ollamaStatus, OLLAMA_MODEL, planWithOllama } from "./ollama.js";
+import { answerWithGemini, geminiKey, geminiStatus, saveGeminiKey } from "./gemini.js";
 import type { CommandPlan, ConversationTurn, GitHubWorkflowStatus, LiveBrief, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -142,6 +143,8 @@ function planLocal(value: string): CommandPlan {
   if (/^(hi|hello|hey|good (morning|afternoon|evening))( orbit)?[!.?]*$/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local greeting matched", reply: "Yes, boss? At your service.", query: value, source: "local" };
   if (/\b(how are you|how is it going|you good)\b/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local conversation matched", reply: "Running smoothly, boss. What can I do for you?", query: value, source: "local" };
   if (/\b(notifications?|notification center|alerts?)\b/.test(command)) return { intent: "notifications", confidence: 1, explanation: "Mac notification request matched", reply: "I can’t read Notification Center yet, boss. I won’t substitute news headlines for your notifications.", query: value, source: "local" };
+  if (/\b(?:what(?:'s| is)?|check|tell me|show me)?\s*(?:my|the)?\s*battery(?:\s+(?:level|percentage|status))?\b/.test(command)) return { intent: "battery", confidence: 1, explanation: "Native battery request matched", query: value, source: "local" };
+  if (/\b(?:what(?:'s| is) on|describe|read|analy[sz]e|look at|see)\s+(?:my|the|this|current)?\s*screen\b|\bscreen\s*(?:right now|now)\b/.test(command)) return { intent: "screen", confidence: 1, explanation: "Native screen request matched", query: value, source: "local" };
   if (/^(?:what(?:'s| is| are)?|any|give me|tell me)(?: the)? (?:new )?updates?[?.!]*$/.test(command)) return { intent: "clarify", confidence: 1, explanation: "Update topic is ambiguous", reply: "Which updates do you mean, boss—your notifications, news, weather, cricket, GitHub, or something else?", query: value, source: "local" };
   if (/\b(weather|temperature|forecast)\b/.test(command)) return { intent: "weather", confidence: 1, explanation: "Live weather request matched", query: value, source: "local" };
   if (/\b(cricket|ipl|test match)\b.*\b(score|scores|result|match|update|live)\b|\b(score|scores)\b.*\b(cricket|ipl)\b/.test(command)) return { intent: "cricket", confidence: 1, explanation: "Live cricket request matched", query: value, source: "local" };
@@ -178,7 +181,7 @@ function planLocal(value: string): CommandPlan {
 
 async function planCommand(value: string) {
   const local = planLocal(value);
-  if (["answer", "clarify", "notifications", "research", "browser", "github", "weather", "news", "cricket"].includes(local.intent)) return local;
+  if (["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "weather", "news", "cricket"].includes(local.intent)) return local;
   const status = await ollamaStatus();
   if (!status.available) return local;
   try {
@@ -394,15 +397,44 @@ async function searchPublicWeb(query: string): Promise<ResearchSource[]> {
 async function research(query: string): Promise<ResearchAnswer> {
   const clean = query.trim().slice(0, 500);
   if (!clean) throw new Error("Orbit needs a question to research");
-  const sources = await searchPublicWeb(clean);
+  const needsLiveWeb = /\b(today|tonight|now|current|currently|latest|recent|news|price|stock|score|weather|forecast|election|president|ceo|release|version|202[5-9])\b/i.test(clean);
+  const sources = needsLiveWeb ? await searchPublicWeb(clean) : [];
   let answer: string;
-  const status = await ollamaStatus();
-  if (status.available) answer = await answerWithOllama({ query: clean, sources, history: conversation });
-  else answer = `Here are the most relevant current results: ${sources.slice(0, 3).map((source, index) => `[${index + 1}] ${source.title}. ${source.excerpt}`).join(" ")}`;
+  if (geminiKey()) answer = await answerWithGemini({ query: clean, sources, history: conversation });
+  else {
+    const status = await ollamaStatus();
+    if (status.available) answer = await answerWithOllama({ query: clean, sources, history: conversation });
+    else if (sources.length) answer = `Here are the most relevant current results: ${sources.slice(0, 3).map((source, index) => `[${index + 1}] ${source.title}. ${source.excerpt}`).join(" ")}`;
+    else throw new Error("Start Ollama or add a free Gemini API key in Settings to answer general questions");
+  }
   const spokenAnswer = answer.replace(/\s*\[\d+\]/g, "").replace(/\s+/g, " ").slice(0, 470).trim();
   conversation.push({ role: "user", content: clean }, { role: "assistant", content: answer });
   if (conversation.length > 20) conversation.splice(0, conversation.length - 20);
   return { answer, spokenAnswer, sources, updatedAt: new Date().toISOString() };
+}
+
+function batteryStatus() {
+  if (process.platform !== "darwin") throw new Error("Battery status is currently available on macOS only");
+  const output = spawnSync("/usr/bin/pmset", ["-g", "batt"], { encoding: "utf8" }).stdout;
+  const match = output.match(/(\d+)%.*?;\s*(charging|charged|discharging|finishing charge)/i);
+  if (!match) throw new Error("This Mac did not report a battery level");
+  const percentage = Number(match[1]);
+  const charging = /charging|charged/i.test(match[2]);
+  const timeRemaining = output.match(/(\d+:\d+) remaining/i)?.[1];
+  const summary = `Boss, your battery is at ${percentage}% and it is ${charging ? "charging" : "not charging"}${timeRemaining ? `, with about ${timeRemaining} remaining` : ""}.`;
+  return { percentage, charging, timeRemaining, summary };
+}
+
+async function describeScreen(query: string): Promise<ResearchAnswer> {
+  if (!geminiKey()) throw new Error("Add your free Gemini API key in Settings before using screen understanding");
+  const display = screen.getPrimaryDisplay();
+  const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: display.size, fetchWindowIcons: false });
+  const capture = sources.find(source => source.display_id === String(display.id)) || sources[0];
+  if (!capture || capture.thumbnail.isEmpty()) throw new Error("Orbit could not capture the screen. Allow Screen Recording in System Settings → Privacy & Security.");
+  const answer = await answerWithGemini({ query: query || "Describe what is visible on my screen", history: conversation, imageBase64: capture.thumbnail.toPNG().toString("base64") });
+  const spokenAnswer = answer.replace(/\s+/g, " ").slice(0, 470).trim();
+  conversation.push({ role: "user", content: query }, { role: "assistant", content: answer });
+  return { answer, spokenAnswer, sources: [], updatedAt: new Date().toISOString() };
 }
 
 async function traced<T>(tool: string, action: () => Promise<T>) {
@@ -445,6 +477,10 @@ function registerIPC() {
   ipcMain.handle("orbit:live:news", () => traced("live.news", liveNews));
   ipcMain.handle("orbit:live:cricket", () => traced("live.cricket", liveCricket));
   ipcMain.handle("orbit:web:research", (_event, query: string) => traced("web.research", () => research(String(query))));
+  ipcMain.handle("orbit:system:battery", () => traced("system.battery", async () => batteryStatus()));
+  ipcMain.handle("orbit:screen:describe", (_event, query: string) => traced("screen.describe", () => describeScreen(String(query).slice(0, 500))));
+  ipcMain.handle("orbit:gemini:status", () => geminiStatus());
+  ipcMain.handle("orbit:gemini:configure", (_event, key: string) => traced("gemini.configure", async () => { saveGeminiKey(String(key)); return geminiStatus(); }));
   ipcMain.handle("orbit:voice:speak", (_event, text: string) => { speak(text); return true; });
   ipcMain.handle("orbit:voice:start", () => { startSpeech(); return { started: Boolean(speechProcess) }; });
   ipcMain.handle("orbit:voice:stop", () => { stopSpeech(); return { stopped: true }; });

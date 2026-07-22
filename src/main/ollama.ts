@@ -7,8 +7,9 @@ const PLAN_SCHEMA = {
   additionalProperties: false,
   properties: {
     intent: { type: "string", enum: ["system", "recent", "knowledge", "git", "cleanup", "audit", "launch", "answer", "clarify"] },
-    confidence: { type: "number" }, explanation: { type: "string" }, reply: { type: "string" },
-    query: { type: "string" }, application: { type: "string" }, requiresConfirmation: { type: "boolean" },
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+    explanation: { type: "string", maxLength: 100 }, reply: { type: "string", maxLength: 500 },
+    query: { type: "string", maxLength: 200 }, application: { type: "string", maxLength: 100 }, requiresConfirmation: { type: "boolean" },
   },
   required: ["intent", "confidence", "explanation", "reply", "query", "application", "requiresConfirmation"],
 } as const;
@@ -29,10 +30,10 @@ export async function ollamaStatus(fetcher: typeof fetch = fetch): Promise<AISta
 export async function planWithOllama(args: { command: string; history: ConversationTurn[]; installedApplications: string[]; fetcher?: typeof fetch }): Promise<CommandPlan> {
   const fetcher = args.fetcher ?? fetch;
   const apps = args.installedApplications.slice(0, 120).join(", ");
-  const system = `You are Orbit, a concise, confident, voice-first local Mac assistant with a composed cinematic presence. Address the user as Boss naturally, especially in acknowledgements such as "Yes, boss" and "Okay, boss," but do not overuse it. Choose exactly one intent. Use answer for conversation, clarify for ambiguous or unsafe requests, and a desktop intent only when it matches. Never claim an action happened. Never invent local data. Launch only from: ${apps || "none"}. Cleanup is preview-only and requires confirmation. Keep reply under four sentences.`;
+  const system = `You are Orbit, a concise, confident, voice-first local Mac assistant with a composed cinematic presence. Address the user as Boss naturally. Choose exactly one intent. Greetings and conversation ALWAYS use answer, never git. Use clarify for ambiguous or unsafe requests, and a desktop intent only when explicitly requested. Return every required JSON field. Keep explanation under 12 words and reply under 3 sentences. Use empty strings for unused query and application. Never claim an action happened. Never invent local data. Launch only from: ${apps || "none"}. Cleanup is preview-only and requires confirmation.`;
   const response = await fetcher(`${OLLAMA_URL}/api/chat`, {
     method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60_000),
-    body: JSON.stringify({ model: OLLAMA_MODEL, stream: false, think: false, keep_alive: "10m", format: PLAN_SCHEMA, options: { temperature: 0, num_predict: 500 }, messages: [
+    body: JSON.stringify({ model: OLLAMA_MODEL, stream: false, think: false, keep_alive: "10m", format: PLAN_SCHEMA, options: { temperature: 0, num_predict: 1000 }, messages: [
       { role: "system", content: system }, ...args.history.slice(-10), { role: "user", content: args.command.slice(0, 1000) },
     ] }),
   });

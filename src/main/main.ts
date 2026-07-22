@@ -101,6 +101,7 @@ function retrieve(request: Record<string, unknown>): Promise<any> {
 
 function planLocal(value: string): CommandPlan {
   const command = value.trim().toLowerCase();
+  if (/^(hi|hello|hey|good (morning|afternoon|evening))( orbit)?[!.?]*$/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local greeting matched", reply: "Yes, boss? At your service.", query: value, source: "local" };
   const rules: [CommandPlan["intent"], RegExp, string][] = [
     ["launch", /\b(open|launch|start)\b.*\b(chrome|safari|finder|terminal|code|visual studio code)\b/, "Allowlisted application launch matched"],
     ["system", /\b(cpu|memory|ram|slow|battery|process|system|storage)\b/, "System diagnostics keywords matched"],
@@ -120,6 +121,7 @@ function planLocal(value: string): CommandPlan {
 
 async function planCommand(value: string) {
   const local = planLocal(value);
+  if (local.intent === "answer") return local;
   const status = await ollamaStatus();
   if (!status.available) return local;
   try {

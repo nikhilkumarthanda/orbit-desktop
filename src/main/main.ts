@@ -204,30 +204,61 @@ end run`;
   child.unref();
 }
 
+function searchActiveChromePage(terms: string): Promise<boolean> {
+  const query = JSON.stringify(terms);
+  const javascript = `(()=>{const q=${query};const selectors=['input[type="search"]','input[role="searchbox"]','form[role="search"] input','input[name="q"]','input[name="query"]','input[name="search"]','input[placeholder*="search" i]'];const visible=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&!e.disabled};const el=selectors.flatMap(s=>Array.from(document.querySelectorAll(s))).find(visible);if(!el)return 'NO_SEARCH';el.focus();const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;setter?setter.call(el,q):el.value=q;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));const form=el.closest('form');if(form){form.requestSubmit?form.requestSubmit():form.submit()}else{el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));el.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}))}return 'SEARCHED'})()`;
+  const script = `on run argv
+tell application "Google Chrome"
+activate
+if (count of windows) is 0 then return "NO_WINDOW"
+return execute active tab of front window javascript (item 1 of argv)
+end tell
+end run`;
+  return new Promise(resolve => {
+    const child = spawn("/usr/bin/osascript", ["-e", script, javascript], { stdio: ["ignore", "pipe", "ignore"] });
+    let output = "";
+    child.stdout.on("data", chunk => { output += String(chunk); });
+    child.once("close", code => resolve(code === 0 && output.trim() === "SEARCHED"));
+    child.once("error", () => resolve(false));
+  });
+}
+
 async function browserNavigate(request: { url?: string; query?: string; site?: string }) {
   let target = String(request.url || "").trim();
+  let usedPageSearch = false;
+  let usedSiteFallback = false;
   if (!target) {
     const terms = String(request.query || request.site || "").trim().slice(0, 300);
     if (!terms) throw new Error("Orbit needs a website or search phrase");
     const context = activeBrowserSite;
     if (context?.hostname.includes("youtube.com")) target = `https://www.youtube.com/results?search_query=${encodeURIComponent(terms)}`;
     else if (context?.hostname === "github.com") target = `https://github.com/search?q=${encodeURIComponent(terms)}`;
-    else if (context?.hostname.includes("amazon.")) target = `https://${context.hostname}/s?k=${encodeURIComponent(terms)}`;
+    else if (context?.hostname.includes("amazon.")) target = `https://${context.hostname}/s?k=${encodeURIComponent(terms)}&i=aps&ref=nb_sb_noss`;
     else if (context?.hostname.includes("reddit.com")) target = `https://www.reddit.com/search/?q=${encodeURIComponent(terms)}`;
     else if (context?.hostname.includes("linkedin.com")) target = `https://www.linkedin.com/search/results/all/?keywords=${encodeURIComponent(terms)}`;
-    else if (context && context.hostname !== "www.google.com") target = `https://www.google.com/search?q=${encodeURIComponent(`site:${context.hostname} ${terms}`)}`;
+    else if (context && !context.hostname.includes("google.")) {
+      usedPageSearch = await searchActiveChromePage(terms);
+      if (usedPageSearch) return { opened: true, url: "", site: context.name, summary: `Searching ${context.name} for ${terms}, boss.` };
+      usedSiteFallback = true;
+      target = `https://www.google.com/search?q=${encodeURIComponent(`site:${context.hostname} ${terms}`)}`;
+    }
     else target = `https://www.google.com/search?q=${encodeURIComponent(terms)}`;
   }
   let parsed: URL;
   try { parsed = new URL(target); } catch { throw new Error("Orbit could not validate that web address"); }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("Orbit only opens HTTP or HTTPS websites");
+  if (parsed.hostname.includes("amazon.") && parsed.pathname === "/s" && parsed.searchParams.get("k")) {
+    parsed.searchParams.set("i", "aps");
+    parsed.searchParams.set("ref", "nb_sb_noss");
+  }
   openChromeTab(parsed.toString());
   const destination = parsed.hostname.replace(/^www\./, "");
   const names: Record<string, string> = { "youtube.com": "YouTube", "github.com": "GitHub", "google.com": "Google", "tesla.com": "Tesla", "reddit.com": "Reddit", "linkedin.com": "LinkedIn" };
   const matched = Object.entries(names).find(([domain]) => destination === domain || destination.endsWith(`.${domain}`));
   activeBrowserSite = { name: matched?.[1] || destination, hostname: parsed.hostname };
   const searched = Boolean(request.query && !request.url);
-  return { opened: true, url: parsed.toString(), site: activeBrowserSite.name, summary: searched ? `Searching ${activeBrowserSite.name} for ${String(request.query).slice(0, 80)}, boss.` : `Opening ${activeBrowserSite.name} in a new Chrome tab, boss.` };
+  const summary = usedSiteFallback && activeBrowserSite ? `I couldn't control that site's search box, boss, so I searched its pages through Google.` : searched ? `Searching ${activeBrowserSite.name} for ${String(request.query).slice(0, 80)}, boss.` : `Opening ${activeBrowserSite.name} in a new Chrome tab, boss.`;
+  return { opened: true, url: parsed.toString(), site: activeBrowserSite.name, summary };
 }
 
 async function launchApplication(application: string) {

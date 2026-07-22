@@ -109,6 +109,10 @@ test("browser follow-ups use active site context with safe URL adapters", async 
   assert.match(source, /activeBrowserSite/);
   assert.match(source, /youtube\.com\/results\?search_query=/);
   assert.match(source, /github\.com\/search\?q=/);
+  assert.match(source, /i=aps&ref=nb_sb_noss/);
+  assert.match(source, /parsed\.searchParams\.set\("i", "aps"\)/);
   assert.match(source, /site:\$\{context\.hostname\}/);
+  assert.match(source, /searchActiveChromePage/);
+  assert.match(source, /input\[type=/);
   assert.match(source, /parsed\.protocol !== "https:"/);
 });

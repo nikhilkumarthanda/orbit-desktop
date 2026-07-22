@@ -40,6 +40,8 @@ Orbit 0.4.1 adds an authoritative Daniel voice at a measured speaking rate and a
 
 Orbit 0.5 introduces the A+C hybrid Command Deck: a contained sidebar Voice Console with no floating overlap, plus a code-native animated orbital core, reactive waveform, satellite trails, live local telemetry, and glass cockpit surfaces.
 
+Orbit 0.6 replaces continuous transcript scanning with a two-stage macOS voice pipeline: `NSSpeechRecognizer` handles the constrained **Hey Orbit** wake command, then Orbit suspends wake listening and starts a fresh `SFSpeechRecognizer` dictation session for one request before returning to standby.
+
 ## Architecture
 
 ```text

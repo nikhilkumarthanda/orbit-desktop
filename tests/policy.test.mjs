@@ -52,6 +52,8 @@ test("Ollama planning is local, structured, and requires no cloud credential", a
   assert.match(planner, /qwen3:4b/);
   assert.match(planner, /think: false/);
   assert.match(planner, /keep_alive: "10m"/);
+  assert.match(planner, /num_predict: 1000/);
+  assert.match(main, /Local greeting matched/);
   assert.doesNotMatch(planner, /api\.openai\.com|Authorization|Bearer/);
   assert.doesNotMatch(main + preload, /saveApiKey|readApiKey|decryptString/);
   assert.match(main, /Local model unavailable/);
@@ -62,16 +64,19 @@ test("voice commands cross only registered IPC and typed planner boundaries", as
   const speech = await fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8");
   const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
   const preload = await fs.readFile(new URL("../preload.cjs", import.meta.url), "utf8");
-  assert.match(speech, /wakePhrases\.first/);
+  assert.match(speech, /NSSpeechRecognizerDelegate/);
   assert.match(main, /CommandOrControl\+Shift\+Space/);
   assert.match(preload, /orbit:voice:command/);
   assert.doesNotMatch(preload, /child_process|exec\(|spawn\(/);
 });
 
-test("wake phrase recognition tolerates punctuation and common transcription variants", async () => {
+test("wake phrase uses a dedicated recognizer before fresh command capture", async () => {
   const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8"));
-  assert.match(source, /CharacterSet\.alphanumerics\.inverted/);
-  assert.match(source, /"hey orbit", "hay orbit", "hey orbid", "hey or bit"/);
+  assert.match(source, /commands = \["Hey Orbit", "Orbit"\]/);
+  assert.match(source, /startWakeListening/);
+  assert.match(source, /activateCommandCapture/);
+  assert.match(source, /requiresOnDeviceRecognition = false/);
+  assert.match(source, /deadline: \.now\(\) \+ 12/);
 });
 
 test("microphone can be released and Orbit uses the boss voice persona", async () => {

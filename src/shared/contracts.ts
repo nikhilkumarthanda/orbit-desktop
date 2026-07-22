@@ -28,7 +28,7 @@ export type Intent = "system" | "recent" | "knowledge" | "git" | "cleanup" | "au
 export interface ConversationTurn { role: "user" | "assistant"; content: string }
 export interface CommandPlan { intent: Intent; confidence: number; explanation: string; query?: string; application?: string; reply?: string; requiresConfirmation?: boolean; source?: "local"|"ollama"; model?: string }
 export interface AIStatus { provider: "ollama"; configured: boolean; available: boolean; running: boolean; model: string; cost: "$0"; installCommand: string }
-export interface VoiceEvent { type: "ready"|"wake"|"partial"|"command"|"error"|"unavailable"|"stopped"; text?: string; message?: string; onDevice?: boolean }
+export interface VoiceEvent { type: "ready"|"wake"|"listening"|"partial"|"command"|"error"|"unavailable"|"stopped"; text?: string; message?: string; onDevice?: boolean; mode?: "wake-word"|"command" }
 
 export interface OrbitAPI {
   policies(): Promise<ToolPolicy[]>;

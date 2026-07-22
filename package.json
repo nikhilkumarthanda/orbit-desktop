@@ -1,6 +1,6 @@
 {
   "name": "orbit-desktop",
-  "version": "0.6.6",
+  "version": "0.7.0",
   "private": true,
   "description": "Local-first AI operating layer for desktop work",
   "author": "Nikhil Kumar Thanda",
@@ -44,7 +44,8 @@
       "entitlementsInherit": "native/macos/OrbitSpeech.entitlements",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Orbit listens for the Hey Orbit wake phrase and voice commands while voice mode is enabled.",
-        "NSSpeechRecognitionUsageDescription": "Orbit transcribes approved voice commands into local desktop actions."
+        "NSSpeechRecognitionUsageDescription": "Orbit transcribes approved voice commands into local desktop actions.",
+        "NSLocationWhenInUseUsageDescription": "Orbit uses your approximate location only when you ask for local weather. Coordinates are not stored."
       },
       "target": [
         "dmg",

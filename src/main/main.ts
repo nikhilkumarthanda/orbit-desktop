@@ -10,7 +10,7 @@ import { AuditStore } from "./audit.js";
 import { policies, policy } from "./policy.js";
 import { cleanupPlan, gitContexts, recentWork, systemSnapshot } from "./tools.js";
 import { ollamaStatus, OLLAMA_MODEL, planWithOllama } from "./ollama.js";
-import type { CommandPlan, ConversationTurn, GitHubWorkflowStatus } from "../shared/contracts.js";
+import type { CommandPlan, ConversationTurn, GitHubWorkflowStatus, LiveBrief } from "../shared/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let audit: AuditStore;
@@ -21,6 +21,7 @@ const conversation: ConversationTurn[] = [];
 let lastFailureDetail = "";
 let selectedVoice: string | null = null;
 let activeBrowserSite: { name: string; hostname: string } | null = null;
+let locationRequest: { resolve: (value: { latitude: number; longitude: number }) => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null;
 
 function orbitVoice() {
   if (selectedVoice) return selectedVoice;
@@ -96,6 +97,18 @@ function startSpeech() {
     for (const line of lines) {
       try {
         const event = JSON.parse(line);
+        if (event.type === "location" && locationRequest) {
+          clearTimeout(locationRequest.timer);
+          locationRequest.resolve({ latitude: Number(event.latitude), longitude: Number(event.longitude) });
+          locationRequest = null;
+          continue;
+        }
+        if (event.type === "locationError" && locationRequest) {
+          clearTimeout(locationRequest.timer);
+          locationRequest.reject(new Error(String(event.message || "Location is unavailable")));
+          locationRequest = null;
+          continue;
+        }
         sendVoice(event.type, event);
         if (event.type === "wake") showListening();
         if (event.type === "command" && event.text) mainWindow?.webContents.send("orbit:voice:command", String(event.text));
@@ -127,6 +140,10 @@ function planLocal(value: string): CommandPlan {
   const command = value.trim().toLowerCase().replace(/\b(?:git|get)\s+hub\b/g, "github").replace(/\bgethub\b/g, "github");
   if (/\b(brief|explain|tell me more|what happened)\b/.test(command) && lastFailureDetail) return { intent: "answer", confidence: 1, explanation: "Previous error briefing", reply: `Boss, the previous operation failed because ${lastFailureDetail}. I can retry when you're ready.`, query: value, source: "local" };
   if (/^(hi|hello|hey|good (morning|afternoon|evening))( orbit)?[!.?]*$/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local greeting matched", reply: "Yes, boss? At your service.", query: value, source: "local" };
+  if (/\b(how are you|how is it going|you good)\b/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local conversation matched", reply: "Running smoothly, boss. What can I do for you?", query: value, source: "local" };
+  if (/\b(weather|temperature|forecast)\b/.test(command)) return { intent: "weather", confidence: 1, explanation: "Live weather request matched", query: value, source: "local" };
+  if (/\b(cricket|ipl|test match)\b.*\b(score|scores|result|match|update|live)\b|\b(score|scores)\b.*\b(cricket|ipl)\b/.test(command)) return { intent: "cricket", confidence: 1, explanation: "Live cricket request matched", query: value, source: "local" };
+  if (/\b(news|headlines|top stories|world update)\b/.test(command)) return { intent: "news", confidence: 1, explanation: "Live news request matched", query: value, source: "local" };
   if (/\bgithub\b/.test(command) && /\b(workflow|actions?|deploy|build|status|complete|check|see)\b/.test(command)) return { intent: "github", confidence: .99, explanation: "GitHub workflow request matched", repository: "nikhilkumarthanda/orbit-desktop", query: value, source: "local" };
   if (/\b(open|visit|go to|navigate|search|look up|youtube|tesla|github|website|web site|\.com)\b/.test(command)) {
     const search = command.match(/(?:search|look up)(?:\s+(?:google|youtube))?\s+(?:for\s+)?(.+)/)?.[1]?.trim();
@@ -157,7 +174,7 @@ function planLocal(value: string): CommandPlan {
 
 async function planCommand(value: string) {
   const local = planLocal(value);
-  if (local.intent === "answer") return local;
+  if (["answer", "browser", "github", "weather", "news", "cricket"].includes(local.intent)) return local;
   const status = await ollamaStatus();
   if (!status.available) return local;
   try {
@@ -271,6 +288,63 @@ async function launchApplication(application: string) {
   return { launched: true, application };
 }
 
+function currentLocation(): Promise<{ latitude: number; longitude: number }> {
+  if (process.platform !== "darwin") return Promise.reject(new Error("Local weather location is currently available on macOS only"));
+  if (!speechProcess) startSpeech();
+  if (!speechProcess?.stdin.writable) return Promise.reject(new Error("Orbit's location helper is unavailable"));
+  if (locationRequest) return Promise.reject(new Error("A location request is already in progress"));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { locationRequest = null; reject(new Error("Location permission timed out. Check macOS Location Services for Orbit.")); }, 15_000);
+    locationRequest = { resolve, reject, timer };
+    speechProcess!.stdin.write("location\n");
+  });
+}
+
+const weatherDescriptions: Record<number, string> = {
+  0: "clear skies", 1: "mainly clear skies", 2: "partly cloudy skies", 3: "overcast skies", 45: "fog", 48: "freezing fog",
+  51: "light drizzle", 53: "drizzle", 55: "heavy drizzle", 61: "light rain", 63: "rain", 65: "heavy rain", 71: "light snow",
+  73: "snow", 75: "heavy snow", 80: "light rain showers", 81: "rain showers", 82: "heavy rain showers", 95: "thunderstorms",
+};
+
+async function liveWeather(): Promise<LiveBrief> {
+  const { latitude, longitude } = await currentLocation();
+  const endpoint = new URL("https://api.open-meteo.com/v1/forecast");
+  endpoint.search = new URLSearchParams({ latitude: String(latitude), longitude: String(longitude), current: "temperature_2m,apparent_temperature,weather_code,wind_speed_10m", temperature_unit: "fahrenheit", wind_speed_unit: "mph", timezone: "auto" }).toString();
+  const response = await fetch(endpoint, { signal: AbortSignal.timeout(8_000) });
+  if (!response.ok) throw new Error("The weather service is temporarily unavailable");
+  const data = await response.json() as { current?: { temperature_2m?: number; apparent_temperature?: number; weather_code?: number; wind_speed_10m?: number; time?: string } };
+  const current = data.current;
+  if (current?.temperature_2m == null) throw new Error("The weather service returned incomplete conditions");
+  const condition = weatherDescriptions[current.weather_code ?? -1] || "current conditions";
+  const summary = `Boss, it is ${Math.round(current.temperature_2m)} degrees with ${condition}. It feels like ${Math.round(current.apparent_temperature ?? current.temperature_2m)} degrees, with winds around ${Math.round(current.wind_speed_10m ?? 0)} miles per hour.`;
+  return { summary, source: "Open-Meteo", updatedAt: current.time || new Date().toISOString() };
+}
+
+function decodeXml(value: string) {
+  return value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/&amp;/g, "&").replace(/&quot;/g, "\"").replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/<[^>]+>/g, "").trim();
+}
+
+async function rssTitles(url: string, limit: number) {
+  const response = await fetch(url, { headers: { "User-Agent": "Orbit-Desktop/0.7" }, signal: AbortSignal.timeout(8_000) });
+  if (!response.ok) throw new Error(`The live source returned status ${response.status}`);
+  const xml = await response.text();
+  return [...xml.matchAll(/<item[\s\S]*?<title>([\s\S]*?)<\/title>/gi)].map(match => decodeXml(match[1])).filter(Boolean).slice(0, limit);
+}
+
+async function liveNews(): Promise<LiveBrief> {
+  const titles = await rssTitles("https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en", 3);
+  if (!titles.length) throw new Error("No current headlines were available");
+  const clean = titles.map(title => title.replace(/\s+-\s+[^-]+$/, ""));
+  return { summary: `Boss, today's top headlines are: ${clean.map((title, index) => `${index + 1}, ${title}`).join(". ")}.`, source: "Google News RSS", updatedAt: new Date().toISOString() };
+}
+
+async function liveCricket(): Promise<LiveBrief> {
+  const titles = await rssTitles("https://news.google.com/rss/search?q=live%20cricket%20score&hl=en-US&gl=US&ceid=US:en", 3);
+  if (!titles.length) throw new Error("I couldn't verify a current cricket score right now");
+  const update = titles.find(title => /\b(?:\d+\/\d+|won by|live score|runs?|wickets?)\b/i.test(title)) || titles[0];
+  return { summary: `Boss, the latest cricket update I can verify is: ${update.replace(/\s+-\s+[^-]+$/, "")}.`, source: "Google News RSS", updatedAt: new Date().toISOString() };
+}
+
 async function traced<T>(tool: string, action: () => Promise<T>) {
   const rule = policy(tool);
   await audit.record(tool, rule.risk, "started", rule.description);
@@ -307,6 +381,9 @@ function registerIPC() {
   ipcMain.handle("orbit:app:launch", (_event, application: string) => traced("app.launch", () => launchApplication(String(application))));
   ipcMain.handle("orbit:github:workflow", (_event, repository?: string) => traced("github.workflow", () => githubWorkflow(repository)));
   ipcMain.handle("orbit:browser:navigate", (_event, request: { url?: string; query?: string; site?: string }) => traced("browser.navigate", () => browserNavigate(request || {})));
+  ipcMain.handle("orbit:live:weather", () => traced("live.weather", liveWeather));
+  ipcMain.handle("orbit:live:news", () => traced("live.news", liveNews));
+  ipcMain.handle("orbit:live:cricket", () => traced("live.cricket", liveCricket));
   ipcMain.handle("orbit:voice:speak", (_event, text: string) => { speak(text); return true; });
   ipcMain.handle("orbit:voice:start", () => { startSpeech(); return { started: Boolean(speechProcess) }; });
   ipcMain.handle("orbit:voice:stop", () => { stopSpeech(); return { stopped: true }; });

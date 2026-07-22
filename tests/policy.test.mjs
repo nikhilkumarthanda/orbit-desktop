@@ -115,4 +115,30 @@ test("browser follow-ups use active site context with safe URL adapters", async 
   assert.match(source, /searchActiveChromePage/);
   assert.match(source, /input\[type=/);
   assert.match(source, /parsed\.protocol !== "https:"/);
+  assert.match(source, /\["answer", "browser", "github", "weather", "news", "cricket"\]\.includes\(local\.intent\)/);
+});
+
+test("live briefings use transient macOS location and public read-only sources", async () => {
+  const fs = await import("node:fs/promises");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const speech = await fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8");
+  const pkg = await fs.readFile(new URL("../package.json", import.meta.url), "utf8");
+  assert.match(speech, /CLLocationManagerDelegate/);
+  assert.match(speech, /requestWhenInUseAuthorization/);
+  assert.match(main, /api\.open-meteo\.com/);
+  assert.match(main, /news\.google\.com\/rss/);
+  assert.match(main, /Orbit's location helper/);
+  assert.match(pkg, /NSLocationWhenInUseUsageDescription/);
+});
+
+test("Adaptive Reactor maps voice and action states to violet gold and crimson", async () => {
+  const fs = await import("node:fs/promises");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  const theme = await fs.readFile(new URL("../src/renderer/adaptive-reactor.css", import.meta.url), "utf8");
+  assert.match(renderer, /setStage\("listening"\)/);
+  assert.match(renderer, /setStage\("executing"\)/);
+  assert.match(theme, /data-orbit-state="thinking"/);
+  assert.match(theme, /data-orbit-state="executing"/);
+  assert.match(theme, /--reactor:#e7b85c/);
+  assert.match(theme, /--reactor:#ff4055/);
 });

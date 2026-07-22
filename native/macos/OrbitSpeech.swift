@@ -1,9 +1,10 @@
 import AppKit
 import AVFoundation
+import CoreLocation
 import Foundation
 import Speech
 
-final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognizerDelegate {
+final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognizerDelegate, CLLocationManagerDelegate {
     private let transcriber = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))!
     private let engine = AVAudioEngine()
     private var wakeRecognizer: NSSpeechRecognizer?
@@ -14,6 +15,7 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
     private var suspended = false
     private var followupMode = false
     private var generation = 0
+    private var locationManager: CLLocationManager?
 
     override init() {
         super.init()
@@ -150,6 +152,33 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
         activateCommandCapture(followup: true)
     }
 
+    func requestLocation() {
+        let manager = locationManager ?? CLLocationManager()
+        locationManager = manager
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyKilometer
+        if manager.authorizationStatus == .notDetermined { manager.requestWhenInUseAuthorization() }
+        else if manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted {
+            emit("locationError", ["message": "Location permission is off. Enable Orbit in System Settings, Privacy and Security, Location Services."])
+        } else { manager.requestLocation() }
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        if manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse { manager.requestLocation() }
+        else if manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted {
+            emit("locationError", ["message": "Location permission was not granted"])
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last else { return }
+        emit("location", ["latitude": location.coordinate.latitude, "longitude": location.coordinate.longitude])
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        emit("locationError", ["message": error.localizedDescription])
+    }
+
     private func failAndResume(_ message: String) {
         emit("error", ["message": message])
         resumeWakeListening()
@@ -165,6 +194,7 @@ DispatchQueue.global(qos: .userInitiated).async {
         case "pause": DispatchQueue.main.async { orbit.pause() }
         case "resume": DispatchQueue.main.async { orbit.resume() }
         case "followup": DispatchQueue.main.async { orbit.followup() }
+        case "location": DispatchQueue.main.async { orbit.requestLocation() }
         default: break
         }
     }

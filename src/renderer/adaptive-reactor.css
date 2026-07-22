@@ -1,0 +1,21 @@
+:root{--reactor:#866dff;--reactor-bright:#c4b8ff;--reactor-deep:#3e277d;--reactor-rgb:134,109,255;--reactor-speed:3.8s}
+:root[data-orbit-state="listening"]{--reactor:#9a7cff;--reactor-bright:#ded6ff;--reactor-deep:#5335b7;--reactor-rgb:154,124,255;--reactor-speed:1.55s}
+:root[data-orbit-state="thinking"]{--reactor:#e7b85c;--reactor-bright:#fff0c0;--reactor-deep:#795018;--reactor-rgb:231,184,92;--reactor-speed:1.05s}
+:root[data-orbit-state="executing"]{--reactor:#ff4055;--reactor-bright:#ffb09d;--reactor-deep:#7c1224;--reactor-rgb:255,64,85;--reactor-speed:.58s}
+:root[data-orbit-state="success"]{--reactor:#e5b85d;--reactor-bright:#fff3c7;--reactor-deep:#6c4a1b;--reactor-rgb:229,184,93;--reactor-speed:.9s}
+:root[data-orbit-state="error"]{--reactor:#ff8a46;--reactor-bright:#ffd0a6;--reactor-deep:#792b16;--reactor-rgb:255,138,70;--reactor-speed:.8s}
+.command-core{border-color:rgba(var(--reactor-rgb),.33);background:radial-gradient(circle at 69% 46%,rgba(var(--reactor-rgb),.22),#10121b 34%,#090b12 73%);transition:border-color .65s,background .8s,box-shadow .8s;box-shadow:inset 0 0 90px rgba(var(--reactor-rgb),.06),0 24px 80px #0008}
+.command-core:before{background-image:radial-gradient(rgba(var(--reactor-rgb),.48) .7px,transparent .8px)}
+.core-copy small{color:var(--reactor);transition:color .6s}.core-signal i{background:var(--reactor);box-shadow:0 0 11px var(--reactor);animation-duration:calc(var(--reactor-speed)*.32)}
+.core-orb{background:radial-gradient(circle at 36% 28%,#fff 0 3%,var(--reactor-bright) 7%,var(--reactor) 29%,var(--reactor-deep) 57%,#070913 76%);box-shadow:0 0 42px rgba(var(--reactor-rgb),.9),0 0 125px rgba(var(--reactor-rgb),.52),0 0 250px rgba(var(--reactor-rgb),.27);animation-duration:var(--reactor-speed);transition:background .7s,box-shadow .7s}
+.orbit-trail{border-color:rgba(var(--reactor-rgb),.55);transition:border-color .6s}.trail-a{animation-duration:calc(var(--reactor-speed)*2.7)}.trail-b{animation-duration:calc(var(--reactor-speed)*4)}.trail-c{animation-duration:calc(var(--reactor-speed)*5.4)}
+.satellite{background:var(--reactor-bright);box-shadow:0 0 18px var(--reactor)}
+.brand i,.command button,.notice button{transition:background .7s,box-shadow .7s;background:linear-gradient(145deg,var(--reactor-bright),var(--reactor));box-shadow:0 0 30px rgba(var(--reactor-rgb),.32)}
+.command{border-color:rgba(var(--reactor-rgb),.32);transition:border-color .6s,box-shadow .6s}.command>span,.voice-console button span,.voice-console-status>span{color:var(--reactor)}
+.wake-scene{background:radial-gradient(circle at 50% 46%,rgba(var(--reactor-rgb),.22),#090a10 38%,#030408 78%);transition:background .7s}.orb{background:radial-gradient(circle at 36% 30%,#fff 0 2%,var(--reactor-bright) 6%,var(--reactor) 25%,var(--reactor-deep) 54%,#090914 75%);box-shadow:0 0 50px rgba(var(--reactor-rgb),.82),0 0 135px rgba(var(--reactor-rgb),.5),0 0 280px rgba(var(--reactor-rgb),.26);animation-duration:var(--reactor-speed)}
+.halo{border-color:rgba(var(--reactor-rgb),.5)}.voice-bars i{background:var(--reactor-bright);box-shadow:0 0 10px var(--reactor)}
+:root[data-orbit-state="executing"] .command-core,:root[data-orbit-state="thinking"] .command-core{animation:reactor-focus var(--reactor-speed) ease-in-out infinite}
+:root[data-orbit-state="success"] .core-orb{animation:reactor-success 1.25s ease-out,deck-breathe 3.8s ease-in-out 1.25s infinite}
+@keyframes reactor-focus{50%{box-shadow:inset 0 0 110px rgba(var(--reactor-rgb),.1),0 24px 90px #0009,0 0 42px rgba(var(--reactor-rgb),.12)}}
+@keyframes reactor-success{0%{transform:scale(.92)}35%{transform:scale(1.17);filter:brightness(1.45)}100%{transform:scale(1)}}
+@media(prefers-reduced-motion:reduce){.core-orb,.orbit-trail,.core-signal i,.command-core,.orb,.halo,.voice-bars i{animation-duration:0s!important;animation-iteration-count:1!important}}

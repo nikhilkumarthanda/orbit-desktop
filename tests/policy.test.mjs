@@ -139,6 +139,11 @@ test("Mac context routes before web research and Gemini keys stay in Keychain", 
   assert.doesNotMatch(gemini, /\^AIza/);
   assert.match(gemini, /monthlyBudgetUsd/);
   assert.match(gemini, /gemini-usage\.json/);
+  assert.doesNotMatch(gemini, /GEMINI_MODEL = "gemini-2\.5-flash"/);
+  assert.match(gemini, /gemini-3\.6-flash/);
+  assert.match(gemini, /gemini-flash-latest/);
+  assert.match(gemini, /modelUnavailable/);
+  assert.match(gemini, /models\?pageSize=1/);
   assert.match(main, /geminiStatus\(\)\.available/);
   assert.doesNotMatch(gemini, /const\s+\w*KEY\s*=\s*["']AIza/);
   assert.match(contracts, /configureGemini/);
@@ -196,12 +201,22 @@ test("all six reference designs are selectable full visual presets", async () =>
   }
 });
 
+test("every reactor theme includes color-aligned orbital loops", async () => {
+  const fs = await import("node:fs/promises");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  const styles = await fs.readFile(new URL("../src/renderer/adaptive-reactor.css", import.meta.url), "utf8");
+  assert.match(renderer, /className="reactor-orbits"/);
+  assert.match(styles, /rgba\(var\(--reactor-rgb\),\.7\)/);
+  assert.match(styles, /themed-orbit-spin/);
+});
+
 test("live briefings use transient macOS location and public read-only sources", async () => {
   const fs = await import("node:fs/promises");
   const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
   const speech = await fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8");
   const pkg = await fs.readFile(new URL("../package.json", import.meta.url), "utf8");
   assert.match(speech, /CLLocationManagerDelegate/);
+  assert.match(speech, /authorizationStatus == \.authorizedWhenInUse/);
   assert.match(speech, /requestWhenInUseAuthorization/);
   assert.match(main, /api\.open-meteo\.com/);
   assert.match(main, /news\.google\.com\/rss/);

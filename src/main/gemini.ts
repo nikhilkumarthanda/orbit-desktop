@@ -6,11 +6,15 @@ import type { ConversationTurn, ResearchSource } from "../shared/contracts.js";
 import { finalAnswerOnly } from "./ollama.js";
 
 const KEYCHAIN_SERVICE = "com.orbit.desktop.gemini";
-export const GEMINI_MODEL = "gemini-2.5-flash";
+// Prefer a current stable multimodal model, but keep an alias and stable fallbacks.
+// Google can restrict retired models for new API projects before older projects, so
+// screen understanding must not depend on a single hard-coded model identifier.
+export const GEMINI_MODELS = ["gemini-3.6-flash", "gemini-flash-latest", "gemini-3.5-flash", "gemini-3.5-flash-lite"] as const;
+export const GEMINI_MODEL = GEMINI_MODELS[0];
 const DEFAULT_MONTHLY_BUDGET_USD = 5;
-// Paid-equivalent estimator for Gemini 2.5 Flash. Free-tier accounts are billed $0.
-const INPUT_USD_PER_MILLION = 0.30;
-const OUTPUT_USD_PER_MILLION = 2.50;
+// Conservative paid-equivalent estimator for the primary Flash model. Free-tier accounts are billed $0.
+const INPUT_USD_PER_MILLION = 1.50;
+const OUTPUT_USD_PER_MILLION = 7.50;
 
 type UsageFile = { month: string; requests: number; inputTokens: number; outputTokens: number; estimatedCostUsd: number; monthlyBudgetUsd: number };
 
@@ -45,7 +49,7 @@ export async function saveGeminiKey(value: string) {
   const key = value.trim();
   if (key.length < 20 || /\s/.test(key)) throw new Error("That does not look like a complete Gemini API key");
   if (process.platform !== "darwin") throw new Error("Secure Gemini setup is currently available on macOS only");
-  const check = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}`, { headers: { "x-goog-api-key": key }, signal: AbortSignal.timeout(15_000) });
+  const check = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1", { headers: { "x-goog-api-key": key }, signal: AbortSignal.timeout(15_000) });
   if (!check.ok) {
     const data = await check.json().catch(() => ({})) as { error?: { message?: string } };
     throw new Error(data.error?.message || "Google did not accept this Gemini API key");
@@ -59,6 +63,10 @@ export function geminiStatus() {
   return { provider: "gemini" as const, configured: Boolean(geminiKey()), available: Boolean(geminiKey()) && !usage.blocked, model: GEMINI_MODEL, cost: "$0 on Google free tier" as const, usage };
 }
 
+function modelUnavailable(status: number, message: string) {
+  return status === 404 || /model.*(?:not found|not supported|no longer available|unavailable|deprecated)|not found.*model/i.test(message);
+}
+
 export async function answerWithGemini(input: { query: string; history: ConversationTurn[]; sources?: ResearchSource[]; imageBase64?: string }) {
   const key = geminiKey();
   if (!key) throw new Error("Add your free Gemini API key in Orbit Settings first");
@@ -68,12 +76,22 @@ export async function answerWithGemini(input: { query: string; history: Conversa
   const context = input.history.slice(-8).map(turn => `${turn.role}: ${turn.content}`).join("\n");
   const parts: Array<Record<string, unknown>> = [{ text: `You are Orbit, a concise Mac assistant. Address the user as Boss naturally. Answer only the user-facing final answer; never reveal analysis or <think> text. Use supplied evidence for current facts and cite it with [number]. If no evidence is supplied, answer from your knowledge and admit uncertainty when needed.\nConversation:\n${context}\nUser: ${input.query}${evidence}` }];
   if (input.imageBase64) parts.push({ inline_data: { mime_type: "image/png", data: input.imageBase64 } });
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
-    method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, signal: AbortSignal.timeout(30_000),
-    body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { temperature: 0.35, maxOutputTokens: 900 } }),
-  });
-  const data = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>; usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number }; error?: { message?: string } };
-  if (!response.ok) throw new Error(data.error?.message || `Gemini returned status ${response.status}`);
+  const body = JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { temperature: 0.35, maxOutputTokens: 900 } });
+  type GeminiResponse = { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>; usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number }; error?: { message?: string } };
+  let data: GeminiResponse | undefined;
+  let lastModelError = "No supported Gemini Flash model was available";
+  for (const model of GEMINI_MODELS) {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, signal: AbortSignal.timeout(30_000), body,
+    });
+    data = await response.json() as GeminiResponse;
+    if (response.ok) break;
+    const message = data.error?.message || `Gemini returned status ${response.status}`;
+    if (!modelUnavailable(response.status, message)) throw new Error(message);
+    lastModelError = message;
+    data = undefined;
+  }
+  if (!data) throw new Error(`Screen understanding is temporarily unavailable because Google retired or restricted Orbit's Gemini models. ${lastModelError}`);
   const usage = readUsage();
   const inputTokens = data.usageMetadata?.promptTokenCount || 0, outputTokens = data.usageMetadata?.candidatesTokenCount || 0;
   usage.requests += 1; usage.inputTokens += inputTokens; usage.outputTokens += outputTokens;

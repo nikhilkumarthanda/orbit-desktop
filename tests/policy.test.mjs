@@ -76,7 +76,7 @@ test("wake phrase uses a dedicated recognizer before fresh command capture", asy
   assert.match(source, /startWakeListening/);
   assert.match(source, /activateCommandCapture/);
   assert.match(source, /requiresOnDeviceRecognition = false/);
-  assert.match(source, /followupMode \? 20 : 12/);
+  assert.match(source, /followupMode \? 30 : 25/);
 });
 
 test("microphone can be released and Orbit uses the boss voice persona", async () => {
@@ -99,9 +99,10 @@ test("A+C command deck keeps voice controls in sidebar flow", async () => {
   const deck = await fs.readFile(new URL("../src/renderer/command-deck.css", import.meta.url), "utf8");
   assert.match(renderer, /<nav>.*<VoiceConsole\/>/s);
   assert.match(renderer, /className="command-core"/);
+  assert.doesNotMatch(renderer, /className="orbit-trail/);
+  assert.match(deck, /core-orb/);
   assert.doesNotMatch(wake, /\.voice-console\{position:fixed/);
   assert.match(deck, /deck-spin/);
-  assert.match(deck, /core-orb/);
 });
 
 test("browser follow-ups use active site context with safe URL adapters", async () => {
@@ -113,9 +114,17 @@ test("browser follow-ups use active site context with safe URL adapters", async 
   assert.match(source, /parsed\.searchParams\.set\("i", "aps"\)/);
   assert.match(source, /site:\$\{context\.hostname\}/);
   assert.match(source, /searchActiveChromePage/);
+  assert.match(source, /navigateActiveChromeTab/);
+  assert.match(source, /sameTab/);
   assert.match(source, /input\[type=/);
   assert.match(source, /parsed\.protocol !== "https:"/);
-  assert.match(source, /\["answer", "notifications", "research", "browser", "github", "weather", "news", "cricket"\]\.includes\(local\.intent\)/);
+  assert.match(source, /\["answer", "clarify", "notifications", "research", "browser", "github", "weather", "news", "cricket"\]\.includes\(local\.intent\)/);
+});
+
+test("voice commands tolerate natural pauses before submitting", async () => {
+  const speech = await import("node:fs/promises").then(fs => fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8"));
+  assert.match(speech, /followupMode \? 30 : 25/);
+  assert.match(speech, /final \? 0\.2 : 1\.8/);
 });
 
 test("questions use cited research while notifications never route to news", async () => {
@@ -124,9 +133,18 @@ test("questions use cited research while notifications never route to news", asy
   const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
   assert.match(main, /intent: "notifications"/);
   assert.match(main, /I won’t substitute news headlines/);
+  assert.match(main, /Which updates do you mean, boss/);
+  assert.match(main, /\["answer", "clarify", "notifications"/);
   assert.match(main, /html\.duckduckgo\.com\/html/);
   assert.match(main, /answerWithOllama/);
   assert.match(renderer, /research-sources/);
+});
+
+test("research responses suppress model reasoning and expose only the final answer", async () => {
+  const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/main/ollama.ts", import.meta.url), "utf8"));
+  assert.match(source, /finalAnswerOnly/);
+  assert.match(source, /<think>/);
+  assert.match(source, /Local synthesis returned no final answer/);
 });
 
 test("Crimson Reactor is selectable and persists across restarts", async () => {

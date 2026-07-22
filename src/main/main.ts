@@ -142,11 +142,13 @@ function planLocal(value: string): CommandPlan {
   if (/^(hi|hello|hey|good (morning|afternoon|evening))( orbit)?[!.?]*$/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local greeting matched", reply: "Yes, boss? At your service.", query: value, source: "local" };
   if (/\b(how are you|how is it going|you good)\b/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local conversation matched", reply: "Running smoothly, boss. What can I do for you?", query: value, source: "local" };
   if (/\b(notifications?|notification center|alerts?)\b/.test(command)) return { intent: "notifications", confidence: 1, explanation: "Mac notification request matched", reply: "I can’t read Notification Center yet, boss. I won’t substitute news headlines for your notifications.", query: value, source: "local" };
+  if (/^(?:what(?:'s| is| are)?|any|give me|tell me)(?: the)? (?:new )?updates?[?.!]*$/.test(command)) return { intent: "clarify", confidence: 1, explanation: "Update topic is ambiguous", reply: "Which updates do you mean, boss—your notifications, news, weather, cricket, GitHub, or something else?", query: value, source: "local" };
   if (/\b(weather|temperature|forecast)\b/.test(command)) return { intent: "weather", confidence: 1, explanation: "Live weather request matched", query: value, source: "local" };
   if (/\b(cricket|ipl|test match)\b.*\b(score|scores|result|match|update|live)\b|\b(score|scores)\b.*\b(cricket|ipl)\b/.test(command)) return { intent: "cricket", confidence: 1, explanation: "Live cricket request matched", query: value, source: "local" };
   if (/\b(news|headlines|top stories|world update)\b/.test(command)) return { intent: "news", confidence: 1, explanation: "Live news request matched", query: value, source: "local" };
   if (/\bgithub\b/.test(command) && /\b(workflow|actions?|deploy|build|status|complete|check|see)\b/.test(command)) return { intent: "github", confidence: .99, explanation: "GitHub workflow request matched", repository: "nikhilkumarthanda/orbit-desktop", query: value, source: "local" };
   if (/\b(open|visit|go to|navigate|search|look up|youtube|tesla|github|website|web site|\.com)\b/.test(command)) {
+    const sameTab = /\b(?:same|current|this|active)\s+(?:youtube\s+)?tab\b/.test(command);
     const search = command.match(/(?:search|look up)(?:\s+(?:google|youtube))?\s+(?:for\s+)?(.+)/)?.[1]?.trim();
     const url = search && /\byoutube\b/.test(command) ? `https://www.youtube.com/results?search_query=${encodeURIComponent(search)}`
       : search && /\bgoogle\b/.test(command) ? `https://www.google.com/search?q=${encodeURIComponent(search)}`
@@ -154,7 +156,7 @@ function planLocal(value: string): CommandPlan {
       : /\btesla\b/.test(command) ? "https://www.tesla.com"
       : /\bgithub\b/.test(command) ? "https://github.com"
       : command.match(/\b([a-z0-9-]+\.(?:com|org|net|io|ai|dev))\b/) ? `https://${command.match(/\b([a-z0-9-]+\.(?:com|org|net|io|ai|dev))\b/)?.[1]}` : "";
-    return { intent: "browser", confidence: .96, explanation: "Browser navigation request matched", url, query: url ? "" : (search || value), source: "local" };
+    return { intent: "browser", confidence: .96, explanation: "Browser navigation request matched", url, query: url ? "" : (search || value), sameTab, source: "local" };
   }
   if (/\b(who|what|when|where|why|how|which|compare|explain|recommend|tell me about|is|are|can|could|should|will)\b/.test(command) || command.endsWith("?")) return { intent: "research", confidence: .9, explanation: "Knowledge question matched", query: value, source: "local" };
   const rules: [CommandPlan["intent"], RegExp, string][] = [
@@ -176,7 +178,7 @@ function planLocal(value: string): CommandPlan {
 
 async function planCommand(value: string) {
   const local = planLocal(value);
-  if (["answer", "notifications", "research", "browser", "github", "weather", "news", "cricket"].includes(local.intent)) return local;
+  if (["answer", "clarify", "notifications", "research", "browser", "github", "weather", "news", "cricket"].includes(local.intent)) return local;
   const status = await ollamaStatus();
   if (!status.available) return local;
   try {
@@ -223,6 +225,20 @@ end run`;
   child.unref();
 }
 
+function navigateActiveChromeTab(url: string) {
+  const script = `on run argv
+set targetUrl to item 1 of argv
+tell application "Google Chrome"
+activate
+if (count of windows) is 0 then make new window
+set URL of active tab of front window to targetUrl
+end tell
+end run`;
+  const child = spawn("/usr/bin/osascript", ["-e", script, url], { detached: true, stdio: "ignore" });
+  child.once("error", () => openChromeTab(url));
+  child.unref();
+}
+
 function searchActiveChromePage(terms: string): Promise<boolean> {
   const query = JSON.stringify(terms);
   const javascript = `(()=>{const q=${query};const selectors=['input[type="search"]','input[role="searchbox"]','form[role="search"] input','input[name="q"]','input[name="query"]','input[name="search"]','input[placeholder*="search" i]'];const visible=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&!e.disabled};const el=selectors.flatMap(s=>Array.from(document.querySelectorAll(s))).find(visible);if(!el)return 'NO_SEARCH';el.focus();const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;setter?setter.call(el,q):el.value=q;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));const form=el.closest('form');if(form){form.requestSubmit?form.requestSubmit():form.submit()}else{el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));el.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}))}return 'SEARCHED'})()`;
@@ -242,7 +258,7 @@ end run`;
   });
 }
 
-async function browserNavigate(request: { url?: string; query?: string; site?: string }) {
+async function browserNavigate(request: { url?: string; query?: string; site?: string; sameTab?: boolean }) {
   let target = String(request.url || "").trim();
   let usedPageSearch = false;
   let usedSiteFallback = false;
@@ -270,13 +286,14 @@ async function browserNavigate(request: { url?: string; query?: string; site?: s
     parsed.searchParams.set("i", "aps");
     parsed.searchParams.set("ref", "nb_sb_noss");
   }
-  openChromeTab(parsed.toString());
+  if (request.sameTab) navigateActiveChromeTab(parsed.toString());
+  else openChromeTab(parsed.toString());
   const destination = parsed.hostname.replace(/^www\./, "");
   const names: Record<string, string> = { "youtube.com": "YouTube", "github.com": "GitHub", "google.com": "Google", "tesla.com": "Tesla", "reddit.com": "Reddit", "linkedin.com": "LinkedIn" };
   const matched = Object.entries(names).find(([domain]) => destination === domain || destination.endsWith(`.${domain}`));
   activeBrowserSite = { name: matched?.[1] || destination, hostname: parsed.hostname };
   const searched = Boolean(request.query && !request.url);
-  const summary = usedSiteFallback && activeBrowserSite ? `I couldn't control that site's search box, boss, so I searched its pages through Google.` : searched ? `Searching ${activeBrowserSite.name} for ${String(request.query).slice(0, 80)}, boss.` : `Opening ${activeBrowserSite.name} in a new Chrome tab, boss.`;
+  const summary = usedSiteFallback && activeBrowserSite ? `I couldn't control that site's search box, boss, so I searched its pages through Google.` : searched ? `Searching ${activeBrowserSite.name} for ${String(request.query).slice(0, 80)}, boss.` : request.sameTab ? `Opening ${activeBrowserSite.name} in the current Chrome tab, boss.` : `Opening ${activeBrowserSite.name} in a new Chrome tab, boss.`;
   return { opened: true, url: parsed.toString(), site: activeBrowserSite.name, summary };
 }
 
@@ -423,7 +440,7 @@ function registerIPC() {
   }));
   ipcMain.handle("orbit:app:launch", (_event, application: string) => traced("app.launch", () => launchApplication(String(application))));
   ipcMain.handle("orbit:github:workflow", (_event, repository?: string) => traced("github.workflow", () => githubWorkflow(repository)));
-  ipcMain.handle("orbit:browser:navigate", (_event, request: { url?: string; query?: string; site?: string }) => traced("browser.navigate", () => browserNavigate(request || {})));
+  ipcMain.handle("orbit:browser:navigate", (_event, request: { url?: string; query?: string; site?: string; sameTab?: boolean }) => traced("browser.navigate", () => browserNavigate(request || {})));
   ipcMain.handle("orbit:live:weather", () => traced("live.weather", liveWeather));
   ipcMain.handle("orbit:live:news", () => traced("live.news", liveNews));
   ipcMain.handle("orbit:live:cricket", () => traced("live.cricket", liveCricket));

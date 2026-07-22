@@ -14,6 +14,15 @@ const PLAN_SCHEMA = {
   required: ["intent", "confidence", "explanation", "reply", "query", "application", "repository", "url", "requiresConfirmation"],
 } as const;
 
+export function finalAnswerOnly(value: string): string {
+  let clean = value.trim();
+  clean = clean.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  clean = clean.replace(/^[\s\S]*?<\/think>/i, "").trim();
+  const finalMarker = clean.match(/(?:^|\n)\s*(?:final answer|answer)\s*:\s*/i);
+  if (finalMarker?.index !== undefined) clean = clean.slice(finalMarker.index + finalMarker[0].length).trim();
+  return clean;
+}
+
 export async function ollamaStatus(fetcher: typeof fetch = fetch): Promise<AIStatus> {
   try {
     const response = await fetcher(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(2500) });
@@ -64,5 +73,7 @@ export async function answerWithOllama(args: { query: string; sources: ResearchS
   if (!response.ok) throw new Error(`Local synthesis returned ${response.status}`);
   const data = await response.json() as { message?: { content?: string } };
   if (!data.message?.content?.trim()) throw new Error("Local synthesis returned no answer");
-  return data.message.content.trim();
+  const answer = finalAnswerOnly(data.message.content);
+  if (!answer) throw new Error("Local synthesis returned no final answer");
+  return answer;
 }

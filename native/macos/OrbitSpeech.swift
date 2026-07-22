@@ -97,7 +97,7 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
             if let result { self.consumeCommand(result.bestTranscription.formattedString, final: result.isFinal) }
             if let error, self.capturingCommand { self.emit("error", ["message": error.localizedDescription]); self.resumeWakeListening() }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + (followupMode ? 20 : 12)) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + (followupMode ? 30 : 25)) { [weak self] in
             guard let self, self.capturingCommand else { return }
             if !self.followupMode { self.emit("error", ["message": "I did not hear a command. Try again, boss."]) }
             self.resumeWakeListening()
@@ -110,7 +110,9 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
         generation += 1
         let current = generation
         emit("partial", ["text": command])
-        DispatchQueue.main.asyncAfter(deadline: .now() + (final ? 0.1 : 0.9)) { [weak self] in
+        // Natural sentences often contain short thinking pauses. Wait long enough
+        // for the transcription to continue instead of submitting a fragment.
+        DispatchQueue.main.asyncAfter(deadline: .now() + (final ? 0.2 : 1.8)) { [weak self] in
             guard let self, self.capturingCommand, current == self.generation else { return }
             self.emit("command", ["text": command])
             self.resumeWakeListening()

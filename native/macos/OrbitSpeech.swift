@@ -166,7 +166,7 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        if manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse {
+        if manager.authorizationStatus == .authorizedAlways {
             manager.requestLocation()
         }
         else if manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted {

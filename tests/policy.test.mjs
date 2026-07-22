@@ -216,7 +216,8 @@ test("live briefings use transient macOS location and public read-only sources",
   const speech = await fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8");
   const pkg = await fs.readFile(new URL("../package.json", import.meta.url), "utf8");
   assert.match(speech, /CLLocationManagerDelegate/);
-  assert.match(speech, /authorizationStatus == \.authorizedWhenInUse/);
+  assert.match(speech, /authorizationStatus == \.authorizedAlways/);
+  assert.doesNotMatch(speech, /authorizedWhenInUse/);
   assert.match(speech, /requestWhenInUseAuthorization/);
   assert.match(main, /api\.open-meteo\.com/);
   assert.match(main, /news\.google\.com\/rss/);

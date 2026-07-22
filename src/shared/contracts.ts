@@ -24,7 +24,7 @@ export interface GitContext { path: string; branch: string; status: string[]; la
 export interface CleanupCandidate extends RecentItem { reason: string; recoverable: true }
 export interface AuditEvent { id: string; at: string; tool: string; risk: Risk; status: string; summary: string }
 export interface SearchHit { path: string; title: string; excerpt: string; score: number; modified_at: number }
-export type Intent = "system" | "recent" | "knowledge" | "git" | "github" | "cleanup" | "audit" | "launch" | "answer" | "clarify" | "unknown";
+export type Intent = "system" | "recent" | "knowledge" | "git" | "github" | "browser" | "cleanup" | "audit" | "launch" | "answer" | "clarify" | "unknown";
 export interface ConversationTurn { role: "user" | "assistant"; content: string }
 export interface CommandPlan { intent: Intent; confidence: number; explanation: string; query?: string; application?: string; repository?: string; url?: string; reply?: string; requiresConfirmation?: boolean; source?: "local"|"ollama"; model?: string }
 export interface GitHubWorkflowStatus { repository: string; state: "success"|"failure"|"pending"|"unknown"; workflow?: string; url: string; summary: string }
@@ -45,6 +45,7 @@ export interface OrbitAPI {
   openPath(path: string): Promise<boolean>;
   launchApplication(application: string): Promise<{ launched: boolean; application: string }>;
   githubWorkflow(repository?: string): Promise<GitHubWorkflowStatus>;
+  browserNavigate(request: { url?: string; query?: string; site?: string }): Promise<{ opened: boolean; url: string; summary: string }>;
   startVoice(): Promise<{ started: boolean }>;
   stopVoice(): Promise<{ stopped: boolean }>;
   armVoice(): Promise<{ armed: boolean }>;

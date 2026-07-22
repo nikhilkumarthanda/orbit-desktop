@@ -95,7 +95,7 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
             if let result { self.consumeCommand(result.bestTranscription.formattedString, final: result.isFinal) }
             if let error, self.capturingCommand { self.emit("error", ["message": error.localizedDescription]); self.resumeWakeListening() }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + (followupMode ? 20 : 12)) { [weak self] in
             guard let self, self.capturingCommand else { return }
             if !self.followupMode { self.emit("error", ["message": "I did not hear a command. Try again, boss."]) }
             self.resumeWakeListening()

@@ -11,6 +11,7 @@ export const policies: ToolPolicy[] = [
   { name: "files.open", risk: "reversible", approvalRequired: false, description: "Open a cited local path with its default application" },
   { name: "app.launch", risk: "external", approvalRequired: false, description: "Launch an installed application selected by Orbit's typed planner" },
   { name: "github.workflow", risk: "external", approvalRequired: false, description: "Read public GitHub Actions status and open it in Chrome" },
+  { name: "browser.navigate", risk: "external", approvalRequired: false, description: "Open a validated public web destination in a new Chrome tab" },
   { name: "files.trash", risk: "destructive", approvalRequired: true, description: "Move explicitly selected files to operating-system Trash" },
 ];
 

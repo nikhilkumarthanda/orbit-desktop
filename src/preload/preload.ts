@@ -15,6 +15,7 @@ const api: OrbitAPI = {
   openPath: path => ipcRenderer.invoke("orbit:path:open", path),
   launchApplication: application => ipcRenderer.invoke("orbit:app:launch", application),
   githubWorkflow: repository => ipcRenderer.invoke("orbit:github:workflow", repository),
+  browserNavigate: request => ipcRenderer.invoke("orbit:browser:navigate", request),
   startVoice: () => ipcRenderer.invoke("orbit:voice:start"),
   stopVoice: () => ipcRenderer.invoke("orbit:voice:stop"),
   armVoice: () => ipcRenderer.invoke("orbit:voice:arm"),

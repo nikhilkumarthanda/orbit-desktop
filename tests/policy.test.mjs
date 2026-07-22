@@ -76,7 +76,7 @@ test("wake phrase uses a dedicated recognizer before fresh command capture", asy
   assert.match(source, /startWakeListening/);
   assert.match(source, /activateCommandCapture/);
   assert.match(source, /requiresOnDeviceRecognition = false/);
-  assert.match(source, /deadline: \.now\(\) \+ 12/);
+  assert.match(source, /followupMode \? 20 : 12/);
 });
 
 test("microphone can be released and Orbit uses the boss voice persona", async () => {

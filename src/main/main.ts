@@ -54,11 +54,10 @@ function speak(text: string, protectListener = true) {
   if (!raw) return;
   const spoken = /\bboss\b/i.test(raw) ? raw : `Boss, ${raw}`;
   if (protectListener && speechProcess?.stdin.writable) speechProcess.stdin.write("pause\n");
-  const child = spawn("/usr/bin/say", ["-v", orbitVoice(), "-r", "158", spoken], { detached: true, stdio: "ignore" });
-  if (protectListener) child.once("close", () => setTimeout(() => {
+  const child = spawn("/usr/bin/say", ["-v", orbitVoice(), "-r", "158", spoken], { stdio: "ignore" });
+  if (protectListener) child.once("exit", () => setTimeout(() => {
     if (speechProcess?.stdin.writable) speechProcess.stdin.write("followup\n");
   }, 450));
-  child.unref();
 }
 
 function sendVoice(type: string, payload: Record<string, unknown> = {}) {
@@ -127,7 +126,17 @@ function planLocal(value: string): CommandPlan {
   const command = value.trim().toLowerCase().replace(/\b(?:git|get)\s+hub\b/g, "github").replace(/\bgethub\b/g, "github");
   if (/\b(brief|explain|tell me more|what happened)\b/.test(command) && lastFailureDetail) return { intent: "answer", confidence: 1, explanation: "Previous error briefing", reply: `Boss, the previous operation failed because ${lastFailureDetail}. I can retry when you're ready.`, query: value, source: "local" };
   if (/^(hi|hello|hey|good (morning|afternoon|evening))( orbit)?[!.?]*$/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local greeting matched", reply: "Yes, boss? At your service.", query: value, source: "local" };
-  if (/\bgithub\b/.test(command) && /\b(open|go|workflow|action|deploy|build|status|complete|check|see)\b/.test(command)) return { intent: "github", confidence: .99, explanation: "GitHub workflow request matched", repository: "nikhilkumarthanda/orbit-desktop", query: value, source: "local" };
+  if (/\bgithub\b/.test(command) && /\b(workflow|actions?|deploy|build|status|complete|check|see)\b/.test(command)) return { intent: "github", confidence: .99, explanation: "GitHub workflow request matched", repository: "nikhilkumarthanda/orbit-desktop", query: value, source: "local" };
+  if (/\b(open|visit|go to|navigate|search|look up|youtube|tesla|github|website|web site|\.com)\b/.test(command)) {
+    const search = command.match(/(?:search|look up)(?:\s+(?:google|youtube))?\s+(?:for\s+)?(.+)/)?.[1]?.trim();
+    const url = search && /\byoutube\b/.test(command) ? `https://www.youtube.com/results?search_query=${encodeURIComponent(search)}`
+      : search ? `https://www.google.com/search?q=${encodeURIComponent(search)}`
+      : /\byoutube\b/.test(command) ? "https://www.youtube.com"
+      : /\btesla\b/.test(command) ? "https://www.tesla.com"
+      : /\bgithub\b/.test(command) ? "https://github.com"
+      : command.match(/\b([a-z0-9-]+\.(?:com|org|net|io|ai|dev))\b/) ? `https://${command.match(/\b([a-z0-9-]+\.(?:com|org|net|io|ai|dev))\b/)?.[1]}` : "";
+    return { intent: "browser", confidence: .96, explanation: "Browser navigation request matched", url, query: url ? "" : value, source: "local" };
+  }
   const rules: [CommandPlan["intent"], RegExp, string][] = [
     ["launch", /\b(open|launch|start)\b.*\b(chrome|safari|finder|terminal|code|visual studio code)\b/, "Allowlisted application launch matched"],
     ["system", /\b(cpu|memory|ram|slow|battery|process|system|storage)\b/, "System diagnostics keywords matched"],
@@ -174,6 +183,11 @@ async function githubWorkflow(repository = "nikhilkumarthanda/orbit-desktop"): P
   const run = data.workflow_runs?.[0];
   const state = !run ? "unknown" : run.status !== "completed" ? "pending" : run.conclusion === "success" ? "success" : "failure";
   const summary = state === "success" ? `Boss, the latest ${run?.name || "workflow"} completed successfully.` : state === "pending" ? `Boss, the latest ${run?.name || "workflow"} is still running.` : state === "failure" ? `Boss, the latest ${run?.name || "workflow"} failed. Would you like a brief?` : "Boss, I couldn't find a recent workflow run.";
+  openChromeTab(url);
+  return { repository: safe, state, workflow: run?.name, url, summary };
+}
+
+function openChromeTab(url: string) {
   const script = `on run argv
 set targetUrl to item 1 of argv
 tell application "Google Chrome"
@@ -186,7 +200,21 @@ end run`;
   const child = spawn("/usr/bin/osascript", ["-e", script, url], { detached: true, stdio: "ignore" });
   child.once("error", () => { const fallback = spawn("/usr/bin/open", ["-a", "Google Chrome", url], { detached: true, stdio: "ignore" }); fallback.unref(); });
   child.unref();
-  return { repository: safe, state, workflow: run?.name, url, summary };
+}
+
+async function browserNavigate(request: { url?: string; query?: string; site?: string }) {
+  let target = String(request.url || "").trim();
+  if (!target) {
+    const terms = String(request.query || request.site || "").trim().slice(0, 300);
+    if (!terms) throw new Error("Orbit needs a website or search phrase");
+    target = `https://www.google.com/search?q=${encodeURIComponent(terms)}`;
+  }
+  let parsed: URL;
+  try { parsed = new URL(target); } catch { throw new Error("Orbit could not validate that web address"); }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("Orbit only opens HTTP or HTTPS websites");
+  openChromeTab(parsed.toString());
+  const destination = parsed.hostname.replace(/^www\./, "");
+  return { opened: true, url: parsed.toString(), summary: `Opening ${destination} in a new Chrome tab, boss.` };
 }
 
 async function launchApplication(application: string) {
@@ -234,6 +262,7 @@ function registerIPC() {
   }));
   ipcMain.handle("orbit:app:launch", (_event, application: string) => traced("app.launch", () => launchApplication(String(application))));
   ipcMain.handle("orbit:github:workflow", (_event, repository?: string) => traced("github.workflow", () => githubWorkflow(repository)));
+  ipcMain.handle("orbit:browser:navigate", (_event, request: { url?: string; query?: string; site?: string }) => traced("browser.navigate", () => browserNavigate(request || {})));
   ipcMain.handle("orbit:voice:speak", (_event, text: string) => { speak(text); return true; });
   ipcMain.handle("orbit:voice:start", () => { startSpeech(); return { started: Boolean(speechProcess) }; });
   ipcMain.handle("orbit:voice:stop", () => { stopSpeech(); return { stopped: true }; });

@@ -11,6 +11,7 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
     private var task: SFSpeechRecognitionTask?
     private var tapInstalled = false
     private var capturingCommand = false
+    private var suspended = false
     private var generation = 0
 
     override init() {
@@ -43,7 +44,7 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
     }
 
     private func startWakeListening() {
-        guard !capturingCommand else { return }
+        guard !capturingCommand, !suspended else { return }
         wakeRecognizer?.startListening()
         emit("ready", ["onDevice": true, "mode": "wake-word"])
     }
@@ -57,12 +58,16 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
     }
 
     private func activateCommandCapture() {
-        guard !capturingCommand else { return }
+        guard !capturingCommand, !suspended else { return }
         capturingCommand = true
         generation += 1
         wakeRecognizer?.stopListening()
         emit("wake", ["mode": "command"])
-        startCommandRecognition()
+        // Leave room for Orbit's spoken acknowledgement so it never hears itself.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.15) { [weak self] in
+            guard let self, self.capturingCommand, !self.suspended else { return }
+            self.startCommandRecognition()
+        }
     }
 
     private func startCommandRecognition() {
@@ -123,6 +128,20 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.startWakeListening() }
     }
 
+    func pause() {
+        suspended = true
+        wakeRecognizer?.stopListening()
+        if capturingCommand {
+            capturingCommand = false
+            stopTranscription()
+        }
+    }
+
+    func resume() {
+        suspended = false
+        startWakeListening()
+    }
+
     private func failAndResume(_ message: String) {
         emit("error", ["message": message])
         resumeWakeListening()
@@ -133,8 +152,11 @@ let orbit = OrbitSpeech()
 orbit.begin()
 DispatchQueue.global(qos: .userInitiated).async {
     while let line = readLine() {
-        if line.trimmingCharacters(in: .whitespacesAndNewlines) == "arm" {
-            DispatchQueue.main.async { orbit.arm() }
+        switch line.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "arm": DispatchQueue.main.async { orbit.arm() }
+        case "pause": DispatchQueue.main.async { orbit.pause() }
+        case "resume": DispatchQueue.main.async { orbit.resume() }
+        default: break
         }
     }
 }

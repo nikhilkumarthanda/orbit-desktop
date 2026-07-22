@@ -29,11 +29,16 @@ async function installedApplications() {
   return [...names].sort().slice(0, 160);
 }
 
-function speak(text: string) {
+function speak(text: string, protectListener = true) {
   if (process.platform !== "darwin") return;
   const raw = String(text).slice(0, 470).trim();
+  if (!raw) return;
   const spoken = /\bboss\b/i.test(raw) ? raw : `Boss, ${raw}`;
+  if (protectListener && speechProcess?.stdin.writable) speechProcess.stdin.write("pause\n");
   const child = spawn("/usr/bin/say", ["-v", "Daniel", "-r", "168", spoken], { detached: true, stdio: "ignore" });
+  if (protectListener) child.once("close", () => setTimeout(() => {
+    if (speechProcess?.stdin.writable) speechProcess.stdin.write("resume\n");
+  }, 450));
   child.unref();
 }
 
@@ -44,7 +49,7 @@ function sendVoice(type: string, payload: Record<string, unknown> = {}) {
 function showListening() {
   mainWindow?.show(); mainWindow?.focus();
   sendVoice("wake");
-  speak("Yes, boss?");
+  speak("Yes, boss?", false);
 }
 
 function stopSpeech() {

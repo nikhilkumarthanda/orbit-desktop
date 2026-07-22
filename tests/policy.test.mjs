@@ -85,3 +85,15 @@ test("microphone can be released and Orbit uses the boss voice persona", async (
   assert.match(renderer, /Mic on/);
   assert.match(planner, /Address the user as Boss/);
 });
+
+test("A+C command deck keeps voice controls in sidebar flow", async () => {
+  const fs = await import("node:fs/promises");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  const wake = await fs.readFile(new URL("../src/renderer/wake.css", import.meta.url), "utf8");
+  const deck = await fs.readFile(new URL("../src/renderer/command-deck.css", import.meta.url), "utf8");
+  assert.match(renderer, /<nav>.*<VoiceConsole\/>/s);
+  assert.match(renderer, /className="command-core"/);
+  assert.doesNotMatch(wake, /\.voice-console\{position:fixed/);
+  assert.match(deck, /deck-spin/);
+  assert.match(deck, /core-orb/);
+});

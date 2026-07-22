@@ -38,6 +38,8 @@ Orbit cannot listen while the computer is physically asleep. It resumes listenin
 
 Orbit 0.4.1 adds an authoritative Daniel voice at a measured speaking rate and addresses the user as Boss. The top-left **Mic on / Mic off** control now starts or terminates the native speech process; Mic off releases the microphone immediately and removes the macOS recording indicator. **Wake Orbit** or **⌘ Shift Space** can activate it again.
 
+Orbit 0.5 introduces the A+C hybrid Command Deck: a contained sidebar Voice Console with no floating overlap, plus a code-native animated orbital core, reactive waveform, satellite trails, live local telemetry, and glass cockpit surfaces.
+
 ## Architecture
 
 ```text

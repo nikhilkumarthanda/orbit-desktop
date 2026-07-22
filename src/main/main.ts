@@ -9,8 +9,8 @@ import { fileURLToPath } from "node:url";
 import { AuditStore } from "./audit.js";
 import { policies, policy } from "./policy.js";
 import { cleanupPlan, gitContexts, recentWork, systemSnapshot } from "./tools.js";
-import { ollamaStatus, OLLAMA_MODEL, planWithOllama } from "./ollama.js";
-import type { CommandPlan, ConversationTurn, GitHubWorkflowStatus, LiveBrief } from "../shared/contracts.js";
+import { answerWithOllama, ollamaStatus, OLLAMA_MODEL, planWithOllama } from "./ollama.js";
+import type { CommandPlan, ConversationTurn, GitHubWorkflowStatus, LiveBrief, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let audit: AuditStore;
@@ -141,6 +141,7 @@ function planLocal(value: string): CommandPlan {
   if (/\b(brief|explain|tell me more|what happened)\b/.test(command) && lastFailureDetail) return { intent: "answer", confidence: 1, explanation: "Previous error briefing", reply: `Boss, the previous operation failed because ${lastFailureDetail}. I can retry when you're ready.`, query: value, source: "local" };
   if (/^(hi|hello|hey|good (morning|afternoon|evening))( orbit)?[!.?]*$/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local greeting matched", reply: "Yes, boss? At your service.", query: value, source: "local" };
   if (/\b(how are you|how is it going|you good)\b/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local conversation matched", reply: "Running smoothly, boss. What can I do for you?", query: value, source: "local" };
+  if (/\b(notifications?|notification center|alerts?)\b/.test(command)) return { intent: "notifications", confidence: 1, explanation: "Mac notification request matched", reply: "I can’t read Notification Center yet, boss. I won’t substitute news headlines for your notifications.", query: value, source: "local" };
   if (/\b(weather|temperature|forecast)\b/.test(command)) return { intent: "weather", confidence: 1, explanation: "Live weather request matched", query: value, source: "local" };
   if (/\b(cricket|ipl|test match)\b.*\b(score|scores|result|match|update|live)\b|\b(score|scores)\b.*\b(cricket|ipl)\b/.test(command)) return { intent: "cricket", confidence: 1, explanation: "Live cricket request matched", query: value, source: "local" };
   if (/\b(news|headlines|top stories|world update)\b/.test(command)) return { intent: "news", confidence: 1, explanation: "Live news request matched", query: value, source: "local" };
@@ -155,6 +156,7 @@ function planLocal(value: string): CommandPlan {
       : command.match(/\b([a-z0-9-]+\.(?:com|org|net|io|ai|dev))\b/) ? `https://${command.match(/\b([a-z0-9-]+\.(?:com|org|net|io|ai|dev))\b/)?.[1]}` : "";
     return { intent: "browser", confidence: .96, explanation: "Browser navigation request matched", url, query: url ? "" : (search || value), source: "local" };
   }
+  if (/\b(who|what|when|where|why|how|which|compare|explain|recommend|tell me about|is|are|can|could|should|will)\b/.test(command) || command.endsWith("?")) return { intent: "research", confidence: .9, explanation: "Knowledge question matched", query: value, source: "local" };
   const rules: [CommandPlan["intent"], RegExp, string][] = [
     ["launch", /\b(open|launch|start)\b.*\b(chrome|safari|finder|terminal|code|visual studio code)\b/, "Allowlisted application launch matched"],
     ["system", /\b(cpu|memory|ram|slow|battery|process|system|storage)\b/, "System diagnostics keywords matched"],
@@ -174,7 +176,7 @@ function planLocal(value: string): CommandPlan {
 
 async function planCommand(value: string) {
   const local = planLocal(value);
-  if (["answer", "browser", "github", "weather", "news", "cricket"].includes(local.intent)) return local;
+  if (["answer", "notifications", "research", "browser", "github", "weather", "news", "cricket"].includes(local.intent)) return local;
   const status = await ollamaStatus();
   if (!status.available) return local;
   try {
@@ -345,6 +347,47 @@ async function liveCricket(): Promise<LiveBrief> {
   return { summary: `Boss, the latest cricket update I can verify is: ${update.replace(/\s+-\s+[^-]+$/, "")}.`, source: "Google News RSS", updatedAt: new Date().toISOString() };
 }
 
+function decodeHtml(value: string) {
+  return value.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, "\"").replace(/&#x27;|&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ").trim();
+}
+
+async function searchPublicWeb(query: string): Promise<ResearchSource[]> {
+  const endpoint = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const response = await fetch(endpoint, { headers: { "User-Agent": "Mozilla/5.0 Orbit-Desktop/0.8" }, signal: AbortSignal.timeout(10_000) });
+  if (!response.ok) throw new Error("Web search is temporarily unavailable");
+  const html = await response.text();
+  const blocks = [...html.matchAll(/<div[^>]+class="[^"]*result[^"]*"[\s\S]*?<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?:class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>|class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/div>)/gi)];
+  const sources: ResearchSource[] = [];
+  for (const match of blocks) {
+    let url = decodeHtml(match[1]);
+    try {
+      const parsed = new URL(url, "https://duckduckgo.com");
+      url = parsed.searchParams.get("uddg") || parsed.toString();
+      const safe = new URL(url);
+      if (!/^https?:$/.test(safe.protocol)) continue;
+    } catch { continue; }
+    const source = { title: decodeHtml(match[2]), url, excerpt: decodeHtml(match[3] || match[4] || "") };
+    if (source.title && source.excerpt && !sources.some(item => item.url === source.url)) sources.push(source);
+    if (sources.length === 5) break;
+  }
+  if (!sources.length) throw new Error("I couldn't retrieve reliable web results for that question");
+  return sources;
+}
+
+async function research(query: string): Promise<ResearchAnswer> {
+  const clean = query.trim().slice(0, 500);
+  if (!clean) throw new Error("Orbit needs a question to research");
+  const sources = await searchPublicWeb(clean);
+  let answer: string;
+  const status = await ollamaStatus();
+  if (status.available) answer = await answerWithOllama({ query: clean, sources, history: conversation });
+  else answer = `Here are the most relevant current results: ${sources.slice(0, 3).map((source, index) => `[${index + 1}] ${source.title}. ${source.excerpt}`).join(" ")}`;
+  const spokenAnswer = answer.replace(/\s*\[\d+\]/g, "").replace(/\s+/g, " ").slice(0, 470).trim();
+  conversation.push({ role: "user", content: clean }, { role: "assistant", content: answer });
+  if (conversation.length > 20) conversation.splice(0, conversation.length - 20);
+  return { answer, spokenAnswer, sources, updatedAt: new Date().toISOString() };
+}
+
 async function traced<T>(tool: string, action: () => Promise<T>) {
   const rule = policy(tool);
   await audit.record(tool, rule.risk, "started", rule.description);
@@ -384,6 +427,7 @@ function registerIPC() {
   ipcMain.handle("orbit:live:weather", () => traced("live.weather", liveWeather));
   ipcMain.handle("orbit:live:news", () => traced("live.news", liveNews));
   ipcMain.handle("orbit:live:cricket", () => traced("live.cricket", liveCricket));
+  ipcMain.handle("orbit:web:research", (_event, query: string) => traced("web.research", () => research(String(query))));
   ipcMain.handle("orbit:voice:speak", (_event, text: string) => { speak(text); return true; });
   ipcMain.handle("orbit:voice:start", () => { startSpeech(); return { started: Boolean(speechProcess) }; });
   ipcMain.handle("orbit:voice:stop", () => { stopSpeech(); return { stopped: true }; });

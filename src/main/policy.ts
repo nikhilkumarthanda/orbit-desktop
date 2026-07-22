@@ -15,6 +15,7 @@ export const policies: ToolPolicy[] = [
   { name: "live.weather", risk: "external", approvalRequired: false, description: "Use transient Mac location coordinates to retrieve current weather" },
   { name: "live.news", risk: "external", approvalRequired: false, description: "Retrieve current public news headlines" },
   { name: "live.cricket", risk: "external", approvalRequired: false, description: "Retrieve the latest public cricket score update" },
+  { name: "web.research", risk: "external", approvalRequired: false, description: "Search public web sources and synthesize a cited answer" },
   { name: "files.trash", risk: "destructive", approvalRequired: true, description: "Move explicitly selected files to operating-system Trash" },
 ];
 

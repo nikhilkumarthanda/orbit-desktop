@@ -115,7 +115,27 @@ test("browser follow-ups use active site context with safe URL adapters", async 
   assert.match(source, /searchActiveChromePage/);
   assert.match(source, /input\[type=/);
   assert.match(source, /parsed\.protocol !== "https:"/);
-  assert.match(source, /\["answer", "browser", "github", "weather", "news", "cricket"\]\.includes\(local\.intent\)/);
+  assert.match(source, /\["answer", "notifications", "research", "browser", "github", "weather", "news", "cricket"\]\.includes\(local\.intent\)/);
+});
+
+test("questions use cited research while notifications never route to news", async () => {
+  const fs = await import("node:fs/promises");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  assert.match(main, /intent: "notifications"/);
+  assert.match(main, /I won’t substitute news headlines/);
+  assert.match(main, /html\.duckduckgo\.com\/html/);
+  assert.match(main, /answerWithOllama/);
+  assert.match(renderer, /research-sources/);
+});
+
+test("Crimson Reactor is selectable and persists across restarts", async () => {
+  const fs = await import("node:fs/promises");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  const theme = await fs.readFile(new URL("../src/renderer/adaptive-reactor.css", import.meta.url), "utf8");
+  assert.match(renderer, /localStorage\.setItem\("orbit-theme"/);
+  assert.match(renderer, /Crimson Reactor/);
+  assert.match(theme, /data-orbit-theme="crimson"/);
 });
 
 test("live briefings use transient macOS location and public read-only sources", async () => {

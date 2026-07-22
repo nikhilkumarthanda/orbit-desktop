@@ -19,6 +19,7 @@ const api: OrbitAPI = {
   liveWeather: () => ipcRenderer.invoke("orbit:live:weather"),
   liveNews: () => ipcRenderer.invoke("orbit:live:news"),
   liveCricket: () => ipcRenderer.invoke("orbit:live:cricket"),
+  research: query => ipcRenderer.invoke("orbit:web:research", query),
   startVoice: () => ipcRenderer.invoke("orbit:voice:start"),
   stopVoice: () => ipcRenderer.invoke("orbit:voice:stop"),
   armVoice: () => ipcRenderer.invoke("orbit:voice:arm"),

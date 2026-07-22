@@ -12,6 +12,7 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
     private var tapInstalled = false
     private var capturingCommand = false
     private var suspended = false
+    private var followupMode = false
     private var generation = 0
 
     override init() {
@@ -57,14 +58,15 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
         activateCommandCapture()
     }
 
-    private func activateCommandCapture() {
+    private func activateCommandCapture(followup: Bool = false) {
         guard !capturingCommand, !suspended else { return }
+        followupMode = followup
         capturingCommand = true
         generation += 1
         wakeRecognizer?.stopListening()
-        emit("wake", ["mode": "command"])
+        emit(followup ? "listening" : "wake", ["mode": "command", "message": followup ? "Listening for a follow-up" : "Wake phrase recognized"])
         // Leave room for Orbit's spoken acknowledgement so it never hears itself.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.15) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + (followup ? 0.25 : 1.15)) { [weak self] in
             guard let self, self.capturingCommand, !self.suspended else { return }
             self.startCommandRecognition()
         }
@@ -95,7 +97,7 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
             guard let self, self.capturingCommand else { return }
-            self.emit("error", ["message": "I did not hear a command. Try again, boss."])
+            if !self.followupMode { self.emit("error", ["message": "I did not hear a command. Try again, boss."]) }
             self.resumeWakeListening()
         }
     }
@@ -124,6 +126,7 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
 
     private func resumeWakeListening() {
         capturingCommand = false
+        followupMode = false
         stopTranscription()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.startWakeListening() }
     }
@@ -142,6 +145,11 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
         startWakeListening()
     }
 
+    func followup() {
+        suspended = false
+        activateCommandCapture(followup: true)
+    }
+
     private func failAndResume(_ message: String) {
         emit("error", ["message": message])
         resumeWakeListening()
@@ -156,6 +164,7 @@ DispatchQueue.global(qos: .userInitiated).async {
         case "arm": DispatchQueue.main.async { orbit.arm() }
         case "pause": DispatchQueue.main.async { orbit.pause() }
         case "resume": DispatchQueue.main.async { orbit.resume() }
+        case "followup": DispatchQueue.main.async { orbit.followup() }
         default: break
         }
     }

@@ -86,7 +86,8 @@ test("microphone can be released and Orbit uses the boss voice persona", async (
   const planner = await fs.readFile(new URL("../src/main/ollama.ts", import.meta.url), "utf8");
   assert.match(main, /orbit:voice:stop/);
   assert.match(main, /speechProcess\.kill\(\)/);
-  assert.match(main, /"-v", "Daniel", "-r", "168"/);
+  assert.match(main, /\["Ava", "Samantha", "Daniel"\]/);
+  assert.match(main, /naturalSpeech/);
   assert.match(renderer, /Mic on/);
   assert.match(planner, /Address the user as Boss/);
 });

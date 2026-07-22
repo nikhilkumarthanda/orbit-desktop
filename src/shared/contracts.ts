@@ -24,9 +24,10 @@ export interface GitContext { path: string; branch: string; status: string[]; la
 export interface CleanupCandidate extends RecentItem { reason: string; recoverable: true }
 export interface AuditEvent { id: string; at: string; tool: string; risk: Risk; status: string; summary: string }
 export interface SearchHit { path: string; title: string; excerpt: string; score: number; modified_at: number }
-export type Intent = "system" | "recent" | "knowledge" | "git" | "cleanup" | "audit" | "launch" | "answer" | "clarify" | "unknown";
+export type Intent = "system" | "recent" | "knowledge" | "git" | "github" | "cleanup" | "audit" | "launch" | "answer" | "clarify" | "unknown";
 export interface ConversationTurn { role: "user" | "assistant"; content: string }
-export interface CommandPlan { intent: Intent; confidence: number; explanation: string; query?: string; application?: string; reply?: string; requiresConfirmation?: boolean; source?: "local"|"ollama"; model?: string }
+export interface CommandPlan { intent: Intent; confidence: number; explanation: string; query?: string; application?: string; repository?: string; url?: string; reply?: string; requiresConfirmation?: boolean; source?: "local"|"ollama"; model?: string }
+export interface GitHubWorkflowStatus { repository: string; state: "success"|"failure"|"pending"|"unknown"; workflow?: string; url: string; summary: string }
 export interface AIStatus { provider: "ollama"; configured: boolean; available: boolean; running: boolean; model: string; cost: "$0"; installCommand: string }
 export interface VoiceEvent { type: "ready"|"wake"|"listening"|"partial"|"command"|"error"|"unavailable"|"stopped"; text?: string; message?: string; onDevice?: boolean; mode?: "wake-word"|"command" }
 
@@ -43,6 +44,7 @@ export interface OrbitAPI {
   planCommand(command: string): Promise<CommandPlan>;
   openPath(path: string): Promise<boolean>;
   launchApplication(application: string): Promise<{ launched: boolean; application: string }>;
+  githubWorkflow(repository?: string): Promise<GitHubWorkflowStatus>;
   startVoice(): Promise<{ started: boolean }>;
   stopVoice(): Promise<{ stopped: boolean }>;
   armVoice(): Promise<{ armed: boolean }>;

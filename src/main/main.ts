@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, shell } from "electron";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import os from "node:os";
@@ -10,7 +10,7 @@ import { AuditStore } from "./audit.js";
 import { policies, policy } from "./policy.js";
 import { cleanupPlan, gitContexts, recentWork, systemSnapshot } from "./tools.js";
 import { ollamaStatus, OLLAMA_MODEL, planWithOllama } from "./ollama.js";
-import type { CommandPlan, ConversationTurn } from "../shared/contracts.js";
+import type { CommandPlan, ConversationTurn, GitHubWorkflowStatus } from "../shared/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let audit: AuditStore;
@@ -18,6 +18,25 @@ let mainWindow: BrowserWindow | null = null;
 let speechProcess: ChildProcessWithoutNullStreams | null = null;
 const { autoUpdater } = updater;
 const conversation: ConversationTurn[] = [];
+let lastFailureDetail = "";
+let selectedVoice: string | null = null;
+
+function orbitVoice() {
+  if (selectedVoice) return selectedVoice;
+  const voices = spawnSync("/usr/bin/say", ["-v", "?"], { encoding: "utf8" }).stdout || "";
+  selectedVoice = ["Ava", "Samantha", "Daniel"].find(name => new RegExp(`^${name}\\s`, "m").test(voices)) || "Daniel";
+  return selectedVoice;
+}
+
+function naturalSpeech(text: string) {
+  return text
+    .replace(/https?:\/\/\S+/gi, "the link")
+    .replace(/[{}\[\]<>_*`|]/g, " ")
+    .replace(/\b(?:Error|Exception):?\s*/gi, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*([.!?])\s*/g, "$1 ")
+    .trim();
+}
 
 async function installedApplications() {
   if (process.platform !== "darwin") return ["Google Chrome", "Visual Studio Code"];
@@ -31,13 +50,13 @@ async function installedApplications() {
 
 function speak(text: string, protectListener = true) {
   if (process.platform !== "darwin") return;
-  const raw = String(text).slice(0, 470).trim();
+  const raw = naturalSpeech(String(text).slice(0, 470));
   if (!raw) return;
   const spoken = /\bboss\b/i.test(raw) ? raw : `Boss, ${raw}`;
   if (protectListener && speechProcess?.stdin.writable) speechProcess.stdin.write("pause\n");
-  const child = spawn("/usr/bin/say", ["-v", "Daniel", "-r", "168", spoken], { detached: true, stdio: "ignore" });
+  const child = spawn("/usr/bin/say", ["-v", orbitVoice(), "-r", "158", spoken], { detached: true, stdio: "ignore" });
   if (protectListener) child.once("close", () => setTimeout(() => {
-    if (speechProcess?.stdin.writable) speechProcess.stdin.write("resume\n");
+    if (speechProcess?.stdin.writable) speechProcess.stdin.write("followup\n");
   }, 450));
   child.unref();
 }
@@ -106,7 +125,9 @@ function retrieve(request: Record<string, unknown>): Promise<any> {
 
 function planLocal(value: string): CommandPlan {
   const command = value.trim().toLowerCase();
+  if (/\b(brief|explain|tell me more|what happened)\b/.test(command) && lastFailureDetail) return { intent: "answer", confidence: 1, explanation: "Previous error briefing", reply: `Boss, the previous operation failed because ${lastFailureDetail}. I can retry when you're ready.`, query: value, source: "local" };
   if (/^(hi|hello|hey|good (morning|afternoon|evening))( orbit)?[!.?]*$/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local greeting matched", reply: "Yes, boss? At your service.", query: value, source: "local" };
+  if (/\bgithub\b/.test(command) && /\b(open|go|workflow|action|deploy|build|status|complete|check|see)\b/.test(command)) return { intent: "github", confidence: .99, explanation: "GitHub workflow request matched", repository: "nikhilkumarthanda/orbit-desktop", query: value, source: "local" };
   const rules: [CommandPlan["intent"], RegExp, string][] = [
     ["launch", /\b(open|launch|start)\b.*\b(chrome|safari|finder|terminal|code|visual studio code)\b/, "Allowlisted application launch matched"],
     ["system", /\b(cpu|memory|ram|slow|battery|process|system|storage)\b/, "System diagnostics keywords matched"],
@@ -138,9 +159,23 @@ async function planCommand(value: string) {
     return plan;
   } catch (error) {
     if (local.intent !== "unknown") return { ...local, reply: "Local AI is unavailable, so I'm handling that command with Orbit's offline planner." };
-    const detail = error instanceof Error ? error.message : "Unknown local inference error";
-    return { intent: "clarify", confidence: 1, explanation: "Local model unavailable", reply: `Boss, Ollama is installed but inference failed. ${detail}`, query: value, source: "local" };
+    const detail = error instanceof Error ? error.message : "an unknown local inference error occurred";
+    lastFailureDetail = detail.includes("structured") ? "Ollama returned a response Orbit could not safely interpret" : detail.includes("timeout") ? "the local model took too long to respond" : "the local Ollama model could not complete the request";
+    return { intent: "clarify", confidence: 1, explanation: "Local model unavailable", reply: "Boss, there’s an error with Ollama. Would you like me to brief you?", query: value, source: "local" };
   }
+}
+
+async function githubWorkflow(repository = "nikhilkumarthanda/orbit-desktop"): Promise<GitHubWorkflowStatus> {
+  const safe = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) ? repository : "nikhilkumarthanda/orbit-desktop";
+  const url = `https://github.com/${safe}/actions`;
+  const response = await fetch(`https://api.github.com/repos/${safe}/actions/runs?per_page=1`, { headers: { Accept: "application/vnd.github+json", "User-Agent": "Orbit-Desktop" }, signal: AbortSignal.timeout(8000) });
+  if (!response.ok) throw new Error(`GitHub returned status ${response.status}`);
+  const data = await response.json() as { workflow_runs?: Array<{ name?: string; status?: string; conclusion?: string }> };
+  const run = data.workflow_runs?.[0];
+  const state = !run ? "unknown" : run.status !== "completed" ? "pending" : run.conclusion === "success" ? "success" : "failure";
+  const summary = state === "success" ? `Boss, the latest ${run?.name || "workflow"} completed successfully.` : state === "pending" ? `Boss, the latest ${run?.name || "workflow"} is still running.` : state === "failure" ? `Boss, the latest ${run?.name || "workflow"} failed. Would you like a brief?` : "Boss, I couldn't find a recent workflow run.";
+  const child = spawn("/usr/bin/open", ["-a", "Google Chrome", url], { detached: true, stdio: "ignore" }); child.unref();
+  return { repository: safe, state, workflow: run?.name, url, summary };
 }
 
 async function launchApplication(application: string) {
@@ -187,6 +222,7 @@ function registerIPC() {
     return (await shell.openPath(resolved)) === "";
   }));
   ipcMain.handle("orbit:app:launch", (_event, application: string) => traced("app.launch", () => launchApplication(String(application))));
+  ipcMain.handle("orbit:github:workflow", (_event, repository?: string) => traced("github.workflow", () => githubWorkflow(repository)));
   ipcMain.handle("orbit:voice:speak", (_event, text: string) => { speak(text); return true; });
   ipcMain.handle("orbit:voice:start", () => { startSpeech(); return { started: Boolean(speechProcess) }; });
   ipcMain.handle("orbit:voice:stop", () => { stopSpeech(); return { stopped: true }; });

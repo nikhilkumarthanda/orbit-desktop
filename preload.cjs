@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("orbit", Object.freeze({
   planCommand: command => ipcRenderer.invoke("orbit:command:plan", command),
   openPath: target => ipcRenderer.invoke("orbit:path:open", target),
   launchApplication: application => ipcRenderer.invoke("orbit:app:launch", application),
+  githubWorkflow: repository => ipcRenderer.invoke("orbit:github:workflow", repository),
   startVoice: () => ipcRenderer.invoke("orbit:voice:start"),
   stopVoice: () => ipcRenderer.invoke("orbit:voice:stop"),
   armVoice: () => ipcRenderer.invoke("orbit:voice:arm"),

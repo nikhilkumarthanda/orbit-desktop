@@ -92,13 +92,13 @@ test("microphone can be released and Orbit uses the boss voice persona", async (
   assert.match(planner, /Address the user as Boss/);
 });
 
-test("A+C command deck keeps voice controls in sidebar flow", async () => {
+test("Orbit Space keeps voice controls in sidebar flow", async () => {
   const fs = await import("node:fs/promises");
   const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
   const wake = await fs.readFile(new URL("../src/renderer/wake.css", import.meta.url), "utf8");
   const deck = await fs.readFile(new URL("../src/renderer/command-deck.css", import.meta.url), "utf8");
   assert.match(renderer, /<nav>.*<VoiceConsole\/>/s);
-  assert.match(renderer, /className="command-core"/);
+  assert.match(renderer, /className="orbit-space-page"/);
   assert.doesNotMatch(renderer, /className="orbit-trail/);
   assert.match(deck, /core-orb/);
   assert.doesNotMatch(wake, /\.voice-console\{position:fixed/);
@@ -188,6 +188,17 @@ test("phase two interruptions, stale-response cancellation, folders, and Orbit S
   assert.match(renderer, /runRef/);
   assert.match(renderer, /stopSpeaking/);
   assert.match(renderer, /Orbit Space/);
+});
+
+test("Orbit Space is the startup home and diagnostics are a separate view", async () => {
+  const renderer = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8"));
+  assert.match(renderer, /useState<View>\("space"\)/);
+  assert.match(renderer, /\["space","Orbit Space"\]/);
+  assert.match(renderer, /\["diagnostics","Diagnostics"\]/);
+  assert.match(renderer, /<OrbitSpace data=/);
+  assert.match(renderer, /view==="diagnostics"&&<Diagnostics/);
+  assert.doesNotMatch(renderer, /createPortal/);
+  assert.doesNotMatch(renderer, /view==="system"&&<System/);
 });
 
 test("phase two live answers stay relevant and speech is less repetitive", async () => {

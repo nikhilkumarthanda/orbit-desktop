@@ -26,7 +26,7 @@ export interface AuditEvent { id: string; at: string; tool: string; risk: Risk; 
 export interface SearchHit { path: string; title: string; excerpt: string; score: number; modified_at: number }
 export type Intent = "battery" | "screen" | "system" | "recent" | "knowledge" | "git" | "github" | "browser" | "cleanup" | "audit" | "launch" | "weather" | "news" | "cricket" | "notifications" | "research" | "answer" | "clarify" | "unknown";
 export interface ConversationTurn { role: "user" | "assistant"; content: string }
-export interface CommandPlan { intent: Intent; confidence: number; explanation: string; query?: string; application?: string; repository?: string; url?: string; reply?: string; sameTab?: boolean; requiresConfirmation?: boolean; source?: "local"|"ollama"; model?: string }
+export interface CommandPlan { intent: Intent; confidence: number; explanation: string; query?: string; application?: string; repository?: string; url?: string; reply?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up"; requiresConfirmation?: boolean; source?: "local"|"ollama"; model?: string }
 export interface GitHubWorkflowStatus { repository: string; state: "success"|"failure"|"pending"|"unknown"; workflow?: string; url: string; summary: string }
 export interface LiveBrief { summary: string; source: string; updatedAt: string }
 export interface ResearchSource { title: string; url: string; excerpt: string }
@@ -51,8 +51,8 @@ export interface OrbitAPI {
   openPath(path: string): Promise<boolean>;
   launchApplication(application: string): Promise<{ launched: boolean; application: string }>;
   githubWorkflow(repository?: string): Promise<GitHubWorkflowStatus>;
-  browserNavigate(request: { url?: string; query?: string; site?: string; sameTab?: boolean }): Promise<{ opened: boolean; url: string; site: string; summary: string }>;
-  liveWeather(): Promise<LiveBrief>;
+  browserNavigate(request: { url?: string; query?: string; site?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up" }): Promise<{ opened: boolean; url: string; site: string; summary: string }>;
+  liveWeather(query?: string): Promise<LiveBrief>;
   liveNews(): Promise<LiveBrief>;
   liveCricket(): Promise<LiveBrief>;
   research(query: string): Promise<ResearchAnswer>;

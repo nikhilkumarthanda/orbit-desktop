@@ -121,6 +121,21 @@ test("browser follow-ups use active site context with safe URL adapters", async 
   assert.match(source, /\["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "weather", "news", "cricket"\]\.includes\(local\.intent\)/);
 });
 
+test("browser actions, explicit GitHub routing, weather fallback, and preferred names are reliable", async () => {
+  const fs = await import("node:fs/promises");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  assert.match(main, /browserAction: "play_first"/);
+  assert.match(main, /browserAction: "scroll_down"/);
+  assert.match(main, /youtube\.com\/watch\?v=/);
+  assert.match(main, /Explicit GitHub workflow request matched/);
+  assert.doesNotMatch(renderer, /plan\.intent==="launch"&&plan\.application==="Google Chrome"&&githubRequest/);
+  assert.match(main, /ipapi\.co\/json/);
+  assert.match(main, /geocoding-api\.open-meteo\.com/);
+  assert.match(main, /Preferred name saved locally/);
+  assert.match(main, /profile\.json/);
+});
+
 test("Mac context routes before web research and Gemini keys stay in Keychain", async () => {
   const read = path => import("node:fs/promises").then(fs => fs.readFile(new URL(`../${path}`, import.meta.url), "utf8"));
   const [main, gemini, contracts, preload, renderer, policy] = await Promise.all([

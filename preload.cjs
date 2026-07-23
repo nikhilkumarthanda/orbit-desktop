@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld("orbit", Object.freeze({
   research: query => ipcRenderer.invoke("orbit:web:research", query),
   batteryStatus: () => ipcRenderer.invoke("orbit:system:battery"),
   describeScreen: query => ipcRenderer.invoke("orbit:screen:describe", query),
+  takeScreenshot: () => ipcRenderer.invoke("orbit:screen:capture"),
   startVoice: () => ipcRenderer.invoke("orbit:voice:start"),
   stopVoice: () => ipcRenderer.invoke("orbit:voice:stop"),
   stopSpeaking: () => ipcRenderer.invoke("orbit:speech:stop"),

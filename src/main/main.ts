@@ -223,6 +223,7 @@ function planLocal(value: string): CommandPlan {
   if (/\b(how are you|how is it going|you good)\b/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local conversation matched", reply: "Running smoothly, boss. What can I do for you?", query: value, source: "local" };
   if (/\b(notifications?|notification center|alerts?)\b/.test(command)) return { intent: "notifications", confidence: 1, explanation: "Mac notification request matched", reply: "I can’t read Notification Center yet, boss. I won’t substitute news headlines for your notifications.", query: value, source: "local" };
   if (/\b(?:what(?:'s| is)?|check|tell me|show me)?\s*(?:my|the)?\s*battery(?:\s+(?:level|percentage|status))?\b/.test(command)) return { intent: "battery", confidence: 1, explanation: "Native battery request matched", query: value, source: "local" };
+  if (/\b(?:take|capture|save|make|grab)\b(?:\s+(?:a|the|my|this|current|full))?\s*(?:screen\s*shot|screenshot)\b|\b(?:screen\s*shot|screenshot)\s+(?:this|that|now|please)\b/.test(command)) return { intent: "screenshot", confidence: 1, explanation: "Native screenshot request matched", query: value, source: "local" };
   if (/\b(?:what(?:'s| is) on|describe|read|analy[sz]e|look at|see)\s+(?:my|the|this|current)?\s*screen\b|\bscreen\s*(?:right now|now)\b/.test(command)) return { intent: "screen", confidence: 1, explanation: "Native screen request matched", query: value, source: "local" };
   if (/^(?:what(?:'s| is| are)?|any|give me|tell me)(?: the)? (?:new )?updates?[?.!]*$/.test(command)) return { intent: "clarify", confidence: 1, explanation: "Update topic is ambiguous", reply: "Which updates do you mean, boss—your notifications, news, weather, cricket, GitHub, or something else?", query: value, source: "local" };
   if (/\b(?:what'?s|what is)\s+happening\s+today\b|\bcatch me up\b|\b(?:morning|daily) briefing\b/.test(command)) return { intent: "daily_brief", confidence: 1, explanation: "Composite daily briefing request matched", query: value, liveServices: ["weather", "news", "calendar", "email"], source: "local" };
@@ -303,7 +304,7 @@ async function planCommand(value: string) {
   }
   const local = planLocal(value);
   if (local.reply) local.reply = personalize(local.reply);
-  if (["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "folder", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"].includes(local.intent)) return local;
+  if (["answer", "clarify", "notifications", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"].includes(local.intent)) return local;
   const status = await ollamaStatus();
   if (!status.available) return local;
   try {
@@ -554,13 +555,27 @@ function batteryStatus() {
   return { percentage, charging, timeRemaining, summary };
 }
 
-async function describeScreen(query: string): Promise<ResearchAnswer> {
-  if (!geminiKey()) throw new Error("Add your free Gemini API key in Settings before using screen understanding");
+async function capturePrimaryScreen() {
   const display = screen.getPrimaryDisplay();
   const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: display.size, fetchWindowIcons: false });
   const capture = sources.find(source => source.display_id === String(display.id)) || sources[0];
   if (!capture || capture.thumbnail.isEmpty()) throw new Error("Orbit could not capture the screen. Allow Screen Recording in System Settings → Privacy & Security.");
-  const answer = personalize(await answerWithGemini({ query: query || "Describe what is visible on my screen", history: conversation, imageBase64: capture.thumbnail.toPNG().toString("base64") }));
+  return capture.thumbnail.toPNG();
+}
+
+async function takeScreenshot() {
+  const png = await capturePrimaryScreen();
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const target = path.join(app.getPath("desktop"), `Orbit Screenshot ${stamp}.png`);
+  await writeFile(target, png);
+  shell.showItemInFolder(target);
+  return { saved: true, path: target, summary: `Screenshot saved to Desktop as ${path.basename(target)}.` };
+}
+
+async function describeScreen(query: string): Promise<ResearchAnswer> {
+  if (!geminiKey()) throw new Error("Add your free Gemini API key in Settings before using screen understanding");
+  const png = await capturePrimaryScreen();
+  const answer = personalize(await answerWithGemini({ query: query || "Describe what is visible on my screen", history: conversation, imageBase64: png.toString("base64") }));
   const spokenAnswer = answer.replace(/\s+/g, " ").slice(0, 470).trim();
   conversation.push({ role: "user", content: query }, { role: "assistant", content: answer });
   return { answer, spokenAnswer, sources: [], updatedAt: new Date().toISOString() };
@@ -618,6 +633,7 @@ function registerIPC() {
   ipcMain.handle("orbit:web:research", (_event, query: string) => traced("web.research", () => research(String(query))));
   ipcMain.handle("orbit:system:battery", () => traced("system.battery", async () => batteryStatus()));
   ipcMain.handle("orbit:screen:describe", (_event, query: string) => traced("screen.describe", () => describeScreen(String(query).slice(0, 500))));
+  ipcMain.handle("orbit:screen:capture", () => traced("screen.capture", takeScreenshot));
   ipcMain.handle("orbit:gemini:status", () => geminiStatus());
   ipcMain.handle("orbit:gemini:configure", (_event, key: string) => traced("gemini.configure", async () => { await saveGeminiKey(String(key)); return geminiStatus(); }));
   ipcMain.handle("orbit:gemini:budget", (_event, value: number) => traced("gemini.budget", async () => { setGeminiBudget(Number(value)); return geminiStatus(); }));

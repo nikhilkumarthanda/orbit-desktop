@@ -149,7 +149,7 @@ test("browser follow-ups use active site context with safe URL adapters", async 
   assert.match(source, /sameTab/);
   assert.match(source, /input\[type=/);
   assert.match(source, /parsed\.protocol !== "https:"/);
-  assert.match(source, /\["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "folder", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"\]\.includes\(local\.intent\)/);
+  assert.match(source, /\["answer", "clarify", "notifications", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"\]\.includes\(local\.intent\)/);
 });
 
 test("browser actions, explicit GitHub routing, weather fallback, and preferred names are reliable", async () => {
@@ -220,6 +220,21 @@ test("phase two interruptions, stale-response cancellation, folders, and Orbit S
   assert.match(renderer, /runRef/);
   assert.match(renderer, /stopSpeaking/);
   assert.match(renderer, /Orbit Space/);
+});
+
+test("screenshot requests use a typed native capture tool instead of general AI", async () => {
+  const fs = await import("node:fs/promises");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  const preload = await fs.readFile(new URL("../preload.cjs", import.meta.url), "utf8");
+  const policy = await fs.readFile(new URL("../src/main/policy.ts", import.meta.url), "utf8");
+  assert.match(main, /Native screenshot request matched/);
+  assert.match(main, /intent: "screenshot"/);
+  assert.match(main, /Orbit Screenshot/);
+  assert.match(main, /orbit:screen:capture/);
+  assert.match(renderer, /plan\.intent==="screenshot"/);
+  assert.match(preload, /takeScreenshot/);
+  assert.match(policy, /screen\.capture/);
 });
 
 test("Orbit Space is the startup home and diagnostics are a separate view", async () => {

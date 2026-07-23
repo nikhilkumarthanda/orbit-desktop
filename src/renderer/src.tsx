@@ -48,6 +48,7 @@ function App(){
     if(plan.intent==="answer"||plan.intent==="clarify"||plan.intent==="notifications"){const reply=plan.reply||plan.explanation;setNotice(reply);await window.orbit.speak(reply);return}
     if(plan.intent==="research"){const result=await window.orbit.research(plan.query||input);if(run!==runRef.current)return;setNotice(result.answer);setSources(result.sources);setStage("success");await window.orbit.speak(result.spokenAnswer);return}
     if(plan.intent==="battery"){const result=await window.orbit.batteryStatus();if(run!==runRef.current)return;setNotice(result.summary);setStage("success");await window.orbit.speak(result.summary);return}
+    if(plan.intent==="screenshot"){const result=await window.orbit.takeScreenshot();if(run!==runRef.current)return;setNotice(result.summary);setStage("success");await window.orbit.speak(result.summary);return}
     if(plan.intent==="screen"){const result=await window.orbit.describeScreen(plan.query||input);if(run!==runRef.current)return;setNotice(result.answer);setStage("success");await window.orbit.speak(result.spokenAnswer);return}
     setStage("executing");
     if(plan.intent==="github"){const result=await window.orbit.githubWorkflow(plan.repository);if(run!==runRef.current)return;setStage("success");setNotice(result.summary);await window.orbit.speak(result.summary);return}

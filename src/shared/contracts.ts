@@ -24,9 +24,9 @@ export interface GitContext { path: string; branch: string; status: string[]; la
 export interface CleanupCandidate extends RecentItem { reason: string; recoverable: true }
 export interface AuditEvent { id: string; at: string; tool: string; risk: Risk; status: string; summary: string }
 export interface SearchHit { path: string; title: string; excerpt: string; score: number; modified_at: number }
-export type Intent = "battery" | "screen" | "system" | "recent" | "knowledge" | "git" | "github" | "browser" | "cleanup" | "audit" | "launch" | "weather" | "news" | "cricket" | "notifications" | "research" | "answer" | "clarify" | "unknown";
+export type Intent = "battery" | "screen" | "system" | "recent" | "knowledge" | "git" | "github" | "browser" | "cleanup" | "audit" | "launch" | "folder" | "weather" | "news" | "cricket" | "notifications" | "research" | "answer" | "clarify" | "unknown";
 export interface ConversationTurn { role: "user" | "assistant"; content: string }
-export interface CommandPlan { intent: Intent; confidence: number; explanation: string; query?: string; application?: string; repository?: string; url?: string; reply?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up"; requiresConfirmation?: boolean; source?: "local"|"ollama"; model?: string }
+export interface CommandPlan { intent: Intent; confidence: number; explanation: string; query?: string; application?: string; folder?: string; repository?: string; url?: string; reply?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up"; requiresConfirmation?: boolean; source?: "local"|"ollama"; model?: string }
 export interface GitHubWorkflowStatus { repository: string; state: "success"|"failure"|"pending"|"unknown"; workflow?: string; url: string; summary: string }
 export interface LiveBrief { summary: string; source: string; updatedAt: string }
 export interface ResearchSource { title: string; url: string; excerpt: string }
@@ -35,7 +35,7 @@ export interface AIStatus { provider: "ollama"; configured: boolean; available: 
 export interface GeminiUsageStatus { month: string; requests: number; inputTokens: number; outputTokens: number; estimatedCostUsd: number; monthlyBudgetUsd: number; remainingUsd: number; blocked: boolean }
 export interface GeminiStatus { provider: "gemini"; configured: boolean; available: boolean; model: string; cost: "$0 on Google free tier"; usage: GeminiUsageStatus }
 export interface BatteryStatus { percentage: number; charging: boolean; timeRemaining?: string; summary: string }
-export interface VoiceEvent { type: "ready"|"wake"|"listening"|"partial"|"command"|"error"|"unavailable"|"stopped"; text?: string; message?: string; onDevice?: boolean; mode?: "wake-word"|"command" }
+export interface VoiceEvent { type: "ready"|"wake"|"listening"|"partial"|"command"|"speaking"|"interrupted"|"error"|"unavailable"|"stopped"; text?: string; message?: string; onDevice?: boolean; mode?: "wake-word"|"command" }
 
 export interface OrbitAPI {
   policies(): Promise<ToolPolicy[]>;
@@ -49,6 +49,7 @@ export interface OrbitAPI {
   searchKnowledge(query: string): Promise<{ hits: SearchHit[] }>;
   planCommand(command: string): Promise<CommandPlan>;
   openPath(path: string): Promise<boolean>;
+  openFolder(folder: string): Promise<{ opened: boolean; folder: string }>;
   launchApplication(application: string): Promise<{ launched: boolean; application: string }>;
   githubWorkflow(repository?: string): Promise<GitHubWorkflowStatus>;
   browserNavigate(request: { url?: string; query?: string; site?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up" }): Promise<{ opened: boolean; url: string; site: string; summary: string }>;
@@ -60,6 +61,7 @@ export interface OrbitAPI {
   describeScreen(query: string): Promise<ResearchAnswer>;
   startVoice(): Promise<{ started: boolean }>;
   stopVoice(): Promise<{ stopped: boolean }>;
+  stopSpeaking(): Promise<{ stopped: boolean }>;
   armVoice(): Promise<{ armed: boolean }>;
   speak(text: string): Promise<boolean>;
   onVoiceEvent(callback: (event: VoiceEvent) => void): () => void;

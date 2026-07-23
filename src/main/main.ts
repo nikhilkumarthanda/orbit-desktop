@@ -17,6 +17,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 let audit: AuditStore;
 let mainWindow: BrowserWindow | null = null;
 let speechProcess: ChildProcessWithoutNullStreams | null = null;
+let spokenReply: ReturnType<typeof spawn> | null = null;
 const { autoUpdater } = updater;
 const conversation: ConversationTurn[] = [];
 let lastFailureDetail = "";
@@ -79,11 +80,24 @@ function speak(text: string, protectListener = true) {
   // Replies already include the preferred name when it sounds natural. Avoid
   // prefixing every sentence, which makes a conversation feel synthetic.
   const spoken = named;
+  stopSpeaking(false);
   if (protectListener && speechProcess?.stdin.writable) speechProcess.stdin.write("pause\n");
   const child = spawn("/usr/bin/say", ["-v", orbitVoice(), "-r", "172", spoken], { stdio: "ignore" });
+  spokenReply = child;
+  sendVoice("speaking", { message: "Orbit is speaking" });
   if (protectListener) child.once("exit", () => setTimeout(() => {
+    if (spokenReply !== child) return;
+    spokenReply = null;
     if (speechProcess?.stdin.writable) speechProcess.stdin.write("followup\n");
   }, 450));
+}
+
+function stopSpeaking(resumeListener = true) {
+  const wasSpeaking = Boolean(spokenReply);
+  if (spokenReply) { spokenReply.kill(); spokenReply = null; }
+  if (wasSpeaking) sendVoice("interrupted", { message: "Response stopped" });
+  if (resumeListener && speechProcess?.stdin.writable) speechProcess.stdin.write("followup\n");
+  return wasSpeaking;
 }
 
 function sendVoice(type: string, payload: Record<string, unknown> = {}) {
@@ -133,6 +147,7 @@ function startSpeech() {
           locationRequest = null;
           continue;
         }
+        if (event.type === "interrupt") { stopSpeaking(); continue; }
         sendVoice(event.type, event);
         if (event.type === "wake") showListening();
         if (event.type === "command" && event.text) mainWindow?.webContents.send("orbit:voice:command", String(event.text));
@@ -173,6 +188,11 @@ function planLocal(value: string): CommandPlan {
   if (/\b(cricket|ipl|test match)\b.*\b(score|scores|result|match|update|live)\b|\b(score|scores)\b.*\b(cricket|ipl)\b/.test(command)) return { intent: "cricket", confidence: 1, explanation: "Live cricket request matched", query: value, source: "local" };
   if (/\b(news|headlines|top stories|world update)\b/.test(command)) return { intent: "news", confidence: 1, explanation: "Live news request matched", query: value, source: "local" };
   if (/\bgithub\b/.test(command) && /\b(workflow|actions?|deployment|ci|build (?:status|run)|check (?:the )?(?:workflow|actions?|deployment|ci|build))\b/.test(command)) return { intent: "github", confidence: .99, explanation: "Explicit GitHub workflow request matched", repository: "nikhilkumarthanda/orbit-desktop", query: value, source: "local" };
+  const folderMatch = command.match(/\b(?:open|show|go to)\s+(?:my\s+|the\s+)?(documents?|downloads?|desktop|projects?|developer)(?:\s+folder)?\b/);
+  if (folderMatch) {
+    const folder = ({ document: "Documents", documents: "Documents", download: "Downloads", downloads: "Downloads", desktop: "Desktop", project: "Projects", projects: "Projects", developer: "Developer" } as Record<string, string>)[folderMatch[1]];
+    return { intent: "folder", confidence: 1, explanation: "Local folder request matched before browser routing", folder, reply: `Opening ${folder}.`, query: value, source: "local" };
+  }
   if (/\b(?:play|open|select|click)\b.*\b(?:first|1st)\b.*\b(?:video|result)\b/.test(command)) return { intent: "browser", confidence: 1, explanation: "Active YouTube result action matched", browserAction: "play_first", sameTab: true, source: "local" };
   if (/^(?:please )?(?:scroll|page)\s+(?:down|lower)(?:\s+(?:a little|more))?[.!]*$/.test(command)) return { intent: "browser", confidence: 1, explanation: "Active page scroll matched", browserAction: "scroll_down", sameTab: true, source: "local" };
   if (/^(?:please )?(?:scroll|page)\s+(?:up|higher)(?:\s+(?:a little|more))?[.!]*$/.test(command)) return { intent: "browser", confidence: 1, explanation: "Active page scroll matched", browserAction: "scroll_up", sameTab: true, source: "local" };
@@ -215,7 +235,7 @@ async function planCommand(value: string) {
   }
   const local = planLocal(value);
   if (local.reply) local.reply = personalize(local.reply);
-  if (["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "weather", "news", "cricket"].includes(local.intent)) return local;
+  if (["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "folder", "weather", "news", "cricket"].includes(local.intent)) return local;
   const status = await ollamaStatus();
   if (!status.available) return local;
   try {
@@ -571,6 +591,13 @@ function registerIPC() {
     if (!path.isAbsolute(resolved)) throw new Error("Orbit only opens absolute cited paths");
     return (await shell.openPath(resolved)) === "";
   }));
+  ipcMain.handle("orbit:folder:open", (_event, requested: string) => traced("files.open", async () => {
+    const folders: Record<string, string> = { documents: "Documents", downloads: "Downloads", desktop: "Desktop", projects: "Projects", developer: "Developer" };
+    const folder = folders[String(requested).toLowerCase()];
+    if (!folder) throw new Error("Orbit only opens approved home folders");
+    const opened = (await shell.openPath(path.join(os.homedir(), folder))) === "";
+    return { opened, folder };
+  }));
   ipcMain.handle("orbit:app:launch", (_event, application: string) => traced("app.launch", () => launchApplication(String(application))));
   ipcMain.handle("orbit:github:workflow", (_event, repository?: string) => traced("github.workflow", () => githubWorkflow(repository)));
   ipcMain.handle("orbit:browser:navigate", (_event, request: { url?: string; query?: string; site?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up" }) => traced("browser.navigate", () => browserNavigate(request || {})));
@@ -586,6 +613,7 @@ function registerIPC() {
   ipcMain.handle("orbit:voice:speak", (_event, text: string) => { speak(text); return true; });
   ipcMain.handle("orbit:voice:start", () => { startSpeech(); return { started: Boolean(speechProcess) }; });
   ipcMain.handle("orbit:voice:stop", () => { stopSpeech(); return { stopped: true }; });
+  ipcMain.handle("orbit:speech:stop", () => ({ stopped: stopSpeaking() }));
   ipcMain.handle("orbit:voice:arm", () => { armVoice(); return { armed: Boolean(speechProcess) }; });
   ipcMain.handle("orbit:trash", async (_event, paths: string[]) => traced("files.trash", async () => {
     const approval = await dialog.showMessageBox({ type: "warning", buttons: ["Cancel", "Move to Trash"], defaultId: 0, cancelId: 0, title: "Approve reversible cleanup", message: `Move ${Math.min(paths.length, 50)} selected file(s) to Trash?`, detail: "Orbit never permanently deletes these files. They remain recoverable from operating-system Trash." });
@@ -620,4 +648,4 @@ app.whenReady().then(async () => {
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
-app.on("will-quit", () => { globalShortcut.unregisterAll(); speechProcess?.kill(); });
+app.on("will-quit", () => { globalShortcut.unregisterAll(); spokenReply?.kill(); speechProcess?.kill(); });

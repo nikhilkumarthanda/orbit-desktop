@@ -13,6 +13,7 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
     private var tapInstalled = false
     private var capturingCommand = false
     private var suspended = false
+    private var speaking = false
     private var followupMode = false
     private var generation = 0
     private var locationManager: CLLocationManager?
@@ -21,7 +22,7 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
         super.init()
         transcriber.delegate = self
         let wake = NSSpeechRecognizer()
-        wake?.commands = ["Hey Orbit", "Orbit"]
+        wake?.commands = ["Hey Orbit", "Orbit", "Stop", "Skip", "That's enough", "That is enough"]
         wake?.listensInForegroundOnly = false
         wake?.blocksOtherRecognizers = false
         wake?.delegate = self
@@ -53,6 +54,18 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
     }
 
     func speechRecognizer(_ sender: NSSpeechRecognizer, didRecognizeCommand command: String) {
+        let normalized = command.lowercased()
+        if speaking && ["stop", "skip", "that's enough", "that is enough"].contains(normalized) {
+            emit("interrupt", ["message": "Speech interruption recognized"])
+            speaking = false
+            suspended = false
+            return
+        }
+        if speaking {
+            emit("interrupt", ["message": "New wake request recognized"])
+            speaking = false
+            suspended = false
+        }
         activateCommandCapture()
     }
 
@@ -113,7 +126,9 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
         emit("partial", ["text": command])
         // Natural sentences often contain short thinking pauses. Wait long enough
         // for the transcription to continue instead of submitting a fragment.
-        DispatchQueue.main.asyncAfter(deadline: .now() + (final ? 1.6 : 2.4)) { [weak self] in
+        let endsInFiller = command.range(of: #"\b(?:um+|uh+|erm+|hmm+|like|so|and|but)$"#, options: [.regularExpression, .caseInsensitive]) != nil
+        let settlingDelay = endsInFiller ? 5.0 : (final ? 3.0 : 3.8)
+        DispatchQueue.main.asyncAfter(deadline: .now() + settlingDelay) { [weak self] in
             guard let self, self.capturingCommand, current == self.generation else { return }
             self.emit("command", ["text": command])
             self.resumeWakeListening()
@@ -138,19 +153,25 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
 
     func pause() {
         suspended = true
+        speaking = true
         wakeRecognizer?.stopListening()
         if capturingCommand {
             capturingCommand = false
             stopTranscription()
         }
+        wakeRecognizer?.startListening()
     }
 
     func resume() {
+        wakeRecognizer?.stopListening()
+        speaking = false
         suspended = false
         startWakeListening()
     }
 
     func followup() {
+        wakeRecognizer?.stopListening()
+        speaking = false
         suspended = false
         activateCommandCapture(followup: true)
     }

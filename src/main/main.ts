@@ -38,6 +38,8 @@ function naturalSpeech(text: string) {
     .replace(/https?:\/\/\S+/gi, "the link")
     .replace(/[{}\[\]<>_*`|]/g, " ")
     .replace(/\b(?:Error|Exception):?\s*/gi, "")
+    .replace(/\s*[·•]\s*/g, ". ")
+    .replace(/\s*:\s*/g, ": ")
     .replace(/\s+/g, " ")
     .replace(/\s*([.!?])\s*/g, "$1 ")
     .trim();
@@ -74,9 +76,11 @@ function speak(text: string, protectListener = true) {
   const raw = naturalSpeech(String(text).slice(0, 470));
   if (!raw) return;
   const named = personalize(raw);
-  const spoken = named.toLowerCase().includes(address().toLowerCase()) ? named : `${address()}, ${named}`;
+  // Replies already include the preferred name when it sounds natural. Avoid
+  // prefixing every sentence, which makes a conversation feel synthetic.
+  const spoken = named;
   if (protectListener && speechProcess?.stdin.writable) speechProcess.stdin.write("pause\n");
-  const child = spawn("/usr/bin/say", ["-v", orbitVoice(), "-r", "158", spoken], { stdio: "ignore" });
+  const child = spawn("/usr/bin/say", ["-v", orbitVoice(), "-r", "172", spoken], { stdio: "ignore" });
   if (protectListener) child.once("exit", () => setTimeout(() => {
     if (speechProcess?.stdin.writable) speechProcess.stdin.write("followup\n");
   }, 450));
@@ -89,7 +93,7 @@ function sendVoice(type: string, payload: Record<string, unknown> = {}) {
 function showListening() {
   mainWindow?.show(); mainWindow?.focus();
   sendVoice("wake");
-  speak(`Yes, ${address()}?`, false);
+  speak("Yes?", false);
 }
 
 function stopSpeech() {
@@ -440,11 +444,20 @@ async function rssTitles(url: string, limit: number) {
   return [...xml.matchAll(/<item[\s\S]*?<title>([\s\S]*?)<\/title>/gi)].map(match => decodeXml(match[1])).filter(Boolean).slice(0, limit);
 }
 
-async function liveNews(): Promise<LiveBrief> {
-  const titles = await rssTitles("https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en", 3);
+function newsTopic(query = "") {
+  return query.match(/\b(?:news|headlines?|updates?|stories)\s+(?:about|on|for)\s+(.+?)[?.!]*$/i)?.[1]?.trim() || "";
+}
+
+async function liveNews(query = ""): Promise<LiveBrief> {
+  const topic = newsTopic(query);
+  const feed = topic
+    ? `https://news.google.com/rss/search?q=${encodeURIComponent(topic)}&hl=en-US&gl=US&ceid=US:en`
+    : "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en";
+  const titles = await rssTitles(feed, topic ? 2 : 3);
   if (!titles.length) throw new Error("No current headlines were available");
   const clean = titles.map(title => title.replace(/\s+-\s+[^-]+$/, ""));
-  return { summary: `${address()}, today's top headlines are: ${clean.map((title, index) => `${index + 1}, ${title}`).join(". ")}.`, source: "Google News RSS", updatedAt: new Date().toISOString() };
+  const lead = topic ? `the latest relevant news about ${topic} is` : "today's top headlines are";
+  return { summary: `${address()}, ${lead}: ${clean.map((title, index) => `${index + 1}, ${title}`).join(". ")}.`, source: "Google News RSS", updatedAt: new Date().toISOString() };
 }
 
 async function liveCricket(): Promise<LiveBrief> {
@@ -484,7 +497,7 @@ async function searchPublicWeb(query: string): Promise<ResearchSource[]> {
 async function research(query: string): Promise<ResearchAnswer> {
   const clean = query.trim().slice(0, 500);
   if (!clean) throw new Error("Orbit needs a question to research");
-  const needsLiveWeb = /\b(today|tonight|now|current|currently|latest|recent|news|price|stock|score|weather|forecast|election|president|ceo|release|version|202[5-9])\b/i.test(clean);
+  const needsLiveWeb = /\b(today|tonight|now|current|currently|latest|recent|news|price|stock|score|weather|forecast|election|president|ceo|release|version|202[5-9]|who won|winner|champion|world cup|fifa|ipl|nba|nfl|mlb|nhl)\b/i.test(clean);
   const sources = needsLiveWeb ? await searchPublicWeb(clean) : [];
   let answer: string;
   if (geminiStatus().available) answer = await answerWithGemini({ query: clean, sources, history: conversation });
@@ -562,7 +575,7 @@ function registerIPC() {
   ipcMain.handle("orbit:github:workflow", (_event, repository?: string) => traced("github.workflow", () => githubWorkflow(repository)));
   ipcMain.handle("orbit:browser:navigate", (_event, request: { url?: string; query?: string; site?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up" }) => traced("browser.navigate", () => browserNavigate(request || {})));
   ipcMain.handle("orbit:live:weather", (_event, query?: string) => traced("live.weather", () => liveWeather(String(query || ""))));
-  ipcMain.handle("orbit:live:news", () => traced("live.news", liveNews));
+  ipcMain.handle("orbit:live:news", (_event, query?: string) => traced("live.news", () => liveNews(String(query || ""))));
   ipcMain.handle("orbit:live:cricket", () => traced("live.cricket", liveCricket));
   ipcMain.handle("orbit:web:research", (_event, query: string) => traced("web.research", () => research(String(query))));
   ipcMain.handle("orbit:system:battery", () => traced("system.battery", async () => batteryStatus()));

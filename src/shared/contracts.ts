@@ -53,7 +53,7 @@ export interface OrbitAPI {
   githubWorkflow(repository?: string): Promise<GitHubWorkflowStatus>;
   browserNavigate(request: { url?: string; query?: string; site?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up" }): Promise<{ opened: boolean; url: string; site: string; summary: string }>;
   liveWeather(query?: string): Promise<LiveBrief>;
-  liveNews(): Promise<LiveBrief>;
+  liveNews(query?: string): Promise<LiveBrief>;
   liveCricket(): Promise<LiveBrief>;
   research(query: string): Promise<ResearchAnswer>;
   batteryStatus(): Promise<BatteryStatus>;

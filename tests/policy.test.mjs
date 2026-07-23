@@ -72,7 +72,7 @@ test("voice commands cross only registered IPC and typed planner boundaries", as
 
 test("wake phrase uses a dedicated recognizer before fresh command capture", async () => {
   const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8"));
-  assert.match(source, /commands = \["Hey Orbit", "Orbit"\]/);
+  assert.match(source, /commands = \["Hey Orbit", "Orbit", "Stop", "Skip"/);
   assert.match(source, /startWakeListening/);
   assert.match(source, /activateCommandCapture/);
   assert.match(source, /requiresOnDeviceRecognition = false/);
@@ -118,7 +118,7 @@ test("browser follow-ups use active site context with safe URL adapters", async 
   assert.match(source, /sameTab/);
   assert.match(source, /input\[type=/);
   assert.match(source, /parsed\.protocol !== "https:"/);
-  assert.match(source, /\["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "weather", "news", "cricket"\]\.includes\(local\.intent\)/);
+  assert.match(source, /\["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "folder", "weather", "news", "cricket"\]\.includes\(local\.intent\)/);
 });
 
 test("browser actions, explicit GitHub routing, weather fallback, and preferred names are reliable", async () => {
@@ -173,7 +173,21 @@ test("voice commands tolerate natural pauses before submitting", async () => {
   const speech = await import("node:fs/promises").then(fs => fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8"));
   assert.match(speech, /followupMode \? 30 : 25/);
   assert.match(speech, /followup \? 0\.18 : 0\.55/);
-  assert.match(speech, /final \? 1\.6 : 2\.4/);
+  assert.match(speech, /endsInFiller \? 5\.0 : \(final \? 3\.0 : 3\.8\)/);
+});
+
+test("phase two interruptions, stale-response cancellation, folders, and Orbit Space are wired", async () => {
+  const fs = await import("node:fs/promises");
+  const speech = await fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  assert.match(speech, /Speech interruption recognized/);
+  assert.match(main, /let spokenReply/);
+  assert.match(main, /orbit:speech:stop/);
+  assert.match(main, /Local folder request matched before browser routing/);
+  assert.match(renderer, /runRef/);
+  assert.match(renderer, /stopSpeaking/);
+  assert.match(renderer, /Orbit Space/);
 });
 
 test("phase two live answers stay relevant and speech is less repetitive", async () => {

@@ -172,7 +172,21 @@ test("Mac context routes before web research and Gemini keys stay in Keychain", 
 test("voice commands tolerate natural pauses before submitting", async () => {
   const speech = await import("node:fs/promises").then(fs => fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8"));
   assert.match(speech, /followupMode \? 30 : 25/);
-  assert.match(speech, /final \? 0\.2 : 1\.8/);
+  assert.match(speech, /followup \? 0\.18 : 0\.55/);
+  assert.match(speech, /final \? 1\.6 : 2\.4/);
+});
+
+test("phase two live answers stay relevant and speech is less repetitive", async () => {
+  const fs = await import("node:fs/promises");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  assert.match(main, /function newsTopic/);
+  assert.match(main, /news\.google\.com\/rss\/search\?q=/);
+  assert.match(renderer, /liveNews\(input\)/);
+  assert.match(main, /who won\|winner\|champion\|world cup\|fifa/);
+  assert.match(main, /speak\("Yes\?", false\)/);
+  assert.doesNotMatch(main, /const spoken = named\.toLowerCase\(\)\.includes/);
+  assert.match(main, /"-r", "172"/);
 });
 
 test("questions use cited research while notifications never route to news", async () => {

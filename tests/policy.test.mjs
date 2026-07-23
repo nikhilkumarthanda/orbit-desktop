@@ -204,8 +204,8 @@ test("Mac context routes before web research and Gemini keys stay in Keychain", 
 test("voice commands tolerate natural pauses before submitting", async () => {
   const speech = await import("node:fs/promises").then(fs => fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8"));
   assert.match(speech, /followupMode \? 30 : 25/);
-  assert.match(speech, /followup \? 0\.18 : 0\.55/);
-  assert.match(speech, /endsInFiller \? 5\.0 : \(final \? 3\.0 : 3\.8\)/);
+  assert.match(speech, /followup \? 0\.12 : 0\.25/);
+  assert.match(speech, /endsInFiller \? 4\.5 : \(final \? 1\.1 : 1\.6\)/);
 });
 
 test("phase two interruptions, stale-response cancellation, folders, and Orbit Space are wired", async () => {
@@ -235,6 +235,20 @@ test("screenshot requests use a typed native capture tool instead of general AI"
   assert.match(renderer, /plan\.intent==="screenshot"/);
   assert.match(preload, /takeScreenshot/);
   assert.match(policy, /screen\.capture/);
+});
+
+test("reliability follow-ups preserve Finder context and recover from stalled actions", async () => {
+  const fs = await import("node:fs/promises");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  const speech = await fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8");
+  assert.match(main, /Active Finder folder action matched/);
+  assert.match(main, /activeFolderPath/);
+  assert.match(main, /lead\|leet/);
+  assert.match(main, /setTimeout\(\(\) => \{ child\.kill\(\); resolve\(false\); \}, 4_000\)/);
+  assert.match(renderer, /That action took too long and was cancelled/);
+  assert.match(renderer, /setNotice\(""\);setSources\(\[\]\);setCommand\(""\)/);
+  assert.match(speech, /followup \? 0\.12 : 0\.25/);
 });
 
 test("Orbit Space is the startup home and diagnostics are a separate view", async () => {

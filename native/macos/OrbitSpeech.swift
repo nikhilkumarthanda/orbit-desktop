@@ -117,7 +117,7 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
         emit(followup ? "listening" : "wake", ["mode": "command", "message": followup ? "Listening for a follow-up" : "Wake phrase recognized"])
         // The wake acknowledgement is deliberately short. Begin capturing quickly
         // while still leaving enough time to avoid transcribing Orbit's own voice.
-        DispatchQueue.main.asyncAfter(deadline: .now() + (followup ? 0.18 : 0.55)) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + (followup ? 0.12 : 0.25)) { [weak self] in
             guard let self, self.capturingCommand, !self.suspended else { return }
             self.startCommandRecognition()
         }
@@ -162,7 +162,7 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
         // Natural sentences often contain short thinking pauses. Wait long enough
         // for the transcription to continue instead of submitting a fragment.
         let endsInFiller = command.range(of: #"\b(?:um+|uh+|erm+|hmm+|like|so|and|but)$"#, options: [.regularExpression, .caseInsensitive]) != nil
-        let settlingDelay = endsInFiller ? 5.0 : (final ? 3.0 : 3.8)
+        let settlingDelay = endsInFiller ? 4.5 : (final ? 1.1 : 1.6)
         DispatchQueue.main.asyncAfter(deadline: .now() + settlingDelay) { [weak self] in
             guard let self, self.capturingCommand, current == self.generation else { return }
             self.emit("command", ["text": command])

@@ -32,6 +32,7 @@ const conversation: ConversationTurn[] = [];
 let lastFailureDetail = "";
 let selectedVoice: string | null = null;
 let activeBrowserSite: { name: string; hostname: string; query?: string } | null = null;
+let activeFolderPath: string | null = null;
 let preferredName = "Boss";
 let profilePath = "";
 let locationRequest: { resolve: (value: { latitude: number; longitude: number }) => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null;
@@ -217,7 +218,10 @@ function retrieve(request: Record<string, unknown>): Promise<any> {
 }
 
 function planLocal(value: string): CommandPlan {
-  const command = value.trim().toLowerCase().replace(/\b(?:git|get)\s+hub\b/g, "github").replace(/\bgethub\b/g, "github");
+  const command = value.trim().toLowerCase()
+    .replace(/\b(?:git|get)\s+hub\b/g, "github")
+    .replace(/\bgethub\b/g, "github")
+    .replace(/\b(?:lead|leet)\s+code\b/g, "leetcode");
   if (/\b(brief|explain|tell me more|what happened)\b/.test(command) && lastFailureDetail) return { intent: "answer", confidence: 1, explanation: "Previous error briefing", reply: `Boss, the previous operation failed because ${lastFailureDetail}. I can retry when you're ready.`, query: value, source: "local" };
   if (/^(hi|hello|hey|good (morning|afternoon|evening))( orbit)?[!.?]*$/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local greeting matched", reply: "Yes, boss? At your service.", query: value, source: "local" };
   if (/\b(how are you|how is it going|you good)\b/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local conversation matched", reply: "Running smoothly, boss. What can I do for you?", query: value, source: "local" };
@@ -237,6 +241,9 @@ function planLocal(value: string): CommandPlan {
   if (folderMatch) {
     const folder = ({ document: "Documents", documents: "Documents", download: "Downloads", downloads: "Downloads", desktop: "Desktop", project: "Projects", projects: "Projects", developer: "Developer" } as Record<string, string>)[folderMatch[1]];
     return { intent: "folder", confidence: 1, explanation: "Local folder request matched before browser routing", folder, reply: `Opening ${folder}.`, query: value, source: "local" };
+  }
+  if (/^(?:please )?(?:open|launch|select)\s+(?:the\s+)?(?:first|1st)\s+file[.!]*$/.test(command)) {
+    return { intent: "folder", confidence: 1, explanation: "Active Finder folder action matched", folder: "__first__", reply: "Opening the first file.", query: value, source: "local" };
   }
   if (/\byoutube\b/.test(command) && /\bplay\b/.test(command) && !/\b(?:first|1st)\b.*\b(?:video|result)\b/.test(command)) {
     const query = command.replace(/\bopen\s+youtube\b/g, "").replace(/\byoutube\b/g, "").replace(/\bplay\b/g, "").replace(/\band\b/g, "").replace(/\bon\b/g, "").replace(/\s+/g, " ").trim();
@@ -400,8 +407,10 @@ end run`;
     const scrolled = await new Promise<boolean>(resolve => {
       const child = spawn("/usr/bin/osascript", ["-e", script, javascript], { stdio: ["ignore", "pipe", "ignore"] });
       let output = "";
+      const timer = setTimeout(() => { child.kill(); resolve(false); }, 4_000);
       child.stdout.on("data", chunk => { output += String(chunk); });
-      child.once("close", code => resolve(code === 0 && output.trim() === "SCROLLED")); child.once("error", () => resolve(false));
+      child.once("close", code => { clearTimeout(timer); resolve(code === 0 && output.trim() === "SCROLLED"); });
+      child.once("error", () => { clearTimeout(timer); resolve(false); });
     });
     if (!scrolled) {
       const keyCode = request.browserAction === "scroll_down" ? "121" : "116";
@@ -616,9 +625,20 @@ function registerIPC() {
   }));
   ipcMain.handle("orbit:folder:open", (_event, requested: string) => traced("files.open", async () => {
     const folders: Record<string, string> = { documents: "Documents", downloads: "Downloads", desktop: "Desktop", projects: "Projects", developer: "Developer" };
+    if (requested === "__first__") {
+      if (!activeFolderPath) throw new Error("Open a Finder folder first, then ask Orbit to open its first file");
+      const entries = (await readdir(activeFolderPath, { withFileTypes: true }))
+        .filter(entry => !entry.name.startsWith("."))
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      const first = entries.find(entry => entry.isFile()) || entries[0];
+      if (!first) throw new Error("That Finder folder is empty");
+      const opened = (await shell.openPath(path.join(activeFolderPath, first.name))) === "";
+      return { opened, folder: first.name };
+    }
     const folder = folders[String(requested).toLowerCase()];
     if (!folder) throw new Error("Orbit only opens approved home folders");
-    const opened = (await shell.openPath(path.join(os.homedir(), folder))) === "";
+    activeFolderPath = path.join(os.homedir(), folder);
+    const opened = (await shell.openPath(activeFolderPath)) === "";
     return { opened, folder };
   }));
   ipcMain.handle("orbit:app:launch", (_event, application: string) => traced("app.launch", () => launchApplication(String(application))));

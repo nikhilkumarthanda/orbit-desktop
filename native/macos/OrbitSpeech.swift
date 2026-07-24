@@ -17,6 +17,8 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
     private var followupMode = false
     private var generation = 0
     private var locationManager: CLLocationManager?
+    private var wakeListeningActive = false
+    private var wakeHeartbeatTimer: Timer?
 
     override init() {
         super.init()
@@ -37,6 +39,15 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
         fflush(stdout)
     }
 
+    // Diagnostic-only trace for the idle wake-word pipeline. Sent as a "debug"
+    // event over the same stdout JSON protocol so it shows up in Electron's
+    // [speech] stdout log without touching any UI-visible voice state.
+    private func trace(_ stage: String, _ payload: [String: Any] = [:]) {
+        var event = payload
+        event["stage"] = stage
+        emit("debug", event)
+    }
+
     func begin() {
         SFSpeechRecognizer.requestAuthorization { status in
             guard status == .authorized else { self.emit("error", ["message": "Speech Recognition permission was not granted"]); return }
@@ -48,13 +59,32 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
     }
 
     private func startWakeListening() {
-        guard !capturingCommand, !suspended else { return }
+        guard !capturingCommand, !suspended else {
+            trace("wake-armed-skipped", ["capturingCommand": capturingCommand, "suspended": suspended])
+            return
+        }
         wakeRecognizer?.startListening()
+        wakeListeningActive = true
+        trace("wake-armed", ["commands": wakeRecognizer?.commands ?? [], "message": "Wake-word listener armed, idle-listening for Hey Orbit"])
         emit("ready", ["onDevice": true, "mode": "wake-word"])
+        startWakeHeartbeat()
+    }
+
+    // NSSpeechRecognizer (the legacy command-recognition API backing wake-word
+    // detection) exposes no per-frame audio callback and no confidence score -
+    // this heartbeat is the closest available signal that the idle listener is
+    // still alive between wake attempts.
+    private func startWakeHeartbeat() {
+        wakeHeartbeatTimer?.invalidate()
+        wakeHeartbeatTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            guard let self, self.wakeListeningActive else { return }
+            self.trace("wake-idle-heartbeat", ["message": "Still idle-listening for Hey Orbit"])
+        }
     }
 
     func speechRecognizer(_ sender: NSSpeechRecognizer, didRecognizeCommand command: String) {
         let normalized = command.lowercased()
+        trace("wake-word-detected", ["raw": command, "normalized": normalized, "speaking": speaking, "message": "NSSpeechRecognizer matched a registered command (this API exposes no confidence score)"])
         if speaking && ["stop", "skip", "that's enough", "that is enough"].contains(normalized) {
             emit("interrupt", ["message": "Speech interruption recognized"])
             speaking = false
@@ -74,11 +104,16 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
     }
 
     private func activateCommandCapture(followup: Bool = false) {
-        guard !capturingCommand, !suspended else { return }
+        guard !capturingCommand, !suspended else {
+            trace("wake-event-skipped", ["capturingCommand": capturingCommand, "suspended": suspended, "followup": followup])
+            return
+        }
         followupMode = followup
         capturingCommand = true
         generation += 1
         wakeRecognizer?.stopListening()
+        wakeListeningActive = false
+        trace("wake-event-emit", ["followup": followup, "message": followup ? "Sending follow-up event to Electron" : "Sending wake event to Electron"])
         emit(followup ? "listening" : "wake", ["mode": "command", "message": followup ? "Listening for a follow-up" : "Wake phrase recognized"])
         // The wake acknowledgement is deliberately short. Begin capturing quickly
         // while still leaving enough time to avoid transcribing Orbit's own voice.

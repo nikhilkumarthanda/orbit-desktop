@@ -117,19 +117,37 @@ function stopSpeech() {
 
 function armVoice() {
   if (!speechProcess) startSpeech();
-  if (speechProcess) speechProcess.stdin.write("arm\n");
-  else { showListening(); sendVoice("unavailable", { message: "Native speech helper is not available" }); }
+  if (speechProcess?.stdin.writable) {
+    console.log(`[speech] writing "arm" to helper pid=${speechProcess.pid}`);
+    speechProcess.stdin.write("arm\n");
+  } else {
+    console.warn(`[speech] cannot arm: speechProcess=${speechProcess ? `pid ${speechProcess.pid}` : "null"}, stdin.writable=${Boolean(speechProcess?.stdin.writable)}`);
+    showListening();
+    sendVoice("unavailable", { message: "Native speech helper is not available" });
+  }
 }
 
 function startSpeech() {
-  if (process.platform !== "darwin" || speechProcess) return;
+  if (process.platform !== "darwin") { console.log("[speech] startSpeech skipped: not darwin"); return; }
+  if (speechProcess) { console.log(`[speech] startSpeech skipped: already running, pid=${speechProcess.pid}`); return; }
   const bundled = path.join(process.resourcesPath, "sidecar", "orbit-speech");
   const development = path.join(app.getAppPath(), "release-sidecar", "orbit-speech");
-  const binary = existsSync(bundled) ? bundled : development;
-  if (!existsSync(binary)) { sendVoice("unavailable", { message: "Native speech helper is not included in this development build" }); return; }
-  speechProcess = spawn(binary, [], { stdio: ["pipe", "pipe", "pipe"] });
+  const bundledExists = existsSync(bundled);
+  const binary = bundledExists ? bundled : development;
+  console.log(`[speech] resolved binary path: ${binary} (bundled=${bundledExists} at ${bundled}, development exists=${existsSync(development)} at ${development})`);
+  if (!existsSync(binary)) {
+    console.error(`[speech] binary not found at resolved path: ${binary}`);
+    sendVoice("unavailable", { message: "Native speech helper is not included in this development build" });
+    return;
+  }
+  console.log(`[speech] spawning binary: ${binary}`);
+  const child = spawn(binary, [], { stdio: ["pipe", "pipe", "pipe"] });
+  speechProcess = child;
+  console.log(`[speech] spawn() returned, pid=${child.pid ?? "unknown"}`);
+  child.on("spawn", () => console.log(`[speech] spawn confirmed, pid=${child.pid}`));
   let buffered = "";
-  speechProcess.stdout.on("data", chunk => {
+  child.stdout.on("data", chunk => {
+    console.log(`[speech] stdout: ${String(chunk).trim()}`);
     buffered += String(chunk);
     const lines = buffered.split("\n"); buffered = lines.pop() ?? "";
     for (const line of lines) {
@@ -149,13 +167,27 @@ function startSpeech() {
         }
         if (event.type === "interrupt") { stopSpeaking(); continue; }
         sendVoice(event.type, event);
-        if (event.type === "wake") showListening();
+        if (event.type === "wake") { console.log(`[speech] wake event received from helper (mode=${event.mode ?? "unknown"}); transitioning to full recognition`); showListening(); }
         if (event.type === "command" && event.text) mainWindow?.webContents.send("orbit:voice:command", String(event.text));
       } catch { sendVoice("error", { message: "Speech helper returned invalid data" }); }
     }
   });
-  speechProcess.stderr.on("data", chunk => sendVoice("error", { message: String(chunk).trim() }));
-  speechProcess.on("close", () => { speechProcess = null; sendVoice("stopped"); });
+  child.stderr.on("data", chunk => {
+    console.error(`[speech] stderr: ${String(chunk).trim()}`);
+    sendVoice("error", { message: String(chunk).trim() });
+  });
+  child.stdin.on("error", err => console.error(`[speech] stdin write error: ${err instanceof Error ? err.message : String(err)}`));
+  child.on("error", err => {
+    console.error(`[speech] spawn/runtime error: ${err instanceof Error ? err.stack || err.message : String(err)}`);
+    if (speechProcess === child) speechProcess = null;
+    sendVoice("unavailable", { message: `Speech helper failed to start: ${err instanceof Error ? err.message : String(err)}` });
+  });
+  child.on("exit", (code, signal) => console.log(`[speech] exit event: code=${code} signal=${signal}`));
+  child.on("close", (code, signal) => {
+    console.log(`[speech] close event: code=${code} signal=${signal}, pid was ${child.pid}`);
+    if (speechProcess === child) speechProcess = null;
+    sendVoice("stopped");
+  });
 }
 
 function retrieve(request: Record<string, unknown>): Promise<any> {

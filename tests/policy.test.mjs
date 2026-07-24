@@ -118,20 +118,21 @@ test("browser follow-ups use active site context with safe URL adapters", async 
   assert.match(source, /sameTab/);
   assert.match(source, /input\[type=/);
   assert.match(source, /parsed\.protocol !== "https:"/);
-  assert.match(source, /\["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "folder", "weather", "news", "cricket"\]\.includes\(local\.intent\)/);
+  assert.match(source, /\["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "folder", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"\]\.includes\(local\.intent\)/);
 });
 
 test("browser actions, explicit GitHub routing, weather fallback, and preferred names are reliable", async () => {
   const fs = await import("node:fs/promises");
   const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
   const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  const weatherService = await fs.readFile(new URL("../src/main/live-info/weather-service.ts", import.meta.url), "utf8");
   assert.match(main, /browserAction: "play_first"/);
   assert.match(main, /browserAction: "scroll_down"/);
   assert.match(main, /youtube\.com\/watch\?v=/);
   assert.match(main, /Explicit GitHub workflow request matched/);
   assert.doesNotMatch(renderer, /plan\.intent==="launch"&&plan\.application==="Google Chrome"&&githubRequest/);
-  assert.match(main, /ipapi\.co\/json/);
-  assert.match(main, /geocoding-api\.open-meteo\.com/);
+  assert.match(weatherService, /ipapi\.co\/json/);
+  assert.match(weatherService, /geocoding-api\.open-meteo\.com/);
   assert.match(main, /Preferred name saved locally/);
   assert.match(main, /profile\.json/);
 });
@@ -205,9 +206,10 @@ test("phase two live answers stay relevant and speech is less repetitive", async
   const fs = await import("node:fs/promises");
   const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
   const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
-  assert.match(main, /function newsTopic/);
-  assert.match(main, /news\.google\.com\/rss\/search\?q=/);
-  assert.match(renderer, /liveNews\(input\)/);
+  const newsService = await fs.readFile(new URL("../src/main/live-info/news-service.ts", import.meta.url), "utf8");
+  assert.match(newsService, /function newsTopic/);
+  assert.match(newsService, /news\.google\.com\/rss\/search\?q=/);
+  assert.match(renderer, /liveInfo\(\{query:plan\.query\|\|input/);
   assert.match(main, /who won\|winner\|champion\|world cup\|fifa/);
   assert.match(main, /speak\("Yes\?", false\)/);
   assert.doesNotMatch(main, /const spoken = named\.toLowerCase\(\)\.includes/);
@@ -269,12 +271,14 @@ test("live briefings use transient macOS location and public read-only sources",
   const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
   const speech = await fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8");
   const pkg = await fs.readFile(new URL("../package.json", import.meta.url), "utf8");
+  const weatherService = await fs.readFile(new URL("../src/main/live-info/weather-service.ts", import.meta.url), "utf8");
+  const newsService = await fs.readFile(new URL("../src/main/live-info/news-service.ts", import.meta.url), "utf8");
   assert.match(speech, /CLLocationManagerDelegate/);
   assert.match(speech, /authorizationStatus == \.authorizedAlways/);
   assert.doesNotMatch(speech, /authorizedWhenInUse/);
   assert.match(speech, /requestWhenInUseAuthorization/);
-  assert.match(main, /api\.open-meteo\.com/);
-  assert.match(main, /news\.google\.com\/rss/);
+  assert.match(weatherService, /api\.open-meteo\.com/);
+  assert.match(newsService, /news\.google\.com\/rss/);
   assert.match(main, /Orbit's location helper/);
   assert.match(pkg, /NSLocationWhenInUseUsageDescription/);
 });

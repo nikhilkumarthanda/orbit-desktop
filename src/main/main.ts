@@ -11,7 +11,16 @@ import { policies, policy } from "./policy.js";
 import { cleanupPlan, gitContexts, recentWork, systemSnapshot } from "./tools.js";
 import { answerWithOllama, ollamaStatus, OLLAMA_MODEL, planWithOllama } from "./ollama.js";
 import { answerWithGemini, geminiKey, geminiStatus, saveGeminiKey, setGeminiBudget } from "./gemini.js";
-import type { CommandPlan, ConversationTurn, GitHubWorkflowStatus, LiveBrief, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
+import { amazonSearchWithPriceFilter, youtubePlayFirst } from "./browser-workflows.js";
+import { describeCurrentPage, findOnPage, summarizeCurrentPage } from "./browser-intelligence.js";
+import { createLiveInformationEngine } from "./live-info/engine.js";
+import { createWeatherService } from "./live-info/weather-service.js";
+import { createNewsService } from "./live-info/news-service.js";
+import { createSportsService } from "./live-info/sports-service.js";
+import { createFinanceService } from "./live-info/finance-service.js";
+import { createCalendarService } from "./live-info/calendar-service.js";
+import { createEmailService } from "./live-info/email-service.js";
+import type { CommandPlan, ConversationTurn, GitHubWorkflowStatus, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let audit: AuditStore;
@@ -216,14 +225,41 @@ function planLocal(value: string): CommandPlan {
   if (/\b(?:what(?:'s| is)?|check|tell me|show me)?\s*(?:my|the)?\s*battery(?:\s+(?:level|percentage|status))?\b/.test(command)) return { intent: "battery", confidence: 1, explanation: "Native battery request matched", query: value, source: "local" };
   if (/\b(?:what(?:'s| is) on|describe|read|analy[sz]e|look at|see)\s+(?:my|the|this|current)?\s*screen\b|\bscreen\s*(?:right now|now)\b/.test(command)) return { intent: "screen", confidence: 1, explanation: "Native screen request matched", query: value, source: "local" };
   if (/^(?:what(?:'s| is| are)?|any|give me|tell me)(?: the)? (?:new )?updates?[?.!]*$/.test(command)) return { intent: "clarify", confidence: 1, explanation: "Update topic is ambiguous", reply: "Which updates do you mean, boss—your notifications, news, weather, cricket, GitHub, or something else?", query: value, source: "local" };
-  if (/\b(weather|temperature|forecast)\b/.test(command)) return { intent: "weather", confidence: 1, explanation: "Live weather request matched", query: value, source: "local" };
-  if (/\b(cricket|ipl|test match)\b.*\b(score|scores|result|match|update|live)\b|\b(score|scores)\b.*\b(cricket|ipl)\b/.test(command)) return { intent: "cricket", confidence: 1, explanation: "Live cricket request matched", query: value, source: "local" };
-  if (/\b(news|headlines|top stories|world update)\b/.test(command)) return { intent: "news", confidence: 1, explanation: "Live news request matched", query: value, source: "local" };
+  if (/\b(?:what'?s|what is)\s+happening\s+today\b|\bcatch me up\b|\b(?:morning|daily) briefing\b/.test(command)) return { intent: "daily_brief", confidence: 1, explanation: "Composite daily briefing request matched", query: value, liveServices: ["weather", "news", "calendar", "email"], source: "local" };
+  if (/\b(weather|temperature|forecast|rain|raining|umbrella|snow|humid)\b/.test(command)) return { intent: "weather", confidence: 1, explanation: "Live weather request matched", query: value, liveServices: ["weather"], source: "local" };
+  if (/\b(cricket|ipl|test match)\b.*\b(score|scores|result|match|update|live)\b|\b(score|scores)\b.*\b(cricket|ipl)\b/.test(command)) return { intent: "cricket", confidence: 1, explanation: "Live cricket request matched", query: value, liveServices: ["sports"], source: "local" };
+  if (/\b(fifa|world cup|premier league|champions league|soccer)\b.*\b(score|scores|result|match|final|winner|won|update|live)\b|\b(score|scores|result|winner)\b.*\b(fifa|world cup|soccer)\b/.test(command)) return { intent: "soccer", confidence: 1, explanation: "Live soccer/FIFA request matched", query: value, liveServices: ["sports"], source: "local" };
+  if (/\b(news|headlines|top stories|world update)\b/.test(command)) return { intent: "news", confidence: 1, explanation: "Live news request matched", query: value, liveServices: ["news"], source: "local" };
+  if (/\b(stock|shares?|ticker|market cap|share price|trading at)\b/.test(command)) return { intent: "finance", confidence: 1, explanation: "Live finance request matched", query: value, liveServices: ["finance"], source: "local" };
   if (/\bgithub\b/.test(command) && /\b(workflow|actions?|deployment|ci|build (?:status|run)|check (?:the )?(?:workflow|actions?|deployment|ci|build))\b/.test(command)) return { intent: "github", confidence: .99, explanation: "Explicit GitHub workflow request matched", repository: "nikhilkumarthanda/orbit-desktop", query: value, source: "local" };
   const folderMatch = command.match(/\b(?:open|show|go to)\s+(?:my\s+|the\s+)?(documents?|downloads?|desktop|projects?|developer)(?:\s+folder)?\b/);
   if (folderMatch) {
     const folder = ({ document: "Documents", documents: "Documents", download: "Downloads", downloads: "Downloads", desktop: "Desktop", project: "Projects", projects: "Projects", developer: "Developer" } as Record<string, string>)[folderMatch[1]];
     return { intent: "folder", confidence: 1, explanation: "Local folder request matched before browser routing", folder, reply: `Opening ${folder}.`, query: value, source: "local" };
+  }
+  if (/\byoutube\b/.test(command) && /\bplay\b/.test(command) && !/\b(?:first|1st)\b.*\b(?:video|result)\b/.test(command)) {
+    const query = command.replace(/\bopen\s+youtube\b/g, "").replace(/\byoutube\b/g, "").replace(/\bplay\b/g, "").replace(/\band\b/g, "").replace(/\bon\b/g, "").replace(/\s+/g, " ").trim();
+    return { intent: "youtube_play", confidence: 1, explanation: "Single-shot YouTube play request matched", query: query || value, source: "local" };
+  }
+  if (/\bamazon\b/.test(command) && /\b(search|find|look for|buy|shop for)\b/.test(command)) {
+    const priceMatch = command.match(/\b(?:under|below|less than)\s*\$?\s*(\d+(?:\.\d+)?)/);
+    const query = command
+      .replace(/\b(search|find|look for|buy|shop for)\b/g, "")
+      .replace(/\bamazon\b/g, "")
+      .replace(/\bfor\b/g, "")
+      .replace(/\b(?:under|below|less than)\s*\$?\s*\d+(?:\.\d+)?\b/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    return { intent: "amazon_search", confidence: 1, explanation: "Amazon search with optional price filter matched", query: query || value, maxPrice: priceMatch ? Number(priceMatch[1]) : undefined, source: "local" };
+  }
+  if (/\b(?:what'?s|what is)\s+on\s+this\s+page\b|\bdescribe\s+(?:this|the)\s+page\b|\bwhat\s+(?:page|site)\s+is\s+this\b/.test(command)) return { intent: "page_describe", confidence: 1, explanation: "Page description request matched", query: value, source: "local" };
+  if (/\bsummarize\s+(?:this|the)\s+(?:article|page|story)\b/.test(command)) return { intent: "page_summarize", confidence: 1, explanation: "Page summarization request matched", query: value, source: "local" };
+  {
+    const findMatch = command.match(/\bwhich\s+button\s+(.+)|\bwhere\s+is\s+the\s+(.+?)\s+button\b|\bfind\s+the\s+(.+?)\s+(?:button|link)\b/);
+    if (findMatch) {
+      const target = (findMatch[1] || findMatch[2] || findMatch[3] || "").trim();
+      return { intent: "page_find", confidence: 1, explanation: "Page element lookup request matched", query: target || value, source: "local" };
+    }
   }
   if (/\b(?:play|open|select|click)\b.*\b(?:first|1st)\b.*\b(?:video|result)\b/.test(command)) return { intent: "browser", confidence: 1, explanation: "Active YouTube result action matched", browserAction: "play_first", sameTab: true, source: "local" };
   if (/^(?:please )?(?:scroll|page)\s+(?:down|lower)(?:\s+(?:a little|more))?[.!]*$/.test(command)) return { intent: "browser", confidence: 1, explanation: "Active page scroll matched", browserAction: "scroll_down", sameTab: true, source: "local" };
@@ -267,7 +303,7 @@ async function planCommand(value: string) {
   }
   const local = planLocal(value);
   if (local.reply) local.reply = personalize(local.reply);
-  if (["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "folder", "weather", "news", "cricket"].includes(local.intent)) return local;
+  if (["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "folder", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"].includes(local.intent)) return local;
   const status = await ollamaStatus();
   if (!status.available) return local;
   try {
@@ -433,91 +469,31 @@ async function launchApplication(application: string) {
 
 function currentLocation(): Promise<{ latitude: number; longitude: number }> {
   if (process.platform !== "darwin") return Promise.reject(new Error("Local weather location is currently available on macOS only"));
-  if (!speechProcess) startSpeech();
-  if (!speechProcess?.stdin.writable) return Promise.reject(new Error("Orbit's location helper is unavailable"));
   if (locationRequest) return Promise.reject(new Error("A location request is already in progress"));
+  const wasRunning = Boolean(speechProcess);
+  if (!speechProcess) startSpeech();
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { locationRequest = null; reject(new Error("Location permission timed out. Check macOS Location Services for Orbit.")); }, 15_000);
-    locationRequest = { resolve, reject, timer };
-    speechProcess!.stdin.write("location\n");
+    const send = () => {
+      if (!speechProcess?.stdin.writable) { reject(new Error("Orbit's location helper is unavailable")); return; }
+      const timer = setTimeout(() => { locationRequest = null; reject(new Error("Location permission timed out. Check macOS Location Services for Orbit.")); }, 15_000);
+      locationRequest = { resolve, reject, timer };
+      speechProcess!.stdin.write("location\n");
+    };
+    // A freshly spawned helper's stdin pipe can take a tick to become writable;
+    // give it a short grace period instead of failing on the very first request.
+    if (wasRunning || speechProcess?.stdin.writable) send();
+    else setTimeout(send, 400);
   });
 }
 
-const weatherDescriptions: Record<number, string> = {
-  0: "clear skies", 1: "mainly clear skies", 2: "partly cloudy skies", 3: "overcast skies", 45: "fog", 48: "freezing fog",
-  51: "light drizzle", 53: "drizzle", 55: "heavy drizzle", 61: "light rain", 63: "rain", 65: "heavy rain", 71: "light snow",
-  73: "snow", 75: "heavy snow", 80: "light rain showers", 81: "rain showers", 82: "heavy rain showers", 95: "thunderstorms",
-};
-
-async function geocodeWeatherPlace(place: string) {
-  const endpoint = new URL("https://geocoding-api.open-meteo.com/v1/search");
-  endpoint.search = new URLSearchParams({ name: place, count: "1", language: "en", format: "json" }).toString();
-  const response = await fetch(endpoint, { signal: AbortSignal.timeout(8_000) });
-  const result = (await response.json() as { results?: Array<{ latitude: number; longitude: number; name: string; admin1?: string }> }).results?.[0];
-  if (!result) throw new Error(`I couldn't find weather for ${place}`);
-  return { latitude: result.latitude, longitude: result.longitude, label: [result.name, result.admin1].filter(Boolean).join(", ") };
-}
-
-async function weatherLocation(query = "") {
-  const place = query.match(/\b(?:weather|temperature|forecast)(?:\s+(?:right now|today|now))?\s+(?:in|for|at)\s+(.+?)[?.!]*$/i)?.[1]?.trim();
-  if (place) return geocodeWeatherPlace(place);
-  try { return { ...(await currentLocation()), label: "your location" }; }
-  catch {
-    const response = await fetch("https://ipapi.co/json/", { headers: { "User-Agent": "Orbit-Desktop" }, signal: AbortSignal.timeout(8_000) });
-    if (!response.ok) throw new Error(`Location is unavailable. Ask me "weather in Houston" or another city.`);
-    const data = await response.json() as { latitude?: number; longitude?: number; city?: string; region?: string };
-    if (data.latitude == null || data.longitude == null) throw new Error(`Location is unavailable. Ask me "weather in Houston" or another city.`);
-    return { latitude: data.latitude, longitude: data.longitude, label: [data.city, data.region].filter(Boolean).join(", ") || "your area" };
-  }
-}
-
-async function liveWeather(query = ""): Promise<LiveBrief> {
-  const { latitude, longitude, label } = await weatherLocation(query);
-  const endpoint = new URL("https://api.open-meteo.com/v1/forecast");
-  endpoint.search = new URLSearchParams({ latitude: String(latitude), longitude: String(longitude), current: "temperature_2m,apparent_temperature,weather_code,wind_speed_10m", temperature_unit: "fahrenheit", wind_speed_unit: "mph", timezone: "auto" }).toString();
-  const response = await fetch(endpoint, { signal: AbortSignal.timeout(8_000) });
-  if (!response.ok) throw new Error("The weather service is temporarily unavailable");
-  const data = await response.json() as { current?: { temperature_2m?: number; apparent_temperature?: number; weather_code?: number; wind_speed_10m?: number; time?: string } };
-  const current = data.current;
-  if (current?.temperature_2m == null) throw new Error("The weather service returned incomplete conditions");
-  const condition = weatherDescriptions[current.weather_code ?? -1] || "current conditions";
-  const summary = `${address()}, in ${label} it is ${Math.round(current.temperature_2m)} degrees with ${condition}. It feels like ${Math.round(current.apparent_temperature ?? current.temperature_2m)} degrees, with winds around ${Math.round(current.wind_speed_10m ?? 0)} miles per hour.`;
-  return { summary, source: "Open-Meteo", updatedAt: current.time || new Date().toISOString() };
-}
-
-function decodeXml(value: string) {
-  return value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/&amp;/g, "&").replace(/&quot;/g, "\"").replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/<[^>]+>/g, "").trim();
-}
-
-async function rssTitles(url: string, limit: number) {
-  const response = await fetch(url, { headers: { "User-Agent": "Orbit-Desktop/0.7" }, signal: AbortSignal.timeout(8_000) });
-  if (!response.ok) throw new Error(`The live source returned status ${response.status}`);
-  const xml = await response.text();
-  return [...xml.matchAll(/<item[\s\S]*?<title>([\s\S]*?)<\/title>/gi)].map(match => decodeXml(match[1])).filter(Boolean).slice(0, limit);
-}
-
-function newsTopic(query = "") {
-  return query.match(/\b(?:news|headlines?|updates?|stories)\s+(?:about|on|for)\s+(.+?)[?.!]*$/i)?.[1]?.trim() || "";
-}
-
-async function liveNews(query = ""): Promise<LiveBrief> {
-  const topic = newsTopic(query);
-  const feed = topic
-    ? `https://news.google.com/rss/search?q=${encodeURIComponent(topic)}&hl=en-US&gl=US&ceid=US:en`
-    : "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en";
-  const titles = await rssTitles(feed, topic ? 2 : 3);
-  if (!titles.length) throw new Error("No current headlines were available");
-  const clean = titles.map(title => title.replace(/\s+-\s+[^-]+$/, ""));
-  const lead = topic ? `the latest relevant news about ${topic} is` : "today's top headlines are";
-  return { summary: `${address()}, ${lead}: ${clean.map((title, index) => `${index + 1}, ${title}`).join(". ")}.`, source: "Google News RSS", updatedAt: new Date().toISOString() };
-}
-
-async function liveCricket(): Promise<LiveBrief> {
-  const titles = await rssTitles("https://news.google.com/rss/search?q=live%20cricket%20score&hl=en-US&gl=US&ceid=US:en", 3);
-  if (!titles.length) throw new Error("I couldn't verify a current cricket score right now");
-  const update = titles.find(title => /\b(?:\d+\/\d+|won by|live score|runs?|wickets?)\b/i.test(title)) || titles[0];
-  return { summary: `${address()}, the latest cricket update I can verify is: ${update.replace(/\s+-\s+[^-]+$/, "")}.`, source: "Google News RSS", updatedAt: new Date().toISOString() };
-}
+const liveInfo = createLiveInformationEngine([
+  createWeatherService(currentLocation),
+  createNewsService(),
+  createSportsService(),
+  createFinanceService(),
+  createCalendarService(),
+  createEmailService(),
+]);
 
 function decodeHtml(value: string) {
   return value.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, "\"").replace(/&#x27;|&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ").trim();
@@ -633,9 +609,12 @@ function registerIPC() {
   ipcMain.handle("orbit:app:launch", (_event, application: string) => traced("app.launch", () => launchApplication(String(application))));
   ipcMain.handle("orbit:github:workflow", (_event, repository?: string) => traced("github.workflow", () => githubWorkflow(repository)));
   ipcMain.handle("orbit:browser:navigate", (_event, request: { url?: string; query?: string; site?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up" }) => traced("browser.navigate", () => browserNavigate(request || {})));
-  ipcMain.handle("orbit:live:weather", (_event, query?: string) => traced("live.weather", () => liveWeather(String(query || ""))));
-  ipcMain.handle("orbit:live:news", (_event, query?: string) => traced("live.news", () => liveNews(String(query || ""))));
-  ipcMain.handle("orbit:live:cricket", () => traced("live.cricket", liveCricket));
+  ipcMain.handle("orbit:live:info", (_event, request: { query: string; services?: string[] }) => traced("live.info", () => liveInfo.handle(String(request?.query || ""), request?.services)));
+  ipcMain.handle("orbit:browser:youtube", (_event, query: string) => traced("browser.agent.youtube", () => youtubePlayFirst(String(query || ""))));
+  ipcMain.handle("orbit:browser:amazon", (_event, request: { query: string; maxPrice?: number; minPrice?: number }) => traced("browser.agent.amazon", () => amazonSearchWithPriceFilter(String(request?.query || ""), request?.maxPrice, request?.minPrice)));
+  ipcMain.handle("orbit:browser:describe", () => traced("browser.agent.describe", async () => ({ summary: await describeCurrentPage() })));
+  ipcMain.handle("orbit:browser:summarize", () => traced("browser.agent.summarize", async () => ({ summary: await summarizeCurrentPage() })));
+  ipcMain.handle("orbit:browser:find", (_event, query: string) => traced("browser.agent.find", async () => ({ summary: await findOnPage(String(query || "")) })));
   ipcMain.handle("orbit:web:research", (_event, query: string) => traced("web.research", () => research(String(query))));
   ipcMain.handle("orbit:system:battery", () => traced("system.battery", async () => batteryStatus()));
   ipcMain.handle("orbit:screen:describe", (_event, query: string) => traced("screen.describe", () => describeScreen(String(query).slice(0, 500))));

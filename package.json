@@ -38,6 +38,7 @@
         ]
       }
     ],
+    "afterSign": "scripts/sign-mac-app.mjs",
     "mac": {
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,

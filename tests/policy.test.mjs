@@ -47,17 +47,13 @@ test("macOS packaging signs nested Electron code before Orbit and verifies the r
   assert.match(workflow, /Launch app from finished DMG/);
   assert.match(workflow, /codesign --verify --deep --strict/);
   assert.match(workflow, /com\.apple\.security\.cs\.disable-library-validation/);
+  assert.match(workflow, /codesign -d --entitlements "\$entitlements_plist" "\$installed_app"/);
+  assert.match(workflow, /test -s "\$entitlements_plist"/);
+  assert.doesNotMatch(workflow, /--entitlements :-/);
   assert.match(workflow, /kill -0 "\$orbit_pid"/);
 });
 
 test("preload.cjs (the file Electron actually loads) stays in sync with src/preload/preload.ts", async () => {
-  // main.ts points webPreferences.preload at the hand-written preload.cjs at
-  // the repo root, NOT at anything compiled from src/preload/preload.ts - the
-  // two are separate files that must be kept in sync by hand. This test
-  // exists because they silently drifted apart once already: preload.cjs was
-  // missing several methods (and still invoked IPC channels main.ts no
-  // longer handled), so window.orbit.<method> calls failed at runtime with no
-  // build-time signal at all.
   const fs = await import("node:fs/promises");
   const [preloadTs, preloadCjs, main] = await Promise.all([
     fs.readFile(new URL("../src/preload/preload.ts", import.meta.url), "utf8"),
@@ -70,12 +66,10 @@ test("preload.cjs (the file Electron actually loads) stays in sync with src/prel
   assert.ok(tsKeys.length > 20, "sanity check: preload.ts should expose a substantial API surface");
   for (const key of tsKeys) assert.ok(cjsKeys.includes(key), `preload.cjs is missing "${key}" exposed by src/preload/preload.ts`);
   for (const key of cjsKeys) assert.ok(tsKeys.includes(key), `preload.cjs exposes "${key}" that no longer exists in src/preload/preload.ts`);
-
   const channelsOf = source => new Map([...source.matchAll(/^\s{2}(\w+):.*?"(orbit:[\w:]+)"/gm)].map(m => [m[1], m[2]]));
   const tsChannels = channelsOf(preloadTs);
   const cjsChannels = channelsOf(preloadCjs);
   for (const [key, channel] of tsChannels) assert.equal(cjsChannels.get(key), channel, `preload.cjs invokes a different IPC channel than preload.ts for "${key}"`);
-
   const invoked = new Set([...preloadCjs.matchAll(/ipcRenderer\.invoke\("(orbit:[\w:]+)"/g)].map(m => m[1]));
   const handled = new Set([...main.matchAll(/ipcMain\.handle\("(orbit:[\w:]+)"/g)].map(m => m[1]));
   for (const channel of invoked) assert.ok(handled.has(channel), `preload.cjs invokes "${channel}" but main.ts registers no ipcMain.handle for it`);

@@ -14,6 +14,8 @@
     "dist": "npm run check && electron-builder",
     "dist:mac": "npm run check && electron-builder --mac dmg zip --publish never",
     "native:mac": "zsh scripts/build-macos-native.sh",
+    "release:mac": "npm run native:mac && npm run dist:mac",
+    "verify": "npm run check",
     "test": "node --test tests/*.test.mjs && python3 -m unittest discover -s sidecar -p 'test_*.py'",
     "check": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit && npm test && npm run build"
   },

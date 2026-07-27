@@ -53,6 +53,21 @@ test("macOS packaging signs nested Electron code before Orbit and verifies the r
   assert.match(workflow, /kill -0 "\$orbit_pid"/);
 });
 
+test("native speech helper embeds the macOS microphone and speech privacy metadata", async () => {
+  const fs = await import("node:fs/promises");
+  const buildScript = await fs.readFile(new URL("../scripts/build-macos-native.sh", import.meta.url), "utf8");
+  const infoPlist = await fs.readFile(new URL("../native/macos/OrbitSpeech-Info.plist", import.meta.url), "utf8");
+
+  assert.match(buildScript, /-sectcreate/);
+  assert.match(buildScript, /__TEXT/);
+  assert.match(buildScript, /__info_plist/);
+  assert.match(buildScript, /OrbitSpeech-Info\.plist/);
+  assert.match(buildScript, /plutil -extract NSMicrophoneUsageDescription/);
+  assert.match(buildScript, /plutil -extract NSSpeechRecognitionUsageDescription/);
+  assert.match(infoPlist, /<key>NSMicrophoneUsageDescription<\/key>/);
+  assert.match(infoPlist, /<key>NSSpeechRecognitionUsageDescription<\/key>/);
+});
+
 test("preload.cjs (the file Electron actually loads) stays in sync with src/preload/preload.ts", async () => {
   const fs = await import("node:fs/promises");
   const [preloadTs, preloadCjs, main] = await Promise.all([

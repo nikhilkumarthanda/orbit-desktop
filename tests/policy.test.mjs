@@ -62,9 +62,12 @@ test("native speech helper embeds the macOS microphone and speech privacy metada
   assert.match(buildScript, /__TEXT/);
   assert.match(buildScript, /__info_plist/);
   assert.match(buildScript, /OrbitSpeech-Info\.plist/);
+  assert.match(buildScript, /plutil -lint "\$info_plist"/);
+  assert.match(buildScript, /otool -l release-sidecar\/orbit-speech/);
+  assert.doesNotMatch(buildScript, /otool -s/);
+  assert.doesNotMatch(buildScript, /xxd -r/);
   assert.match(buildScript, /awk/);
-  assert.match(buildScript, /\[\[:xdigit:\]\]/);
-  assert.doesNotMatch(buildScript, /tail -n \+3/);
+  assert.match(buildScript, /sectname.*__info_plist/);
   assert.match(buildScript, /plutil -extract NSMicrophoneUsageDescription/);
   assert.match(buildScript, /plutil -extract NSSpeechRecognitionUsageDescription/);
   assert.match(infoPlist, /<key>NSMicrophoneUsageDescription<\/key>/);

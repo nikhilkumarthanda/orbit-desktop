@@ -21,8 +21,16 @@ chmod +x release-sidecar/orbit-speech
 
 embedded_plist="$(mktemp)"
 trap 'rm -f "$embedded_plist"' EXIT
-otool -s __TEXT __info_plist -X release-sidecar/orbit-speech \
-  | tail -n +3 \
+otool -s __TEXT __info_plist release-sidecar/orbit-speech \
+  | awk '
+      $1 ~ /^[[:xdigit:]]+$/ {
+        for (field = 2; field <= NF; field++) {
+          if ($field ~ /^[[:xdigit:]]+$/) {
+            printf "%s", $field
+          }
+        }
+      }
+    ' \
   | xxd -r -p > "$embedded_plist"
 plutil -lint "$embedded_plist"
 test "$(plutil -extract NSMicrophoneUsageDescription raw "$embedded_plist")" != ""

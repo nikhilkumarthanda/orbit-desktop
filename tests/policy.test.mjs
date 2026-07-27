@@ -39,11 +39,13 @@ test("macOS packaging signs nested Electron code before Orbit and verifies the r
   const workflow = await fs.readFile(new URL("../.github/workflows/release-mac.yml", import.meta.url), "utf8");
   assert.match(signer, /findNestedCode/);
   assert.match(signer, /for \(const target of findNestedCode\(appPath\)\)/);
-  assert.ok(signer.indexOf("codesign(target)") < signer.indexOf("codesign(appPath, entitlements)"));
-  assert.doesNotMatch(signer, /"--deep", "--force"/);
+  assert.ok(signer.indexOf("codesign(target)") < signer.indexOf("codesign(appPath, entitlements, true)"));
+  assert.match(signer, /codesign\(appPath, entitlements, true\)/);
   assert.match(signer, /"--verify", "--deep", "--strict"/);
   assert.match(workflow, /Verify packaged app signatures/);
+  assert.match(workflow, /Verify app from finished DMG/);
   assert.match(workflow, /codesign --verify --deep --strict/);
+  assert.match(workflow, /DMG contains mixed Team IDs/);
 });
 
 test("preload.cjs (the file Electron actually loads) stays in sync with src/preload/preload.ts", async () => {

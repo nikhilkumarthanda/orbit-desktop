@@ -30,16 +30,40 @@ jobs:
           app_path="$(find dist -type d -name 'Orbit.app' -print -quit)"
           test -n "$app_path"
           codesign --verify --deep --strict --verbose=4 "$app_path"
-          if codesign -dvv "$app_path" 2>&1 | grep -q 'TeamIdentifier='; then
-            team_id="$(codesign -dvv "$app_path" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
-            test -n "$team_id"
-            while IFS= read -r code_path; do
-              nested_team="$(codesign -dvv "$code_path" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
-              test -z "$nested_team" || test "$nested_team" = "$team_id"
-            done < <(find "$app_path/Contents/Frameworks" -depth \
-              \( -type d \( -name '*.framework' -o -name '*.app' -o -name '*.xpc' \) \
-              -o -type f \( -name '*.dylib' -o -perm -111 \) \) -print)
-          fi
+          team_id="$(codesign -dvv "$app_path" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+          while IFS= read -r code_path; do
+            nested_team="$(codesign -dvv "$code_path" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+            test "$nested_team" = "$team_id" || {
+              echo "Team ID mismatch: $code_path has '$nested_team'; Orbit.app has '$team_id'"
+              exit 1
+            }
+          done < <(find "$app_path/Contents/Frameworks" -depth \
+            \( -type d \( -name '*.framework' -o -name '*.app' -o -name '*.xpc' \) \
+            -o -type f \( -name '*.dylib' -o -perm -111 \) \) -print)
+      - name: Verify app from finished DMG
+        run: |
+          dmg_path="$(find dist -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          test -n "$dmg_path"
+          mount_dir="$(mktemp -d)"
+          cleanup() {
+            hdiutil detach "$mount_dir" -quiet || true
+            rmdir "$mount_dir" || true
+          }
+          trap cleanup EXIT
+          hdiutil attach "$dmg_path" -nobrowse -readonly -mountpoint "$mount_dir"
+          installed_app="$mount_dir/Orbit.app"
+          test -d "$installed_app"
+          codesign --verify --deep --strict --verbose=4 "$installed_app"
+          team_id="$(codesign -dvv "$installed_app" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+          electron_framework="$installed_app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework"
+          test -f "$electron_framework"
+          framework_team="$(codesign -dvv "$electron_framework" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+          test "$framework_team" = "$team_id" || {
+            echo "DMG contains mixed Team IDs: Orbit='$team_id', Electron Framework='$framework_team'"
+            exit 1
+          }
+          dyld_info="$(otool -L "$installed_app/Contents/MacOS/Orbit")"
+          echo "$dyld_info" | grep -F '@rpath/Electron Framework.framework/Electron Framework'
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:

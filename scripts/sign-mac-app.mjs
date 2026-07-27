@@ -3,8 +3,11 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-const codesign = (target, entitlements) => {
+const codesign = (target, entitlements, deep = false) => {
   const args = ["--force", "--sign", "-", "--timestamp=none"];
+  if (deep) {
+    args.push("--deep");
+  }
   if (entitlements) {
     args.push("--options", "runtime", "--entitlements", entitlements);
   }
@@ -50,7 +53,10 @@ export default async function afterSign(context) {
   for (const target of findNestedCode(appPath)) {
     codesign(target);
   }
-  codesign(appPath, entitlements);
+  // Seal the complete app once more after every nested object has been
+  // re-signed. `--deep` is safe here because the explicit inside-out pass has
+  // already removed Electron\'s vendor identity from nested code.
+  codesign(appPath, entitlements, true);
 
   execFileSync("/usr/bin/codesign", [
     "--verify", "--deep", "--strict", "--verbose=4", appPath,

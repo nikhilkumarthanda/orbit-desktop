@@ -81,20 +81,6 @@ Validate the project:
 npm run check
 ```
 
-For the normal macOS update cycle, always work from the repository root:
-
-```bash
-cd /Users/nikhilkumar/Documents/orbit-desktop
-git pull --ff-only
-npm ci
-npm run verify
-npm run release:mac
-```
-
-`release:mac` builds the native speech helper, verifies its embedded macOS
-microphone/speech privacy metadata, runs the full test and production build,
-and creates the DMG and ZIP in `dist/`.
-
 Create a platform package:
 
 ```bash

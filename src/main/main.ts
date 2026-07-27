@@ -1,7 +1,7 @@
 import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, screen, shell } from "electron";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile, readdir, writeFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import os from "node:os";
 import updater from "electron-updater";
 import path from "node:path";
@@ -11,30 +11,17 @@ import { policies, policy } from "./policy.js";
 import { cleanupPlan, gitContexts, recentWork, systemSnapshot } from "./tools.js";
 import { answerWithOllama, ollamaStatus, OLLAMA_MODEL, planWithOllama } from "./ollama.js";
 import { answerWithGemini, geminiKey, geminiStatus, saveGeminiKey, setGeminiBudget } from "./gemini.js";
-import { amazonSearchWithPriceFilter, youtubePlayFirst } from "./browser-workflows.js";
-import { describeCurrentPage, findOnPage, summarizeCurrentPage } from "./browser-intelligence.js";
-import { createLiveInformationEngine } from "./live-info/engine.js";
-import { createWeatherService } from "./live-info/weather-service.js";
-import { createNewsService } from "./live-info/news-service.js";
-import { createSportsService } from "./live-info/sports-service.js";
-import { createFinanceService } from "./live-info/finance-service.js";
-import { createCalendarService } from "./live-info/calendar-service.js";
-import { createEmailService } from "./live-info/email-service.js";
-import type { CommandPlan, ConversationTurn, GitHubWorkflowStatus, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
+import type { CommandPlan, ConversationTurn, GitHubWorkflowStatus, LiveBrief, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let audit: AuditStore;
 let mainWindow: BrowserWindow | null = null;
 let speechProcess: ChildProcessWithoutNullStreams | null = null;
-let spokenReply: ReturnType<typeof spawn> | null = null;
 const { autoUpdater } = updater;
 const conversation: ConversationTurn[] = [];
 let lastFailureDetail = "";
 let selectedVoice: string | null = null;
-let activeBrowserSite: { name: string; hostname: string; query?: string } | null = null;
-let activeFolderPath: string | null = null;
-let preferredName = "Boss";
-let profilePath = "";
+let activeBrowserSite: { name: string; hostname: string } | null = null;
 let locationRequest: { resolve: (value: { latitude: number; longitude: number }) => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null;
 
 function orbitVoice() {
@@ -49,27 +36,9 @@ function naturalSpeech(text: string) {
     .replace(/https?:\/\/\S+/gi, "the link")
     .replace(/[{}\[\]<>_*`|]/g, " ")
     .replace(/\b(?:Error|Exception):?\s*/gi, "")
-    .replace(/\s*[·•]\s*/g, ". ")
-    .replace(/\s*:\s*/g, ": ")
     .replace(/\s+/g, " ")
     .replace(/\s*([.!?])\s*/g, "$1 ")
     .trim();
-}
-
-function address() { return preferredName || "Boss"; }
-function personalize(text: string) { return text.replace(/\bboss\b/gi, address()); }
-
-async function savePreferredName(name: string) {
-  preferredName = name;
-  if (profilePath) await writeFile(profilePath, JSON.stringify({ preferredName }, null, 2), "utf8");
-}
-
-async function loadProfile() {
-  profilePath = path.join(app.getPath("userData"), "profile.json");
-  try {
-    const stored = JSON.parse(await readFile(profilePath, "utf8")) as { preferredName?: string };
-    if (/^[\p{L}][\p{L} .'-]{0,39}$/u.test(stored.preferredName || "")) preferredName = stored.preferredName!.trim();
-  } catch {}
 }
 
 async function installedApplications() {
@@ -86,28 +55,12 @@ function speak(text: string, protectListener = true) {
   if (process.platform !== "darwin") return;
   const raw = naturalSpeech(String(text).slice(0, 470));
   if (!raw) return;
-  const named = personalize(raw);
-  // Replies already include the preferred name when it sounds natural. Avoid
-  // prefixing every sentence, which makes a conversation feel synthetic.
-  const spoken = named;
-  stopSpeaking(false);
+  const spoken = /\bboss\b/i.test(raw) ? raw : `Boss, ${raw}`;
   if (protectListener && speechProcess?.stdin.writable) speechProcess.stdin.write("pause\n");
-  const child = spawn("/usr/bin/say", ["-v", orbitVoice(), "-r", "172", spoken], { stdio: "ignore" });
-  spokenReply = child;
-  sendVoice("speaking", { message: "Orbit is speaking" });
+  const child = spawn("/usr/bin/say", ["-v", orbitVoice(), "-r", "158", spoken], { stdio: "ignore" });
   if (protectListener) child.once("exit", () => setTimeout(() => {
-    if (spokenReply !== child) return;
-    spokenReply = null;
     if (speechProcess?.stdin.writable) speechProcess.stdin.write("followup\n");
   }, 450));
-}
-
-function stopSpeaking(resumeListener = true) {
-  const wasSpeaking = Boolean(spokenReply);
-  if (spokenReply) { spokenReply.kill(); spokenReply = null; }
-  if (wasSpeaking) sendVoice("interrupted", { message: "Response stopped" });
-  if (resumeListener && speechProcess?.stdin.writable) speechProcess.stdin.write("followup\n");
-  return wasSpeaking;
 }
 
 function sendVoice(type: string, payload: Record<string, unknown> = {}) {
@@ -117,7 +70,7 @@ function sendVoice(type: string, payload: Record<string, unknown> = {}) {
 function showListening() {
   mainWindow?.show(); mainWindow?.focus();
   sendVoice("wake");
-  speak("Yes?", false);
+  speak("Yes, boss?", false);
 }
 
 function stopSpeech() {
@@ -127,37 +80,19 @@ function stopSpeech() {
 
 function armVoice() {
   if (!speechProcess) startSpeech();
-  if (speechProcess?.stdin.writable) {
-    console.log(`[speech] writing "arm" to helper pid=${speechProcess.pid}`);
-    speechProcess.stdin.write("arm\n");
-  } else {
-    console.warn(`[speech] cannot arm: speechProcess=${speechProcess ? `pid ${speechProcess.pid}` : "null"}, stdin.writable=${Boolean(speechProcess?.stdin.writable)}`);
-    showListening();
-    sendVoice("unavailable", { message: "Native speech helper is not available" });
-  }
+  if (speechProcess) speechProcess.stdin.write("arm\n");
+  else { showListening(); sendVoice("unavailable", { message: "Native speech helper is not available" }); }
 }
 
 function startSpeech() {
-  if (process.platform !== "darwin") { console.log("[speech] startSpeech skipped: not darwin"); return; }
-  if (speechProcess) { console.log(`[speech] startSpeech skipped: already running, pid=${speechProcess.pid}`); return; }
+  if (process.platform !== "darwin" || speechProcess) return;
   const bundled = path.join(process.resourcesPath, "sidecar", "orbit-speech");
   const development = path.join(app.getAppPath(), "release-sidecar", "orbit-speech");
-  const bundledExists = existsSync(bundled);
-  const binary = bundledExists ? bundled : development;
-  console.log(`[speech] resolved binary path: ${binary} (bundled=${bundledExists} at ${bundled}, development exists=${existsSync(development)} at ${development})`);
-  if (!existsSync(binary)) {
-    console.error(`[speech] binary not found at resolved path: ${binary}`);
-    sendVoice("unavailable", { message: "Native speech helper is not included in this development build" });
-    return;
-  }
-  console.log(`[speech] spawning binary: ${binary}`);
-  const child = spawn(binary, [], { stdio: ["pipe", "pipe", "pipe"] });
-  speechProcess = child;
-  console.log(`[speech] spawn() returned, pid=${child.pid ?? "unknown"}`);
-  child.on("spawn", () => console.log(`[speech] spawn confirmed, pid=${child.pid}`));
+  const binary = existsSync(bundled) ? bundled : development;
+  if (!existsSync(binary)) { sendVoice("unavailable", { message: "Native speech helper is not included in this development build" }); return; }
+  speechProcess = spawn(binary, [], { stdio: ["pipe", "pipe", "pipe"] });
   let buffered = "";
-  child.stdout.on("data", chunk => {
-    console.log(`[speech] stdout: ${String(chunk).trim()}`);
+  speechProcess.stdout.on("data", chunk => {
     buffered += String(chunk);
     const lines = buffered.split("\n"); buffered = lines.pop() ?? "";
     for (const line of lines) {
@@ -175,29 +110,14 @@ function startSpeech() {
           locationRequest = null;
           continue;
         }
-        if (event.type === "interrupt") { stopSpeaking(); continue; }
         sendVoice(event.type, event);
-        if (event.type === "wake") { console.log(`[speech] wake event received from helper (mode=${event.mode ?? "unknown"}); transitioning to full recognition`); showListening(); }
+        if (event.type === "wake") showListening();
         if (event.type === "command" && event.text) mainWindow?.webContents.send("orbit:voice:command", String(event.text));
       } catch { sendVoice("error", { message: "Speech helper returned invalid data" }); }
     }
   });
-  child.stderr.on("data", chunk => {
-    console.error(`[speech] stderr: ${String(chunk).trim()}`);
-    sendVoice("error", { message: String(chunk).trim() });
-  });
-  child.stdin.on("error", err => console.error(`[speech] stdin write error: ${err instanceof Error ? err.message : String(err)}`));
-  child.on("error", err => {
-    console.error(`[speech] spawn/runtime error: ${err instanceof Error ? err.stack || err.message : String(err)}`);
-    if (speechProcess === child) speechProcess = null;
-    sendVoice("unavailable", { message: `Speech helper failed to start: ${err instanceof Error ? err.message : String(err)}` });
-  });
-  child.on("exit", (code, signal) => console.log(`[speech] exit event: code=${code} signal=${signal}`));
-  child.on("close", (code, signal) => {
-    console.log(`[speech] close event: code=${code} signal=${signal}, pid was ${child.pid}`);
-    if (speechProcess === child) speechProcess = null;
-    sendVoice("stopped");
-  });
+  speechProcess.stderr.on("data", chunk => sendVoice("error", { message: String(chunk).trim() }));
+  speechProcess.on("close", () => { speechProcess = null; sendVoice("stopped"); });
 }
 
 function retrieve(request: Record<string, unknown>): Promise<any> {
@@ -218,60 +138,18 @@ function retrieve(request: Record<string, unknown>): Promise<any> {
 }
 
 function planLocal(value: string): CommandPlan {
-  const command = value.trim().toLowerCase()
-    .replace(/\b(?:git|get)\s+hub\b/g, "github")
-    .replace(/\bgethub\b/g, "github")
-    .replace(/\b(?:lead|leet)\s+code\b/g, "leetcode");
+  const command = value.trim().toLowerCase().replace(/\b(?:git|get)\s+hub\b/g, "github").replace(/\bgethub\b/g, "github");
   if (/\b(brief|explain|tell me more|what happened)\b/.test(command) && lastFailureDetail) return { intent: "answer", confidence: 1, explanation: "Previous error briefing", reply: `Boss, the previous operation failed because ${lastFailureDetail}. I can retry when you're ready.`, query: value, source: "local" };
   if (/^(hi|hello|hey|good (morning|afternoon|evening))( orbit)?[!.?]*$/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local greeting matched", reply: "Yes, boss? At your service.", query: value, source: "local" };
   if (/\b(how are you|how is it going|you good)\b/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local conversation matched", reply: "Running smoothly, boss. What can I do for you?", query: value, source: "local" };
   if (/\b(notifications?|notification center|alerts?)\b/.test(command)) return { intent: "notifications", confidence: 1, explanation: "Mac notification request matched", reply: "I can’t read Notification Center yet, boss. I won’t substitute news headlines for your notifications.", query: value, source: "local" };
   if (/\b(?:what(?:'s| is)?|check|tell me|show me)?\s*(?:my|the)?\s*battery(?:\s+(?:level|percentage|status))?\b/.test(command)) return { intent: "battery", confidence: 1, explanation: "Native battery request matched", query: value, source: "local" };
-  if (/\b(?:take|capture|save|make|grab)\b(?:\s+(?:a|the|my|this|current|full))?\s*(?:screen\s*shot|screenshot)\b|\b(?:screen\s*shot|screenshot)\s+(?:this|that|now|please)\b/.test(command)) return { intent: "screenshot", confidence: 1, explanation: "Native screenshot request matched", query: value, source: "local" };
   if (/\b(?:what(?:'s| is) on|describe|read|analy[sz]e|look at|see)\s+(?:my|the|this|current)?\s*screen\b|\bscreen\s*(?:right now|now)\b/.test(command)) return { intent: "screen", confidence: 1, explanation: "Native screen request matched", query: value, source: "local" };
   if (/^(?:what(?:'s| is| are)?|any|give me|tell me)(?: the)? (?:new )?updates?[?.!]*$/.test(command)) return { intent: "clarify", confidence: 1, explanation: "Update topic is ambiguous", reply: "Which updates do you mean, boss—your notifications, news, weather, cricket, GitHub, or something else?", query: value, source: "local" };
-  if (/\b(?:what'?s|what is)\s+happening\s+today\b|\bcatch me up\b|\b(?:morning|daily) briefing\b/.test(command)) return { intent: "daily_brief", confidence: 1, explanation: "Composite daily briefing request matched", query: value, liveServices: ["weather", "news", "calendar", "email"], source: "local" };
-  if (/\b(weather|temperature|forecast|rain|raining|umbrella|snow|humid)\b/.test(command)) return { intent: "weather", confidence: 1, explanation: "Live weather request matched", query: value, liveServices: ["weather"], source: "local" };
-  if (/\b(cricket|ipl|test match)\b.*\b(score|scores|result|match|update|live)\b|\b(score|scores)\b.*\b(cricket|ipl)\b/.test(command)) return { intent: "cricket", confidence: 1, explanation: "Live cricket request matched", query: value, liveServices: ["sports"], source: "local" };
-  if (/\b(fifa|world cup|premier league|champions league|soccer)\b.*\b(score|scores|result|match|final|winner|won|update|live)\b|\b(score|scores|result|winner)\b.*\b(fifa|world cup|soccer)\b/.test(command)) return { intent: "soccer", confidence: 1, explanation: "Live soccer/FIFA request matched", query: value, liveServices: ["sports"], source: "local" };
-  if (/\b(news|headlines|top stories|world update)\b/.test(command)) return { intent: "news", confidence: 1, explanation: "Live news request matched", query: value, liveServices: ["news"], source: "local" };
-  if (/\b(stock|shares?|ticker|market cap|share price|trading at)\b/.test(command)) return { intent: "finance", confidence: 1, explanation: "Live finance request matched", query: value, liveServices: ["finance"], source: "local" };
-  if (/\bgithub\b/.test(command) && /\b(workflow|actions?|deployment|ci|build (?:status|run)|check (?:the )?(?:workflow|actions?|deployment|ci|build))\b/.test(command)) return { intent: "github", confidence: .99, explanation: "Explicit GitHub workflow request matched", repository: "nikhilkumarthanda/orbit-desktop", query: value, source: "local" };
-  const folderMatch = command.match(/\b(?:open|show|go to)\s+(?:my\s+|the\s+)?(documents?|downloads?|desktop|projects?|developer)(?:\s+folder)?\b/);
-  if (folderMatch) {
-    const folder = ({ document: "Documents", documents: "Documents", download: "Downloads", downloads: "Downloads", desktop: "Desktop", project: "Projects", projects: "Projects", developer: "Developer" } as Record<string, string>)[folderMatch[1]];
-    return { intent: "folder", confidence: 1, explanation: "Local folder request matched before browser routing", folder, reply: `Opening ${folder}.`, query: value, source: "local" };
-  }
-  if (/^(?:please )?(?:open|launch|select)\s+(?:the\s+)?(?:first|1st)\s+file[.!]*$/.test(command)) {
-    return { intent: "folder", confidence: 1, explanation: "Active Finder folder action matched", folder: "__first__", reply: "Opening the first file.", query: value, source: "local" };
-  }
-  if (/\byoutube\b/.test(command) && /\bplay\b/.test(command) && !/\b(?:first|1st)\b.*\b(?:video|result)\b/.test(command)) {
-    const query = command.replace(/\bopen\s+youtube\b/g, "").replace(/\byoutube\b/g, "").replace(/\bplay\b/g, "").replace(/\band\b/g, "").replace(/\bon\b/g, "").replace(/\s+/g, " ").trim();
-    return { intent: "youtube_play", confidence: 1, explanation: "Single-shot YouTube play request matched", query: query || value, source: "local" };
-  }
-  if (/\bamazon\b/.test(command) && /\b(search|find|look for|buy|shop for)\b/.test(command)) {
-    const priceMatch = command.match(/\b(?:under|below|less than)\s*\$?\s*(\d+(?:\.\d+)?)/);
-    const query = command
-      .replace(/\b(search|find|look for|buy|shop for)\b/g, "")
-      .replace(/\bamazon\b/g, "")
-      .replace(/\bfor\b/g, "")
-      .replace(/\b(?:under|below|less than)\s*\$?\s*\d+(?:\.\d+)?\b/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    return { intent: "amazon_search", confidence: 1, explanation: "Amazon search with optional price filter matched", query: query || value, maxPrice: priceMatch ? Number(priceMatch[1]) : undefined, source: "local" };
-  }
-  if (/\b(?:what'?s|what is)\s+on\s+this\s+page\b|\bdescribe\s+(?:this|the)\s+page\b|\bwhat\s+(?:page|site)\s+is\s+this\b/.test(command)) return { intent: "page_describe", confidence: 1, explanation: "Page description request matched", query: value, source: "local" };
-  if (/\bsummarize\s+(?:this|the)\s+(?:article|page|story)\b/.test(command)) return { intent: "page_summarize", confidence: 1, explanation: "Page summarization request matched", query: value, source: "local" };
-  {
-    const findMatch = command.match(/\bwhich\s+button\s+(.+)|\bwhere\s+is\s+the\s+(.+?)\s+button\b|\bfind\s+the\s+(.+?)\s+(?:button|link)\b/);
-    if (findMatch) {
-      const target = (findMatch[1] || findMatch[2] || findMatch[3] || "").trim();
-      return { intent: "page_find", confidence: 1, explanation: "Page element lookup request matched", query: target || value, source: "local" };
-    }
-  }
-  if (/\b(?:play|open|select|click)\b.*\b(?:first|1st)\b.*\b(?:video|result)\b/.test(command)) return { intent: "browser", confidence: 1, explanation: "Active YouTube result action matched", browserAction: "play_first", sameTab: true, source: "local" };
-  if (/^(?:please )?(?:scroll|page)\s+(?:down|lower)(?:\s+(?:a little|more))?[.!]*$/.test(command)) return { intent: "browser", confidence: 1, explanation: "Active page scroll matched", browserAction: "scroll_down", sameTab: true, source: "local" };
-  if (/^(?:please )?(?:scroll|page)\s+(?:up|higher)(?:\s+(?:a little|more))?[.!]*$/.test(command)) return { intent: "browser", confidence: 1, explanation: "Active page scroll matched", browserAction: "scroll_up", sameTab: true, source: "local" };
+  if (/\b(weather|temperature|forecast)\b/.test(command)) return { intent: "weather", confidence: 1, explanation: "Live weather request matched", query: value, source: "local" };
+  if (/\b(cricket|ipl|test match)\b.*\b(score|scores|result|match|update|live)\b|\b(score|scores)\b.*\b(cricket|ipl)\b/.test(command)) return { intent: "cricket", confidence: 1, explanation: "Live cricket request matched", query: value, source: "local" };
+  if (/\b(news|headlines|top stories|world update)\b/.test(command)) return { intent: "news", confidence: 1, explanation: "Live news request matched", query: value, source: "local" };
+  if (/\bgithub\b/.test(command) && /\b(workflow|actions?|deploy|build|status|complete|check|see)\b/.test(command)) return { intent: "github", confidence: .99, explanation: "GitHub workflow request matched", repository: "nikhilkumarthanda/orbit-desktop", query: value, source: "local" };
   if (/\b(?:my|this|the)?\s*(cpu|memory|ram|storage|disk|system|process(?:es)?|computer|mac)\b/.test(command)) return { intent: "system", confidence: .98, explanation: "Native system request matched", query: value, source: "local" };
   if (/\b(open|visit|go to|navigate|search|look up|youtube|tesla|github|website|web site|\.com)\b/.test(command)) {
     const sameTab = /\b(?:same|current|this|active)\s+(?:youtube\s+)?tab\b/.test(command);
@@ -303,15 +181,8 @@ function planLocal(value: string): CommandPlan {
 }
 
 async function planCommand(value: string) {
-  const nameRequest = value.trim().match(/^(?:orbit[, ]+)?(?:please )?(?:call|address) me (?:as )?([\p{L}][\p{L} .'-]{0,39})[.!]?$/iu);
-  if (nameRequest) {
-    const name = nameRequest[1].replace(/[.!]+$/, "").trim();
-    await savePreferredName(name);
-    return { intent: "answer" as const, confidence: 1, explanation: "Preferred name saved locally", reply: `Of course, ${name}. I'll call you ${name} from now on.`, query: value, source: "local" as const };
-  }
   const local = planLocal(value);
-  if (local.reply) local.reply = personalize(local.reply);
-  if (["answer", "clarify", "notifications", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"].includes(local.intent)) return local;
+  if (["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "weather", "news", "cricket"].includes(local.intent)) return local;
   const status = await ollamaStatus();
   if (!status.available) return local;
   try {
@@ -320,7 +191,6 @@ async function planCommand(value: string) {
     if (plan.intent === "launch" && (!plan.application || !applications.includes(plan.application))) return { intent: "clarify" as const, confidence: 1, explanation: "Application is not installed", reply: `I couldn't find ${plan.application || "that application"} on this Mac.`, query: value, source: "ollama" as const, model: OLLAMA_MODEL };
     conversation.push({ role: "user", content: value }, { role: "assistant", content: plan.reply || plan.explanation });
     if (conversation.length > 20) conversation.splice(0, conversation.length - 20);
-    if (plan.reply) plan.reply = personalize(plan.reply);
     return plan;
   } catch (error) {
     if (local.intent !== "unknown") return { ...local, reply: "Local AI is unavailable, so I'm handling that command with Orbit's offline planner." };
@@ -338,7 +208,7 @@ async function githubWorkflow(repository = "nikhilkumarthanda/orbit-desktop"): P
   const data = await response.json() as { workflow_runs?: Array<{ name?: string; status?: string; conclusion?: string }> };
   const run = data.workflow_runs?.[0];
   const state = !run ? "unknown" : run.status !== "completed" ? "pending" : run.conclusion === "success" ? "success" : "failure";
-  const summary = state === "success" ? `${address()}, the latest ${run?.name || "workflow"} completed successfully.` : state === "pending" ? `${address()}, the latest ${run?.name || "workflow"} is still running.` : state === "failure" ? `${address()}, the latest ${run?.name || "workflow"} failed. Would you like a brief?` : `${address()}, I couldn't find a recent workflow run.`;
+  const summary = state === "success" ? `Boss, the latest ${run?.name || "workflow"} completed successfully.` : state === "pending" ? `Boss, the latest ${run?.name || "workflow"} is still running.` : state === "failure" ? `Boss, the latest ${run?.name || "workflow"} failed. Would you like a brief?` : "Boss, I couldn't find a recent workflow run.";
   openChromeTab(url);
   activeBrowserSite = { name: "GitHub", hostname: "github.com" };
   return { repository: safe, state, workflow: run?.name, url, summary };
@@ -392,43 +262,7 @@ end run`;
   });
 }
 
-async function browserNavigate(request: { url?: string; query?: string; site?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up" }) {
-  if (request.browserAction === "scroll_down" || request.browserAction === "scroll_up") {
-    if (!activeBrowserSite) throw new Error("Open a website first, then ask Orbit to scroll it");
-    const direction = request.browserAction === "scroll_down" ? 1 : -1;
-    const javascript = `window.scrollBy({top:${direction}*Math.max(500,window.innerHeight*.78),behavior:'smooth'});'SCROLLED'`;
-    const script = `on run argv
-tell application "Google Chrome"
-activate
-if (count of windows) is 0 then return "NO_WINDOW"
-return execute active tab of front window javascript (item 1 of argv)
-end tell
-end run`;
-    const scrolled = await new Promise<boolean>(resolve => {
-      const child = spawn("/usr/bin/osascript", ["-e", script, javascript], { stdio: ["ignore", "pipe", "ignore"] });
-      let output = "";
-      const timer = setTimeout(() => { child.kill(); resolve(false); }, 4_000);
-      child.stdout.on("data", chunk => { output += String(chunk); });
-      child.once("close", code => { clearTimeout(timer); resolve(code === 0 && output.trim() === "SCROLLED"); });
-      child.once("error", () => { clearTimeout(timer); resolve(false); });
-    });
-    if (!scrolled) {
-      const keyCode = request.browserAction === "scroll_down" ? "121" : "116";
-      const fallback = `tell application "Google Chrome" to activate\ndelay 0.1\ntell application "System Events" to key code ${keyCode}`;
-      const fallbackWorked = spawnSync("/usr/bin/osascript", ["-e", fallback], { encoding: "utf8" }).status === 0;
-      if (!fallbackWorked) throw new Error("Allow Orbit to control Chrome in System Settings → Privacy & Security → Accessibility, then try scrolling again");
-    }
-    return { opened: true, url: "", site: activeBrowserSite.name, summary: `Scrolled ${request.browserAction === "scroll_down" ? "down" : "up"} on ${activeBrowserSite.name}, ${address()}.` };
-  }
-  if (request.browserAction === "play_first") {
-    if (!activeBrowserSite?.hostname.includes("youtube.com") || !activeBrowserSite.query) throw new Error("Search YouTube first, then ask Orbit to play the first video");
-    const response = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(activeBrowserSite.query)}`, { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8_000) });
-    const videoId = (await response.text()).match(/"videoId":"([A-Za-z0-9_-]{11})"/)?.[1];
-    if (!videoId) throw new Error("Orbit couldn't identify the first YouTube result");
-    const url = `https://www.youtube.com/watch?v=${videoId}`;
-    navigateActiveChromeTab(url);
-    return { opened: true, url, site: "YouTube", summary: `Playing the first YouTube result, ${address()}.` };
-  }
+async function browserNavigate(request: { url?: string; query?: string; site?: string; sameTab?: boolean }) {
   let target = String(request.url || "").trim();
   let usedPageSearch = false;
   let usedSiteFallback = false;
@@ -443,7 +277,7 @@ end run`;
     else if (context?.hostname.includes("linkedin.com")) target = `https://www.linkedin.com/search/results/all/?keywords=${encodeURIComponent(terms)}`;
     else if (context && !context.hostname.includes("google.")) {
       usedPageSearch = await searchActiveChromePage(terms);
-      if (usedPageSearch) return { opened: true, url: "", site: context.name, summary: `Searching ${context.name} for ${terms}, ${address()}.` };
+      if (usedPageSearch) return { opened: true, url: "", site: context.name, summary: `Searching ${context.name} for ${terms}, boss.` };
       usedSiteFallback = true;
       target = `https://www.google.com/search?q=${encodeURIComponent(`site:${context.hostname} ${terms}`)}`;
     }
@@ -461,9 +295,9 @@ end run`;
   const destination = parsed.hostname.replace(/^www\./, "");
   const names: Record<string, string> = { "youtube.com": "YouTube", "github.com": "GitHub", "google.com": "Google", "tesla.com": "Tesla", "reddit.com": "Reddit", "linkedin.com": "LinkedIn" };
   const matched = Object.entries(names).find(([domain]) => destination === domain || destination.endsWith(`.${domain}`));
-  activeBrowserSite = { name: matched?.[1] || destination, hostname: parsed.hostname, query: parsed.hostname.includes("youtube.com") ? (parsed.searchParams.get("search_query") || undefined) : undefined };
+  activeBrowserSite = { name: matched?.[1] || destination, hostname: parsed.hostname };
   const searched = Boolean(request.query && !request.url);
-  const summary = usedSiteFallback && activeBrowserSite ? `I couldn't control that site's search box, ${address()}, so I searched its pages through Google.` : searched ? `Searching ${activeBrowserSite.name} for ${String(request.query).slice(0, 80)}, ${address()}.` : request.sameTab ? `Opening ${activeBrowserSite.name} in the current Chrome tab, ${address()}.` : `Opening ${activeBrowserSite.name} in a new Chrome tab, ${address()}.`;
+  const summary = usedSiteFallback && activeBrowserSite ? `I couldn't control that site's search box, boss, so I searched its pages through Google.` : searched ? `Searching ${activeBrowserSite.name} for ${String(request.query).slice(0, 80)}, boss.` : request.sameTab ? `Opening ${activeBrowserSite.name} in the current Chrome tab, boss.` : `Opening ${activeBrowserSite.name} in a new Chrome tab, boss.`;
   return { opened: true, url: parsed.toString(), site: activeBrowserSite.name, summary };
 }
 
@@ -479,31 +313,60 @@ async function launchApplication(application: string) {
 
 function currentLocation(): Promise<{ latitude: number; longitude: number }> {
   if (process.platform !== "darwin") return Promise.reject(new Error("Local weather location is currently available on macOS only"));
-  if (locationRequest) return Promise.reject(new Error("A location request is already in progress"));
-  const wasRunning = Boolean(speechProcess);
   if (!speechProcess) startSpeech();
+  if (!speechProcess?.stdin.writable) return Promise.reject(new Error("Orbit's location helper is unavailable"));
+  if (locationRequest) return Promise.reject(new Error("A location request is already in progress"));
   return new Promise((resolve, reject) => {
-    const send = () => {
-      if (!speechProcess?.stdin.writable) { reject(new Error("Orbit's location helper is unavailable")); return; }
-      const timer = setTimeout(() => { locationRequest = null; reject(new Error("Location permission timed out. Check macOS Location Services for Orbit.")); }, 15_000);
-      locationRequest = { resolve, reject, timer };
-      speechProcess!.stdin.write("location\n");
-    };
-    // A freshly spawned helper's stdin pipe can take a tick to become writable;
-    // give it a short grace period instead of failing on the very first request.
-    if (wasRunning || speechProcess?.stdin.writable) send();
-    else setTimeout(send, 400);
+    const timer = setTimeout(() => { locationRequest = null; reject(new Error("Location permission timed out. Check macOS Location Services for Orbit.")); }, 15_000);
+    locationRequest = { resolve, reject, timer };
+    speechProcess!.stdin.write("location\n");
   });
 }
 
-const liveInfo = createLiveInformationEngine([
-  createWeatherService(currentLocation),
-  createNewsService(),
-  createSportsService(),
-  createFinanceService(),
-  createCalendarService(),
-  createEmailService(),
-]);
+const weatherDescriptions: Record<number, string> = {
+  0: "clear skies", 1: "mainly clear skies", 2: "partly cloudy skies", 3: "overcast skies", 45: "fog", 48: "freezing fog",
+  51: "light drizzle", 53: "drizzle", 55: "heavy drizzle", 61: "light rain", 63: "rain", 65: "heavy rain", 71: "light snow",
+  73: "snow", 75: "heavy snow", 80: "light rain showers", 81: "rain showers", 82: "heavy rain showers", 95: "thunderstorms",
+};
+
+async function liveWeather(): Promise<LiveBrief> {
+  const { latitude, longitude } = await currentLocation();
+  const endpoint = new URL("https://api.open-meteo.com/v1/forecast");
+  endpoint.search = new URLSearchParams({ latitude: String(latitude), longitude: String(longitude), current: "temperature_2m,apparent_temperature,weather_code,wind_speed_10m", temperature_unit: "fahrenheit", wind_speed_unit: "mph", timezone: "auto" }).toString();
+  const response = await fetch(endpoint, { signal: AbortSignal.timeout(8_000) });
+  if (!response.ok) throw new Error("The weather service is temporarily unavailable");
+  const data = await response.json() as { current?: { temperature_2m?: number; apparent_temperature?: number; weather_code?: number; wind_speed_10m?: number; time?: string } };
+  const current = data.current;
+  if (current?.temperature_2m == null) throw new Error("The weather service returned incomplete conditions");
+  const condition = weatherDescriptions[current.weather_code ?? -1] || "current conditions";
+  const summary = `Boss, it is ${Math.round(current.temperature_2m)} degrees with ${condition}. It feels like ${Math.round(current.apparent_temperature ?? current.temperature_2m)} degrees, with winds around ${Math.round(current.wind_speed_10m ?? 0)} miles per hour.`;
+  return { summary, source: "Open-Meteo", updatedAt: current.time || new Date().toISOString() };
+}
+
+function decodeXml(value: string) {
+  return value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/&amp;/g, "&").replace(/&quot;/g, "\"").replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/<[^>]+>/g, "").trim();
+}
+
+async function rssTitles(url: string, limit: number) {
+  const response = await fetch(url, { headers: { "User-Agent": "Orbit-Desktop/0.7" }, signal: AbortSignal.timeout(8_000) });
+  if (!response.ok) throw new Error(`The live source returned status ${response.status}`);
+  const xml = await response.text();
+  return [...xml.matchAll(/<item[\s\S]*?<title>([\s\S]*?)<\/title>/gi)].map(match => decodeXml(match[1])).filter(Boolean).slice(0, limit);
+}
+
+async function liveNews(): Promise<LiveBrief> {
+  const titles = await rssTitles("https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en", 3);
+  if (!titles.length) throw new Error("No current headlines were available");
+  const clean = titles.map(title => title.replace(/\s+-\s+[^-]+$/, ""));
+  return { summary: `Boss, today's top headlines are: ${clean.map((title, index) => `${index + 1}, ${title}`).join(". ")}.`, source: "Google News RSS", updatedAt: new Date().toISOString() };
+}
+
+async function liveCricket(): Promise<LiveBrief> {
+  const titles = await rssTitles("https://news.google.com/rss/search?q=live%20cricket%20score&hl=en-US&gl=US&ceid=US:en", 3);
+  if (!titles.length) throw new Error("I couldn't verify a current cricket score right now");
+  const update = titles.find(title => /\b(?:\d+\/\d+|won by|live score|runs?|wickets?)\b/i.test(title)) || titles[0];
+  return { summary: `Boss, the latest cricket update I can verify is: ${update.replace(/\s+-\s+[^-]+$/, "")}.`, source: "Google News RSS", updatedAt: new Date().toISOString() };
+}
 
 function decodeHtml(value: string) {
   return value.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, "\"").replace(/&#x27;|&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ").trim();
@@ -535,7 +398,7 @@ async function searchPublicWeb(query: string): Promise<ResearchSource[]> {
 async function research(query: string): Promise<ResearchAnswer> {
   const clean = query.trim().slice(0, 500);
   if (!clean) throw new Error("Orbit needs a question to research");
-  const needsLiveWeb = /\b(today|tonight|now|current|currently|latest|recent|news|price|stock|score|weather|forecast|election|president|ceo|release|version|202[5-9]|who won|winner|champion|world cup|fifa|ipl|nba|nfl|mlb|nhl)\b/i.test(clean);
+  const needsLiveWeb = /\b(today|tonight|now|current|currently|latest|recent|news|price|stock|score|weather|forecast|election|president|ceo|release|version|202[5-9])\b/i.test(clean);
   const sources = needsLiveWeb ? await searchPublicWeb(clean) : [];
   let answer: string;
   if (geminiStatus().available) answer = await answerWithGemini({ query: clean, sources, history: conversation });
@@ -545,7 +408,6 @@ async function research(query: string): Promise<ResearchAnswer> {
     else if (sources.length) answer = `Here are the most relevant current results: ${sources.slice(0, 3).map((source, index) => `[${index + 1}] ${source.title}. ${source.excerpt}`).join(" ")}`;
     else throw new Error("Start Ollama or add a free Gemini API key in Settings to answer general questions");
   }
-  answer = personalize(answer);
   const spokenAnswer = answer.replace(/\s*\[\d+\]/g, "").replace(/\s+/g, " ").slice(0, 470).trim();
   conversation.push({ role: "user", content: clean }, { role: "assistant", content: answer });
   if (conversation.length > 20) conversation.splice(0, conversation.length - 20);
@@ -560,31 +422,17 @@ function batteryStatus() {
   const percentage = Number(match[1]);
   const charging = /charging|charged/i.test(match[2]);
   const timeRemaining = output.match(/(\d+:\d+) remaining/i)?.[1];
-  const summary = `${address()}, your battery is at ${percentage}% and it is ${charging ? "charging" : "not charging"}${timeRemaining ? `, with about ${timeRemaining} remaining` : ""}.`;
+  const summary = `Boss, your battery is at ${percentage}% and it is ${charging ? "charging" : "not charging"}${timeRemaining ? `, with about ${timeRemaining} remaining` : ""}.`;
   return { percentage, charging, timeRemaining, summary };
-}
-
-async function capturePrimaryScreen() {
-  const display = screen.getPrimaryDisplay();
-  const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: display.size, fetchWindowIcons: false });
-  const capture = sources.find(source => source.display_id === String(display.id)) || sources[0];
-  if (!capture || capture.thumbnail.isEmpty()) throw new Error("Orbit could not capture the screen. Allow Screen Recording in System Settings → Privacy & Security.");
-  return capture.thumbnail.toPNG();
-}
-
-async function takeScreenshot() {
-  const png = await capturePrimaryScreen();
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const target = path.join(app.getPath("desktop"), `Orbit Screenshot ${stamp}.png`);
-  await writeFile(target, png);
-  shell.showItemInFolder(target);
-  return { saved: true, path: target, summary: `Screenshot saved to Desktop as ${path.basename(target)}.` };
 }
 
 async function describeScreen(query: string): Promise<ResearchAnswer> {
   if (!geminiKey()) throw new Error("Add your free Gemini API key in Settings before using screen understanding");
-  const png = await capturePrimaryScreen();
-  const answer = personalize(await answerWithGemini({ query: query || "Describe what is visible on my screen", history: conversation, imageBase64: png.toString("base64") }));
+  const display = screen.getPrimaryDisplay();
+  const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: display.size, fetchWindowIcons: false });
+  const capture = sources.find(source => source.display_id === String(display.id)) || sources[0];
+  if (!capture || capture.thumbnail.isEmpty()) throw new Error("Orbit could not capture the screen. Allow Screen Recording in System Settings → Privacy & Security.");
+  const answer = await answerWithGemini({ query: query || "Describe what is visible on my screen", history: conversation, imageBase64: capture.thumbnail.toPNG().toString("base64") });
   const spokenAnswer = answer.replace(/\s+/g, " ").slice(0, 470).trim();
   conversation.push({ role: "user", content: query }, { role: "assistant", content: answer });
   return { answer, spokenAnswer, sources: [], updatedAt: new Date().toISOString() };
@@ -623,44 +471,21 @@ function registerIPC() {
     if (!path.isAbsolute(resolved)) throw new Error("Orbit only opens absolute cited paths");
     return (await shell.openPath(resolved)) === "";
   }));
-  ipcMain.handle("orbit:folder:open", (_event, requested: string) => traced("files.open", async () => {
-    const folders: Record<string, string> = { documents: "Documents", downloads: "Downloads", desktop: "Desktop", projects: "Projects", developer: "Developer" };
-    if (requested === "__first__") {
-      if (!activeFolderPath) throw new Error("Open a Finder folder first, then ask Orbit to open its first file");
-      const entries = (await readdir(activeFolderPath, { withFileTypes: true }))
-        .filter(entry => !entry.name.startsWith("."))
-        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-      const first = entries.find(entry => entry.isFile()) || entries[0];
-      if (!first) throw new Error("That Finder folder is empty");
-      const opened = (await shell.openPath(path.join(activeFolderPath, first.name))) === "";
-      return { opened, folder: first.name };
-    }
-    const folder = folders[String(requested).toLowerCase()];
-    if (!folder) throw new Error("Orbit only opens approved home folders");
-    activeFolderPath = path.join(os.homedir(), folder);
-    const opened = (await shell.openPath(activeFolderPath)) === "";
-    return { opened, folder };
-  }));
   ipcMain.handle("orbit:app:launch", (_event, application: string) => traced("app.launch", () => launchApplication(String(application))));
   ipcMain.handle("orbit:github:workflow", (_event, repository?: string) => traced("github.workflow", () => githubWorkflow(repository)));
-  ipcMain.handle("orbit:browser:navigate", (_event, request: { url?: string; query?: string; site?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up" }) => traced("browser.navigate", () => browserNavigate(request || {})));
-  ipcMain.handle("orbit:live:info", (_event, request: { query: string; services?: string[] }) => traced("live.info", () => liveInfo.handle(String(request?.query || ""), request?.services)));
-  ipcMain.handle("orbit:browser:youtube", (_event, query: string) => traced("browser.agent.youtube", () => youtubePlayFirst(String(query || ""))));
-  ipcMain.handle("orbit:browser:amazon", (_event, request: { query: string; maxPrice?: number; minPrice?: number }) => traced("browser.agent.amazon", () => amazonSearchWithPriceFilter(String(request?.query || ""), request?.maxPrice, request?.minPrice)));
-  ipcMain.handle("orbit:browser:describe", () => traced("browser.agent.describe", async () => ({ summary: await describeCurrentPage() })));
-  ipcMain.handle("orbit:browser:summarize", () => traced("browser.agent.summarize", async () => ({ summary: await summarizeCurrentPage() })));
-  ipcMain.handle("orbit:browser:find", (_event, query: string) => traced("browser.agent.find", async () => ({ summary: await findOnPage(String(query || "")) })));
+  ipcMain.handle("orbit:browser:navigate", (_event, request: { url?: string; query?: string; site?: string; sameTab?: boolean }) => traced("browser.navigate", () => browserNavigate(request || {})));
+  ipcMain.handle("orbit:live:weather", () => traced("live.weather", liveWeather));
+  ipcMain.handle("orbit:live:news", () => traced("live.news", liveNews));
+  ipcMain.handle("orbit:live:cricket", () => traced("live.cricket", liveCricket));
   ipcMain.handle("orbit:web:research", (_event, query: string) => traced("web.research", () => research(String(query))));
   ipcMain.handle("orbit:system:battery", () => traced("system.battery", async () => batteryStatus()));
   ipcMain.handle("orbit:screen:describe", (_event, query: string) => traced("screen.describe", () => describeScreen(String(query).slice(0, 500))));
-  ipcMain.handle("orbit:screen:capture", () => traced("screen.capture", takeScreenshot));
   ipcMain.handle("orbit:gemini:status", () => geminiStatus());
   ipcMain.handle("orbit:gemini:configure", (_event, key: string) => traced("gemini.configure", async () => { await saveGeminiKey(String(key)); return geminiStatus(); }));
   ipcMain.handle("orbit:gemini:budget", (_event, value: number) => traced("gemini.budget", async () => { setGeminiBudget(Number(value)); return geminiStatus(); }));
   ipcMain.handle("orbit:voice:speak", (_event, text: string) => { speak(text); return true; });
   ipcMain.handle("orbit:voice:start", () => { startSpeech(); return { started: Boolean(speechProcess) }; });
   ipcMain.handle("orbit:voice:stop", () => { stopSpeech(); return { stopped: true }; });
-  ipcMain.handle("orbit:speech:stop", () => ({ stopped: stopSpeaking() }));
   ipcMain.handle("orbit:voice:arm", () => { armVoice(); return { armed: Boolean(speechProcess) }; });
   ipcMain.handle("orbit:trash", async (_event, paths: string[]) => traced("files.trash", async () => {
     const approval = await dialog.showMessageBox({ type: "warning", buttons: ["Cancel", "Move to Trash"], defaultId: 0, cancelId: 0, title: "Approve reversible cleanup", message: `Move ${Math.min(paths.length, 50)} selected file(s) to Trash?`, detail: "Orbit never permanently deletes these files. They remain recoverable from operating-system Trash." });
@@ -685,9 +510,8 @@ function createWindow() {
   window.on("closed", () => { mainWindow = null; });
 }
 
-app.whenReady().then(async () => {
+app.whenReady().then(() => {
   audit = new AuditStore(path.join(app.getPath("userData"), "orbit-audit.jsonl"));
-  await loadProfile();
   registerIPC(); createWindow();
   globalShortcut.register("CommandOrControl+Shift+Space", armVoice);
   startSpeech();
@@ -695,4 +519,4 @@ app.whenReady().then(async () => {
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
-app.on("will-quit", () => { globalShortcut.unregisterAll(); spokenReply?.kill(); speechProcess?.kill(); });
+app.on("will-quit", () => { globalShortcut.unregisterAll(); speechProcess?.kill(); });

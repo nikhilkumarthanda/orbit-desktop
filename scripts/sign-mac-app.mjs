@@ -1,24 +1,58 @@
 #!/usr/bin/env node
-// electron-builder ships the vendored Electron binary's own ad-hoc signature
-// unchanged when no CSC_LINK/identity is configured - it never reseals the
-// assembled app (real Info.plist, resources, asar) under one signature. That
-// leaves "Sealed Resources=none" / "Info.plist=not bound", which macOS
-// Gatekeeper reports as "<app> is damaged and can't be opened" (a broken-
-// signature error, not the milder "unidentified developer" warning). Re-
-// signing the whole bundle ad-hoc after packaging fixes that: the app is
-// still unsigned by a real Developer ID (so first launch still needs a
-// right-click > Open), but it's no longer reported as damaged.
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
+
+const codesign = (target, entitlements) => {
+  const args = ["--force", "--sign", "-", "--timestamp=none"];
+  if (entitlements) {
+    args.push("--options", "runtime", "--entitlements", entitlements);
+  }
+  args.push(target);
+  execFileSync("/usr/bin/codesign", args, { stdio: "inherit" });
+};
+
+const findNestedCode = (appPath) => {
+  const frameworks = path.join(appPath, "Contents", "Frameworks");
+  if (!fs.existsSync(frameworks)) return [];
+
+  const result = execFileSync("/usr/bin/find", [
+    frameworks,
+    "-depth",
+    "(",
+    "-type", "d", "(",
+    "-name", "*.framework", "-o",
+    "-name", "*.app", "-o",
+    "-name", "*.xpc",
+    ")",
+    "-o",
+    "-type", "f", "(",
+    "-name", "*.dylib", "-o",
+    "-perm", "-111",
+    ")",
+    ")",
+    "-print",
+  ], { encoding: "utf8" });
+
+  return [...new Set(result.split("\n").filter(Boolean))];
+};
 
 export default async function afterSign(context) {
   if (context.electronPlatformName !== "darwin") return;
   const appName = `${context.packager.appInfo.productFilename}.app`;
   const appPath = path.join(context.appOutDir, appName);
   const entitlements = path.join(context.packager.projectDir, "native/macos/OrbitSpeech.entitlements");
+
+  // Electron's vendored frameworks arrive signed by Electron's Developer ID.
+  // Signing only the outer Orbit.app leaves mixed Team IDs and macOS terminates
+  // the process at launch. Re-sign every nested code object deepest-first with
+  // the same ad-hoc identity, then seal the outer app last.
+  for (const target of findNestedCode(appPath)) {
+    codesign(target);
+  }
+  codesign(appPath, entitlements);
+
   execFileSync("/usr/bin/codesign", [
-    "--deep", "--force", "--options", "runtime",
-    "--entitlements", entitlements,
-    "--sign", "-", appPath,
+    "--verify", "--deep", "--strict", "--verbose=4", appPath,
   ], { stdio: "inherit" });
 }

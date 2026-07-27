@@ -59,9 +59,11 @@ jobs:
           test -f "$electron_framework"
           framework_team="$(codesign -dvv "$electron_framework" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
           echo "Ad-hoc signature identities: Orbit='$team_id', Electron Framework='$framework_team'"
-          codesign -d --entitlements :- "$installed_app" 2>/dev/null \
-            | plutil -extract com.apple.security.cs.disable-library-validation raw - \
-            | grep -qx true
+          entitlements_plist="$RUNNER_TEMP/orbit-entitlements.plist"
+          rm -f "$entitlements_plist"
+          codesign -d --entitlements "$entitlements_plist" "$installed_app"
+          test -s "$entitlements_plist"
+          test "$(plutil -extract com.apple.security.cs.disable-library-validation raw "$entitlements_plist")" = "true"
           dyld_info="$(otool -L "$installed_app/Contents/MacOS/Orbit")"
           echo "$dyld_info" | grep -F '@rpath/Electron Framework.framework/Electron Framework'
       - name: Launch app from finished DMG

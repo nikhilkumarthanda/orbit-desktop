@@ -44,8 +44,10 @@ test("macOS packaging signs nested Electron code before Orbit and verifies the r
   assert.match(signer, /"--verify", "--deep", "--strict"/);
   assert.match(workflow, /Verify packaged app signatures/);
   assert.match(workflow, /Verify app from finished DMG/);
+  assert.match(workflow, /Launch app from finished DMG/);
   assert.match(workflow, /codesign --verify --deep --strict/);
-  assert.match(workflow, /DMG contains mixed Team IDs/);
+  assert.match(workflow, /com\.apple\.security\.cs\.disable-library-validation/);
+  assert.match(workflow, /kill -0 "\$orbit_pid"/);
 });
 
 test("preload.cjs (the file Electron actually loads) stays in sync with src/preload/preload.ts", async () => {

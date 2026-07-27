@@ -33,6 +33,19 @@ test("sandbox preload uses a CommonJS context bridge", async () => {
   assert.match(preload, /contextBridge\.exposeInMainWorld\("orbit"/);
 });
 
+test("macOS packaging signs nested Electron code before Orbit and verifies the result", async () => {
+  const fs = await import("node:fs/promises");
+  const signer = await fs.readFile(new URL("../scripts/sign-mac-app.mjs", import.meta.url), "utf8");
+  const workflow = await fs.readFile(new URL("../.github/workflows/release-mac.yml", import.meta.url), "utf8");
+  assert.match(signer, /findNestedCode/);
+  assert.match(signer, /for \(const target of findNestedCode\(appPath\)\)/);
+  assert.ok(signer.indexOf("codesign(target)") < signer.indexOf("codesign(appPath, entitlements)"));
+  assert.doesNotMatch(signer, /"--deep", "--force"/);
+  assert.match(signer, /"--verify", "--deep", "--strict"/);
+  assert.match(workflow, /Verify packaged app signatures/);
+  assert.match(workflow, /codesign --verify --deep --strict/);
+});
+
 test("preload.cjs (the file Electron actually loads) stays in sync with src/preload/preload.ts", async () => {
   // main.ts points webPreferences.preload at the hand-written preload.cjs at
   // the repo root, NOT at anything compiled from src/preload/preload.ts - the

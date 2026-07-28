@@ -70,6 +70,14 @@ test("voice commands cross only registered IPC and typed planner boundaries", as
   assert.doesNotMatch(preload, /child_process|exec\(|spawn\(/);
 });
 
+test("Amazon commands remove navigation filler and preserve spoken price limits", async () => {
+  const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8"));
+  assert.match(source, /function spokenAmazonPrice/);
+  assert.match(source, /two\|three\|four/);
+  assert.match(source, /\(\?:can\|could\|would\)\\s\+you/);
+  assert.match(source, /maxPrice: price\.value/);
+});
+
 test("wake phrase uses a dedicated recognizer before fresh command capture", async () => {
   const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8"));
   assert.match(source, /commands = \["Hey Orbit", "Orbit", "Stop", "Skip"/);

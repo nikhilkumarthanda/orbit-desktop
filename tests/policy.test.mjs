@@ -72,7 +72,7 @@ test("voice commands cross only registered IPC and typed planner boundaries", as
 
 test("wake phrase uses a dedicated recognizer before fresh command capture", async () => {
   const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8"));
-  assert.match(source, /commands = \["Hey Orbit", "Orbit"\]/);
+  assert.match(source, /commands = \["Hey Orbit", "Orbit", "Stop", "Skip"/);
   assert.match(source, /startWakeListening/);
   assert.match(source, /activateCommandCapture/);
   assert.match(source, /requiresOnDeviceRecognition = false/);
@@ -118,7 +118,22 @@ test("browser follow-ups use active site context with safe URL adapters", async 
   assert.match(source, /sameTab/);
   assert.match(source, /input\[type=/);
   assert.match(source, /parsed\.protocol !== "https:"/);
-  assert.match(source, /\["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "weather", "news", "cricket"\]\.includes\(local\.intent\)/);
+  assert.match(source, /\["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "folder", "weather", "news", "cricket"\]\.includes\(local\.intent\)/);
+});
+
+test("browser actions, explicit GitHub routing, weather fallback, and preferred names are reliable", async () => {
+  const fs = await import("node:fs/promises");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  assert.match(main, /browserAction: "play_first"/);
+  assert.match(main, /browserAction: "scroll_down"/);
+  assert.match(main, /youtube\.com\/watch\?v=/);
+  assert.match(main, /Explicit GitHub workflow request matched/);
+  assert.doesNotMatch(renderer, /plan\.intent==="launch"&&plan\.application==="Google Chrome"&&githubRequest/);
+  assert.match(main, /ipapi\.co\/json/);
+  assert.match(main, /geocoding-api\.open-meteo\.com/);
+  assert.match(main, /Preferred name saved locally/);
+  assert.match(main, /profile\.json/);
 });
 
 test("Mac context routes before web research and Gemini keys stay in Keychain", async () => {
@@ -157,7 +172,50 @@ test("Mac context routes before web research and Gemini keys stay in Keychain", 
 test("voice commands tolerate natural pauses before submitting", async () => {
   const speech = await import("node:fs/promises").then(fs => fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8"));
   assert.match(speech, /followupMode \? 30 : 25/);
-  assert.match(speech, /final \? 0\.2 : 1\.8/);
+  assert.match(speech, /followup \? 0\.18 : 0\.55/);
+  assert.match(speech, /endsInFiller \? 5\.0 : \(final \? 3\.0 : 3\.8\)/);
+});
+
+test("phase two interruptions, stale-response cancellation, folders, and Orbit Space are wired", async () => {
+  const fs = await import("node:fs/promises");
+  const speech = await fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  assert.match(speech, /Speech interruption recognized/);
+  assert.match(main, /let spokenReply/);
+  assert.match(main, /orbit:speech:stop/);
+  assert.match(main, /Local folder request matched before browser routing/);
+  assert.match(renderer, /runRef/);
+  assert.match(renderer, /stopSpeaking/);
+  assert.match(renderer, /Orbit Space/);
+});
+
+test("phase two live answers stay relevant and speech is less repetitive", async () => {
+  const fs = await import("node:fs/promises");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  assert.match(main, /function newsTopic/);
+  assert.match(main, /news\.google\.com\/rss\/search\?q=/);
+  assert.match(renderer, /liveNews\(input\)/);
+  assert.match(main, /who won\|winner\|champion\|world cup\|fifa/);
+  assert.match(main, /speak\("Yes\?", false\)/);
+  assert.doesNotMatch(main, /const spoken = named\.toLowerCase\(\)\.includes/);
+  assert.match(main, /"-r", "172"/);
+});
+
+test("phase three clarifies ambiguous FIFA requests and ranks at most two relevant recent stories", async () => {
+  const main = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8"));
+  const gemini = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/main/gemini.ts", import.meta.url), "utf8"));
+  assert.match(main, /FIFA competition is ambiguous/);
+  assert.match(main, /men's World Cup, Women's World Cup, Club World Cup/);
+  assert.match(main, /type RssStory = \{ title: string; publishedAt: number \}/);
+  assert.match(main, /relevance \* 100 - Math\.min\(ageHours, 168\)/);
+  assert.match(main, /topicWords\.every/);
+  assert.match(main, /\.slice\(0, 2\)/);
+  assert.doesNotMatch(main, /rssTitles\(feed, topic \? 2 : 3\)/);
+  assert.doesNotMatch(main, /Local conversation matched/);
+  assert.match(gemini, /Handle casual conversation and long dictated requests conversationally/);
+  assert.match(gemini, /Lead with a short answer suitable for speech/);
 });
 
 test("questions use cited research while notifications never route to news", async () => {

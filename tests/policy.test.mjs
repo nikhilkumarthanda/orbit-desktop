@@ -407,3 +407,18 @@ test("Phase 5 memory is explicit, encrypted, bounded, and confirmation-gated for
   assert.match(main, /confirm forget/);
   assert.match(main, /pendingMemoryDeletion/);
 });
+
+test("Phase 6 validates complete artifacts and gates public releases on Apple signing", async () => {
+  const fs = await import("node:fs/promises");
+  const workflow = await fs.readFile(new URL("../.github/workflows/release-mac.yml", import.meta.url), "utf8");
+  const verifier = await fs.readFile(new URL("../scripts/verify-mac-artifact.mjs", import.meta.url), "utf8");
+  assert.match(workflow, /HAS_APPLE_SIGNING/);
+  assert.match(workflow, /config\.mac\.notarize=true/);
+  assert.match(workflow, /SHA256SUMS\.txt/);
+  assert.match(workflow, /startsWith\(github\.ref, 'refs\/tags\/'\).*HAS_APPLE_SIGNING/);
+  assert.match(verifier, /sidecar\/orbit-speech/);
+  assert.match(verifier, /sidecar\/orbit-retrieval/);
+  assert.match(verifier, /NSMicrophoneUsageDescription/);
+  assert.match(verifier, /codesign/);
+  assert.match(verifier, /spctl/);
+});

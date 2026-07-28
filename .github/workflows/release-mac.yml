@@ -1,14 +1,25 @@
 name: macOS Release
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish a GitHub prerelease (signed builds only)
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
     tags: ["v*"]
+concurrency:
+  group: orbit-macos-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   package:
     runs-on: macos-latest
     permissions:
       contents: write
+    env:
+      HAS_APPLE_SIGNING: ${{ secrets.MAC_CERTIFICATE != '' && secrets.MAC_CERTIFICATE_PASSWORD != '' && secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -22,15 +33,65 @@ jobs:
       - run: python -m pip install pyinstaller
       - run: npm run native:mac
       - run: pyinstaller sidecar/orbit-retrieval.spec --distpath release-sidecar --workpath build/pyinstaller
-      - run: npm run dist:mac
+      - name: Import Apple Developer certificate
+        if: env.HAS_APPLE_SIGNING == 'true'
+        env:
+          MAC_CERTIFICATE: ${{ secrets.MAC_CERTIFICATE }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH="$RUNNER_TEMP/orbit-certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/orbit-signing.keychain-db"
+          echo "$MAC_CERTIFICATE" | base64 --decode > "$CERTIFICATE_PATH"
+          security create-keychain -p "$RUNNER_TEMP" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$RUNNER_TEMP" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$MAC_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$RUNNER_TEMP" "$KEYCHAIN_PATH"
+      - name: Build signed and notarized macOS package
+        if: env.HAS_APPLE_SIGNING == 'true'
+        run: npm run dist:mac -- --config.mac.notarize=true
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Build unsigned internal-test package
+        if: env.HAS_APPLE_SIGNING != 'true'
+        run: npm run dist:mac
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - name: Verify signed package
+        if: env.HAS_APPLE_SIGNING == 'true'
+        run: npm run verify:mac
+      - name: Verify unsigned package contents
+        if: env.HAS_APPLE_SIGNING != 'true'
+        run: npm run verify:mac -- --unsigned
+      - name: Generate SHA-256 checksums
+        run: |
+          cd dist
+          shasum -a 256 *.dmg *.zip > SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && env.HAS_APPLE_SIGNING == 'true'
         with:
-          files: dist/*
+          files: |
+            dist/*.dmg
+            dist/*.zip
+            dist/SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release && env.HAS_APPLE_SIGNING == 'true'
+        with:
+          prerelease: true
+          tag_name: phase-6-${{ github.run_number }}
+          name: Orbit Phase 6 build ${{ github.run_number }}
+          files: |
+            dist/*.dmg
+            dist/*.zip
+            dist/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: Orbit-macOS
-          path: dist/*.dmg
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/SHA256SUMS.txt
           if-no-files-found: error

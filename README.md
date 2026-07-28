@@ -87,7 +87,9 @@ Create a platform package:
 npm run dist
 ```
 
-The macOS release workflow bundles both the Python retrieval engine and native Swift speech helper, so end users do not install Node, npm, Python, or development packages. Packaged builds check GitHub Releases for updates. Tagged builds remain unsigned until Apple Developer signing and notarization credentials are configured.
+The macOS release workflow bundles both the Python retrieval engine and native Swift speech helper, so end users do not install Node, npm, Python, or development packages. Every artifact is inspected for both helpers, privacy metadata, a valid code signature, and SHA-256 checksums. Packaged builds check GitHub Releases for updates.
+
+Public tagged releases are created only when all five Apple credentials are configured: `MAC_CERTIFICATE`, `MAC_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID`. Without them, Actions produces an unsigned internal-test artifact but cannot publish it as a release. Signed builds are notarized and must pass Gatekeeper assessment before publication.
 
 ## Next milestones
 
@@ -97,6 +99,6 @@ The macOS release workflow bundles both the Python retrieval engine and native S
 - Streaming microphone input; native text-to-speech is already implemented
 - GitHub and calendar connectors
 - Agent evaluation suite and prompt-injection tests
-- Apple Developer signing and notarization (packaging workflow is implemented)
+- Apple Developer account enrollment and repository signing-secret configuration
 
 Orbit is an AI-assisted personal project. It is not represented as an operating-system vendor integration or an autonomous unrestricted agent.

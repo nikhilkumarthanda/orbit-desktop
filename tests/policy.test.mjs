@@ -92,13 +92,13 @@ test("microphone can be released and Orbit uses the boss voice persona", async (
   assert.match(planner, /Address the user as Boss/);
 });
 
-test("A+C command deck keeps voice controls in sidebar flow", async () => {
+test("Orbit Space keeps voice controls in sidebar flow", async () => {
   const fs = await import("node:fs/promises");
   const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
   const wake = await fs.readFile(new URL("../src/renderer/wake.css", import.meta.url), "utf8");
   const deck = await fs.readFile(new URL("../src/renderer/command-deck.css", import.meta.url), "utf8");
   assert.match(renderer, /<nav>.*<VoiceConsole\/>/s);
-  assert.match(renderer, /className="command-core"/);
+  assert.match(renderer, /className="orbit-space-page"/);
   assert.doesNotMatch(renderer, /className="orbit-trail/);
   assert.match(deck, /core-orb/);
   assert.doesNotMatch(wake, /\.voice-console\{position:fixed/);
@@ -118,20 +118,21 @@ test("browser follow-ups use active site context with safe URL adapters", async 
   assert.match(source, /sameTab/);
   assert.match(source, /input\[type=/);
   assert.match(source, /parsed\.protocol !== "https:"/);
-  assert.match(source, /\["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "folder", "weather", "news", "cricket"\]\.includes\(local\.intent\)/);
+  assert.match(source, /\["answer", "clarify", "notifications", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"\]\.includes\(local\.intent\)/);
 });
 
 test("browser actions, explicit GitHub routing, weather fallback, and preferred names are reliable", async () => {
   const fs = await import("node:fs/promises");
   const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
   const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  const weatherService = await fs.readFile(new URL("../src/main/live-info/weather-service.ts", import.meta.url), "utf8");
   assert.match(main, /browserAction: "play_first"/);
   assert.match(main, /browserAction: "scroll_down"/);
   assert.match(main, /youtube\.com\/watch\?v=/);
   assert.match(main, /Explicit GitHub workflow request matched/);
   assert.doesNotMatch(renderer, /plan\.intent==="launch"&&plan\.application==="Google Chrome"&&githubRequest/);
-  assert.match(main, /ipapi\.co\/json/);
-  assert.match(main, /geocoding-api\.open-meteo\.com/);
+  assert.match(weatherService, /ipapi\.co\/json/);
+  assert.match(weatherService, /geocoding-api\.open-meteo\.com/);
   assert.match(main, /Preferred name saved locally/);
   assert.match(main, /profile\.json/);
 });
@@ -172,8 +173,8 @@ test("Mac context routes before web research and Gemini keys stay in Keychain", 
 test("voice commands tolerate natural pauses before submitting", async () => {
   const speech = await import("node:fs/promises").then(fs => fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8"));
   assert.match(speech, /followupMode \? 30 : 25/);
-  assert.match(speech, /followup \? 0\.18 : 0\.55/);
-  assert.match(speech, /endsInFiller \? 5\.0 : \(final \? 3\.0 : 3\.8\)/);
+  assert.match(speech, /followup \? 0\.12 : 0\.25/);
+  assert.match(speech, /endsInFiller \? 4\.5 : \(final \? 1\.1 : 1\.6\)/);
 });
 
 test("phase two interruptions, stale-response cancellation, folders, and Orbit Space are wired", async () => {
@@ -190,13 +191,54 @@ test("phase two interruptions, stale-response cancellation, folders, and Orbit S
   assert.match(renderer, /Orbit Space/);
 });
 
+test("screenshot requests use a typed native capture tool instead of general AI", async () => {
+  const fs = await import("node:fs/promises");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  const preload = await fs.readFile(new URL("../preload.cjs", import.meta.url), "utf8");
+  const policy = await fs.readFile(new URL("../src/main/policy.ts", import.meta.url), "utf8");
+  assert.match(main, /Native screenshot request matched/);
+  assert.match(main, /intent: "screenshot"/);
+  assert.match(main, /Orbit Screenshot/);
+  assert.match(main, /orbit:screen:capture/);
+  assert.match(renderer, /plan\.intent==="screenshot"/);
+  assert.match(preload, /takeScreenshot/);
+  assert.match(policy, /screen\.capture/);
+});
+
+test("reliability follow-ups preserve Finder context and recover from stalled actions", async () => {
+  const fs = await import("node:fs/promises");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  const speech = await fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8");
+  assert.match(main, /Active Finder folder action matched/);
+  assert.match(main, /activeFolderPath/);
+  assert.match(main, /lead\|leet/);
+  assert.match(main, /setTimeout\(\(\) => \{ child\.kill\(\); resolve\(false\); \}, 4_000\)/);
+  assert.match(renderer, /That action took too long and was cancelled/);
+  assert.match(renderer, /setNotice\(""\);setSources\(\[\]\);setCommand\(""\)/);
+  assert.match(speech, /followup \? 0\.12 : 0\.25/);
+});
+
+test("Orbit Space is the startup home and diagnostics are a separate view", async () => {
+  const renderer = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8"));
+  assert.match(renderer, /useState<View>\("space"\)/);
+  assert.match(renderer, /\["space","Orbit Space"\]/);
+  assert.match(renderer, /\["diagnostics","Diagnostics"\]/);
+  assert.match(renderer, /<OrbitSpace data=/);
+  assert.match(renderer, /view==="diagnostics"&&<Diagnostics/);
+  assert.doesNotMatch(renderer, /createPortal/);
+  assert.doesNotMatch(renderer, /view==="system"&&<System/);
+});
+
 test("phase two live answers stay relevant and speech is less repetitive", async () => {
   const fs = await import("node:fs/promises");
   const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
   const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
-  assert.match(main, /function newsTopic/);
-  assert.match(main, /news\.google\.com\/rss\/search\?q=/);
-  assert.match(renderer, /liveNews\(input\)/);
+  const newsService = await fs.readFile(new URL("../src/main/live-info/news-service.ts", import.meta.url), "utf8");
+  assert.match(newsService, /function newsTopic/);
+  assert.match(newsService, /news\.google\.com\/rss\/search\?q=/);
+  assert.match(renderer, /liveInfo\(\{query:plan\.query\|\|input/);
   assert.match(main, /who won\|winner\|champion\|world cup\|fifa/);
   assert.match(main, /speak\("Yes\?", false\)/);
   assert.doesNotMatch(main, /const spoken = named\.toLowerCase\(\)\.includes/);
@@ -206,16 +248,31 @@ test("phase two live answers stay relevant and speech is less repetitive", async
 test("phase three clarifies ambiguous FIFA requests and ranks at most two relevant recent stories", async () => {
   const main = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8"));
   const gemini = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/main/gemini.ts", import.meta.url), "utf8"));
+  const news = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/main/live-info/news-service.ts", import.meta.url), "utf8"));
+  const engine = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/main/live-info/engine.ts", import.meta.url), "utf8"));
   assert.match(main, /FIFA competition is ambiguous/);
   assert.match(main, /men's World Cup, Women's World Cup, Club World Cup/);
-  assert.match(main, /type RssStory = \{ title: string; publishedAt: number \}/);
-  assert.match(main, /relevance \* 100 - Math\.min\(ageHours, 168\)/);
-  assert.match(main, /topicWords\.every/);
-  assert.match(main, /\.slice\(0, 2\)/);
-  assert.doesNotMatch(main, /rssTitles\(feed, topic \? 2 : 3\)/);
+  assert.match(news, /relevance \* 100 - Math\.min\(ageHours, 168\)/);
+  assert.match(news, /topicWords\.every/);
+  assert.match(news, /\.slice\(0, 2\)/);
+  assert.match(engine, /one or two relevant, recent headlines/);
   assert.doesNotMatch(main, /Local conversation matched/);
   assert.match(gemini, /Handle casual conversation and long dictated requests conversationally/);
   assert.match(gemini, /Lead with a short answer suitable for speech/);
+});
+
+test("packaged preload exposes every renderer command API", async () => {
+  const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("../preload.cjs", import.meta.url), "utf8"));
+  for (const channel of [
+    "orbit:live:info",
+    "orbit:browser:youtube",
+    "orbit:browser:amazon",
+    "orbit:browser:describe",
+    "orbit:browser:summarize",
+    "orbit:browser:find",
+    "orbit:screen:capture",
+  ]) assert.match(source, new RegExp(channel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(source, /orbit:live:(?:weather|news|cricket)/);
 });
 
 test("questions use cited research while notifications never route to news", async () => {
@@ -273,12 +330,14 @@ test("live briefings use transient macOS location and public read-only sources",
   const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
   const speech = await fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8");
   const pkg = await fs.readFile(new URL("../package.json", import.meta.url), "utf8");
+  const weatherService = await fs.readFile(new URL("../src/main/live-info/weather-service.ts", import.meta.url), "utf8");
+  const newsService = await fs.readFile(new URL("../src/main/live-info/news-service.ts", import.meta.url), "utf8");
   assert.match(speech, /CLLocationManagerDelegate/);
   assert.match(speech, /authorizationStatus == \.authorizedAlways/);
   assert.doesNotMatch(speech, /authorizedWhenInUse/);
   assert.match(speech, /requestWhenInUseAuthorization/);
-  assert.match(main, /api\.open-meteo\.com/);
-  assert.match(main, /news\.google\.com\/rss/);
+  assert.match(weatherService, /api\.open-meteo\.com/);
+  assert.match(newsService, /news\.google\.com\/rss/);
   assert.match(main, /Orbit's location helper/);
   assert.match(pkg, /NSLocationWhenInUseUsageDescription/);
 });

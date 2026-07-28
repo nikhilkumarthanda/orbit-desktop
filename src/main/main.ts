@@ -11,7 +11,16 @@ import { policies, policy } from "./policy.js";
 import { cleanupPlan, gitContexts, recentWork, systemSnapshot } from "./tools.js";
 import { answerWithOllama, ollamaStatus, OLLAMA_MODEL, planWithOllama } from "./ollama.js";
 import { answerWithGemini, geminiKey, geminiStatus, saveGeminiKey, setGeminiBudget } from "./gemini.js";
-import type { CommandPlan, ConversationTurn, GitHubWorkflowStatus, LiveBrief, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
+import { amazonSearchWithPriceFilter, youtubePlayFirst } from "./browser-workflows.js";
+import { describeCurrentPage, findOnPage, summarizeCurrentPage } from "./browser-intelligence.js";
+import { createLiveInformationEngine } from "./live-info/engine.js";
+import { createWeatherService } from "./live-info/weather-service.js";
+import { createNewsService } from "./live-info/news-service.js";
+import { createSportsService } from "./live-info/sports-service.js";
+import { createFinanceService } from "./live-info/finance-service.js";
+import { createCalendarService } from "./live-info/calendar-service.js";
+import { createEmailService } from "./live-info/email-service.js";
+import type { CommandPlan, ConversationTurn, GitHubWorkflowStatus, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let audit: AuditStore;
@@ -23,6 +32,7 @@ const conversation: ConversationTurn[] = [];
 let lastFailureDetail = "";
 let selectedVoice: string | null = null;
 let activeBrowserSite: { name: string; hostname: string; query?: string } | null = null;
+let activeFolderPath: string | null = null;
 let preferredName = "Boss";
 let profilePath = "";
 let locationRequest: { resolve: (value: { latitude: number; longitude: number }) => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null;
@@ -117,19 +127,37 @@ function stopSpeech() {
 
 function armVoice() {
   if (!speechProcess) startSpeech();
-  if (speechProcess) speechProcess.stdin.write("arm\n");
-  else { showListening(); sendVoice("unavailable", { message: "Native speech helper is not available" }); }
+  if (speechProcess?.stdin.writable) {
+    console.log(`[speech] writing "arm" to helper pid=${speechProcess.pid}`);
+    speechProcess.stdin.write("arm\n");
+  } else {
+    console.warn(`[speech] cannot arm: speechProcess=${speechProcess ? `pid ${speechProcess.pid}` : "null"}, stdin.writable=${Boolean(speechProcess?.stdin.writable)}`);
+    showListening();
+    sendVoice("unavailable", { message: "Native speech helper is not available" });
+  }
 }
 
 function startSpeech() {
-  if (process.platform !== "darwin" || speechProcess) return;
+  if (process.platform !== "darwin") { console.log("[speech] startSpeech skipped: not darwin"); return; }
+  if (speechProcess) { console.log(`[speech] startSpeech skipped: already running, pid=${speechProcess.pid}`); return; }
   const bundled = path.join(process.resourcesPath, "sidecar", "orbit-speech");
   const development = path.join(app.getAppPath(), "release-sidecar", "orbit-speech");
-  const binary = existsSync(bundled) ? bundled : development;
-  if (!existsSync(binary)) { sendVoice("unavailable", { message: "Native speech helper is not included in this development build" }); return; }
-  speechProcess = spawn(binary, [], { stdio: ["pipe", "pipe", "pipe"] });
+  const bundledExists = existsSync(bundled);
+  const binary = bundledExists ? bundled : development;
+  console.log(`[speech] resolved binary path: ${binary} (bundled=${bundledExists} at ${bundled}, development exists=${existsSync(development)} at ${development})`);
+  if (!existsSync(binary)) {
+    console.error(`[speech] binary not found at resolved path: ${binary}`);
+    sendVoice("unavailable", { message: "Native speech helper is not included in this development build" });
+    return;
+  }
+  console.log(`[speech] spawning binary: ${binary}`);
+  const child = spawn(binary, [], { stdio: ["pipe", "pipe", "pipe"] });
+  speechProcess = child;
+  console.log(`[speech] spawn() returned, pid=${child.pid ?? "unknown"}`);
+  child.on("spawn", () => console.log(`[speech] spawn confirmed, pid=${child.pid}`));
   let buffered = "";
-  speechProcess.stdout.on("data", chunk => {
+  child.stdout.on("data", chunk => {
+    console.log(`[speech] stdout: ${String(chunk).trim()}`);
     buffered += String(chunk);
     const lines = buffered.split("\n"); buffered = lines.pop() ?? "";
     for (const line of lines) {
@@ -149,13 +177,27 @@ function startSpeech() {
         }
         if (event.type === "interrupt") { stopSpeaking(); continue; }
         sendVoice(event.type, event);
-        if (event.type === "wake") showListening();
+        if (event.type === "wake") { console.log(`[speech] wake event received from helper (mode=${event.mode ?? "unknown"}); transitioning to full recognition`); showListening(); }
         if (event.type === "command" && event.text) mainWindow?.webContents.send("orbit:voice:command", String(event.text));
       } catch { sendVoice("error", { message: "Speech helper returned invalid data" }); }
     }
   });
-  speechProcess.stderr.on("data", chunk => sendVoice("error", { message: String(chunk).trim() }));
-  speechProcess.on("close", () => { speechProcess = null; sendVoice("stopped"); });
+  child.stderr.on("data", chunk => {
+    console.error(`[speech] stderr: ${String(chunk).trim()}`);
+    sendVoice("error", { message: String(chunk).trim() });
+  });
+  child.stdin.on("error", err => console.error(`[speech] stdin write error: ${err instanceof Error ? err.message : String(err)}`));
+  child.on("error", err => {
+    console.error(`[speech] spawn/runtime error: ${err instanceof Error ? err.stack || err.message : String(err)}`);
+    if (speechProcess === child) speechProcess = null;
+    sendVoice("unavailable", { message: `Speech helper failed to start: ${err instanceof Error ? err.message : String(err)}` });
+  });
+  child.on("exit", (code, signal) => console.log(`[speech] exit event: code=${code} signal=${signal}`));
+  child.on("close", (code, signal) => {
+    console.log(`[speech] close event: code=${code} signal=${signal}, pid was ${child.pid}`);
+    if (speechProcess === child) speechProcess = null;
+    sendVoice("stopped");
+  });
 }
 
 function retrieve(request: Record<string, unknown>): Promise<any> {
@@ -176,22 +218,56 @@ function retrieve(request: Record<string, unknown>): Promise<any> {
 }
 
 function planLocal(value: string): CommandPlan {
-  const command = value.trim().toLowerCase().replace(/\b(?:git|get)\s+hub\b/g, "github").replace(/\bgethub\b/g, "github");
+  const command = value.trim().toLowerCase()
+    .replace(/\b(?:git|get)\s+hub\b/g, "github")
+    .replace(/\bgethub\b/g, "github")
+    .replace(/\b(?:lead|leet)\s+code\b/g, "leetcode");
   if (/\b(brief|explain|tell me more|what happened)\b/.test(command) && lastFailureDetail) return { intent: "answer", confidence: 1, explanation: "Previous error briefing", reply: `Boss, the previous operation failed because ${lastFailureDetail}. I can retry when you're ready.`, query: value, source: "local" };
   if (/^(hi|hello|hey|good (morning|afternoon|evening))( orbit)?[!.?]*$/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local greeting matched", reply: "Yes, boss? At your service.", query: value, source: "local" };
   if (/\b(notifications?|notification center|alerts?)\b/.test(command)) return { intent: "notifications", confidence: 1, explanation: "Mac notification request matched", reply: "I can’t read Notification Center yet, boss. I won’t substitute news headlines for your notifications.", query: value, source: "local" };
   if (/\b(?:what(?:'s| is)?|check|tell me|show me)?\s*(?:my|the)?\s*battery(?:\s+(?:level|percentage|status))?\b/.test(command)) return { intent: "battery", confidence: 1, explanation: "Native battery request matched", query: value, source: "local" };
+  if (/\b(?:take|capture|save|make|grab)\b(?:\s+(?:a|the|my|this|current|full))?\s*(?:screen\s*shot|screenshot)\b|\b(?:screen\s*shot|screenshot)\s+(?:this|that|now|please)\b/.test(command)) return { intent: "screenshot", confidence: 1, explanation: "Native screenshot request matched", query: value, source: "local" };
   if (/\b(?:what(?:'s| is) on|describe|read|analy[sz]e|look at|see)\s+(?:my|the|this|current)?\s*screen\b|\bscreen\s*(?:right now|now)\b/.test(command)) return { intent: "screen", confidence: 1, explanation: "Native screen request matched", query: value, source: "local" };
   if (/^(?:what(?:'s| is| are)?|any|give me|tell me)(?: the)? (?:new )?updates?[?.!]*$/.test(command)) return { intent: "clarify", confidence: 1, explanation: "Update topic is ambiguous", reply: "Which updates do you mean, boss—your notifications, news, weather, cricket, GitHub, or something else?", query: value, source: "local" };
   if (/^(?:who\s+won|who(?:'s| is)\s+the\s+(?:winner|champion)\s+of)\s+(?:the\s+)?fifa[?.!]*$/.test(command)) return { intent: "clarify", confidence: 1, explanation: "FIFA competition is ambiguous", reply: "Which FIFA competition do you mean, boss—the men's World Cup, Women's World Cup, Club World Cup, or another tournament?", query: value, source: "local" };
-  if (/\b(weather|temperature|forecast)\b/.test(command)) return { intent: "weather", confidence: 1, explanation: "Live weather request matched", query: value, source: "local" };
-  if (/\b(cricket|ipl|test match)\b.*\b(score|scores|result|match|update|live)\b|\b(score|scores)\b.*\b(cricket|ipl)\b/.test(command)) return { intent: "cricket", confidence: 1, explanation: "Live cricket request matched", query: value, source: "local" };
-  if (/\b(news|headlines|top stories|world update)\b/.test(command)) return { intent: "news", confidence: 1, explanation: "Live news request matched", query: value, source: "local" };
+  if (/\b(?:what'?s|what is)\s+happening\s+today\b|\bcatch me up\b|\b(?:morning|daily) briefing\b/.test(command)) return { intent: "daily_brief", confidence: 1, explanation: "Composite daily briefing request matched", query: value, liveServices: ["weather", "news", "calendar", "email"], source: "local" };
+  if (/\b(weather|temperature|forecast|rain|raining|umbrella|snow|humid)\b/.test(command)) return { intent: "weather", confidence: 1, explanation: "Live weather request matched", query: value, liveServices: ["weather"], source: "local" };
+  if (/\b(cricket|ipl|test match)\b.*\b(score|scores|result|match|update|live)\b|\b(score|scores)\b.*\b(cricket|ipl)\b/.test(command)) return { intent: "cricket", confidence: 1, explanation: "Live cricket request matched", query: value, liveServices: ["sports"], source: "local" };
+  if (/\b(fifa|world cup|premier league|champions league|soccer)\b.*\b(score|scores|result|match|final|winner|won|update|live)\b|\b(score|scores|result|winner)\b.*\b(fifa|world cup|soccer)\b/.test(command)) return { intent: "soccer", confidence: 1, explanation: "Live soccer/FIFA request matched", query: value, liveServices: ["sports"], source: "local" };
+  if (/\b(news|headlines|top stories|world update)\b/.test(command)) return { intent: "news", confidence: 1, explanation: "Live news request matched", query: value, liveServices: ["news"], source: "local" };
+  if (/\b(stock|shares?|ticker|market cap|share price|trading at)\b/.test(command)) return { intent: "finance", confidence: 1, explanation: "Live finance request matched", query: value, liveServices: ["finance"], source: "local" };
   if (/\bgithub\b/.test(command) && /\b(workflow|actions?|deployment|ci|build (?:status|run)|check (?:the )?(?:workflow|actions?|deployment|ci|build))\b/.test(command)) return { intent: "github", confidence: .99, explanation: "Explicit GitHub workflow request matched", repository: "nikhilkumarthanda/orbit-desktop", query: value, source: "local" };
   const folderMatch = command.match(/\b(?:open|show|go to)\s+(?:my\s+|the\s+)?(documents?|downloads?|desktop|projects?|developer)(?:\s+folder)?\b/);
   if (folderMatch) {
     const folder = ({ document: "Documents", documents: "Documents", download: "Downloads", downloads: "Downloads", desktop: "Desktop", project: "Projects", projects: "Projects", developer: "Developer" } as Record<string, string>)[folderMatch[1]];
     return { intent: "folder", confidence: 1, explanation: "Local folder request matched before browser routing", folder, reply: `Opening ${folder}.`, query: value, source: "local" };
+  }
+  if (/^(?:please )?(?:open|launch|select)\s+(?:the\s+)?(?:first|1st)\s+file[.!]*$/.test(command)) {
+    return { intent: "folder", confidence: 1, explanation: "Active Finder folder action matched", folder: "__first__", reply: "Opening the first file.", query: value, source: "local" };
+  }
+  if (/\byoutube\b/.test(command) && /\bplay\b/.test(command) && !/\b(?:first|1st)\b.*\b(?:video|result)\b/.test(command)) {
+    const query = command.replace(/\bopen\s+youtube\b/g, "").replace(/\byoutube\b/g, "").replace(/\bplay\b/g, "").replace(/\band\b/g, "").replace(/\bon\b/g, "").replace(/\s+/g, " ").trim();
+    return { intent: "youtube_play", confidence: 1, explanation: "Single-shot YouTube play request matched", query: query || value, source: "local" };
+  }
+  if (/\bamazon\b/.test(command) && /\b(search|find|look for|buy|shop for)\b/.test(command)) {
+    const priceMatch = command.match(/\b(?:under|below|less than)\s*\$?\s*(\d+(?:\.\d+)?)/);
+    const query = command
+      .replace(/\b(search|find|look for|buy|shop for)\b/g, "")
+      .replace(/\bamazon\b/g, "")
+      .replace(/\bfor\b/g, "")
+      .replace(/\b(?:under|below|less than)\s*\$?\s*\d+(?:\.\d+)?\b/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    return { intent: "amazon_search", confidence: 1, explanation: "Amazon search with optional price filter matched", query: query || value, maxPrice: priceMatch ? Number(priceMatch[1]) : undefined, source: "local" };
+  }
+  if (/\b(?:what'?s|what is)\s+on\s+this\s+page\b|\bdescribe\s+(?:this|the)\s+page\b|\bwhat\s+(?:page|site)\s+is\s+this\b/.test(command)) return { intent: "page_describe", confidence: 1, explanation: "Page description request matched", query: value, source: "local" };
+  if (/\bsummarize\s+(?:this|the)\s+(?:article|page|story)\b/.test(command)) return { intent: "page_summarize", confidence: 1, explanation: "Page summarization request matched", query: value, source: "local" };
+  {
+    const findMatch = command.match(/\bwhich\s+button\s+(.+)|\bwhere\s+is\s+the\s+(.+?)\s+button\b|\bfind\s+the\s+(.+?)\s+(?:button|link)\b/);
+    if (findMatch) {
+      const target = (findMatch[1] || findMatch[2] || findMatch[3] || "").trim();
+      return { intent: "page_find", confidence: 1, explanation: "Page element lookup request matched", query: target || value, source: "local" };
+    }
   }
   if (/\b(?:play|open|select|click)\b.*\b(?:first|1st)\b.*\b(?:video|result)\b/.test(command)) return { intent: "browser", confidence: 1, explanation: "Active YouTube result action matched", browserAction: "play_first", sameTab: true, source: "local" };
   if (/^(?:please )?(?:scroll|page)\s+(?:down|lower)(?:\s+(?:a little|more))?[.!]*$/.test(command)) return { intent: "browser", confidence: 1, explanation: "Active page scroll matched", browserAction: "scroll_down", sameTab: true, source: "local" };
@@ -235,7 +311,7 @@ async function planCommand(value: string) {
   }
   const local = planLocal(value);
   if (local.reply) local.reply = personalize(local.reply);
-  if (["answer", "clarify", "notifications", "battery", "screen", "research", "browser", "github", "folder", "weather", "news", "cricket"].includes(local.intent)) return local;
+  if (["answer", "clarify", "notifications", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"].includes(local.intent)) return local;
   const status = await ollamaStatus();
   if (!status.available) return local;
   try {
@@ -331,8 +407,10 @@ end run`;
     const scrolled = await new Promise<boolean>(resolve => {
       const child = spawn("/usr/bin/osascript", ["-e", script, javascript], { stdio: ["ignore", "pipe", "ignore"] });
       let output = "";
+      const timer = setTimeout(() => { child.kill(); resolve(false); }, 4_000);
       child.stdout.on("data", chunk => { output += String(chunk); });
-      child.once("close", code => resolve(code === 0 && output.trim() === "SCROLLED")); child.once("error", () => resolve(false));
+      child.once("close", code => { clearTimeout(timer); resolve(code === 0 && output.trim() === "SCROLLED"); });
+      child.once("error", () => { clearTimeout(timer); resolve(false); });
     });
     if (!scrolled) {
       const keyCode = request.browserAction === "scroll_down" ? "121" : "116";
@@ -401,116 +479,31 @@ async function launchApplication(application: string) {
 
 function currentLocation(): Promise<{ latitude: number; longitude: number }> {
   if (process.platform !== "darwin") return Promise.reject(new Error("Local weather location is currently available on macOS only"));
-  if (!speechProcess) startSpeech();
-  if (!speechProcess?.stdin.writable) return Promise.reject(new Error("Orbit's location helper is unavailable"));
   if (locationRequest) return Promise.reject(new Error("A location request is already in progress"));
+  const wasRunning = Boolean(speechProcess);
+  if (!speechProcess) startSpeech();
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { locationRequest = null; reject(new Error("Location permission timed out. Check macOS Location Services for Orbit.")); }, 15_000);
-    locationRequest = { resolve, reject, timer };
-    speechProcess!.stdin.write("location\n");
+    const send = () => {
+      if (!speechProcess?.stdin.writable) { reject(new Error("Orbit's location helper is unavailable")); return; }
+      const timer = setTimeout(() => { locationRequest = null; reject(new Error("Location permission timed out. Check macOS Location Services for Orbit.")); }, 15_000);
+      locationRequest = { resolve, reject, timer };
+      speechProcess!.stdin.write("location\n");
+    };
+    // A freshly spawned helper's stdin pipe can take a tick to become writable;
+    // give it a short grace period instead of failing on the very first request.
+    if (wasRunning || speechProcess?.stdin.writable) send();
+    else setTimeout(send, 400);
   });
 }
 
-const weatherDescriptions: Record<number, string> = {
-  0: "clear skies", 1: "mainly clear skies", 2: "partly cloudy skies", 3: "overcast skies", 45: "fog", 48: "freezing fog",
-  51: "light drizzle", 53: "drizzle", 55: "heavy drizzle", 61: "light rain", 63: "rain", 65: "heavy rain", 71: "light snow",
-  73: "snow", 75: "heavy snow", 80: "light rain showers", 81: "rain showers", 82: "heavy rain showers", 95: "thunderstorms",
-};
-
-async function geocodeWeatherPlace(place: string) {
-  const endpoint = new URL("https://geocoding-api.open-meteo.com/v1/search");
-  endpoint.search = new URLSearchParams({ name: place, count: "1", language: "en", format: "json" }).toString();
-  const response = await fetch(endpoint, { signal: AbortSignal.timeout(8_000) });
-  const result = (await response.json() as { results?: Array<{ latitude: number; longitude: number; name: string; admin1?: string }> }).results?.[0];
-  if (!result) throw new Error(`I couldn't find weather for ${place}`);
-  return { latitude: result.latitude, longitude: result.longitude, label: [result.name, result.admin1].filter(Boolean).join(", ") };
-}
-
-async function weatherLocation(query = "") {
-  const place = query.match(/\b(?:weather|temperature|forecast)(?:\s+(?:right now|today|now))?\s+(?:in|for|at)\s+(.+?)[?.!]*$/i)?.[1]?.trim();
-  if (place) return geocodeWeatherPlace(place);
-  try { return { ...(await currentLocation()), label: "your location" }; }
-  catch {
-    const response = await fetch("https://ipapi.co/json/", { headers: { "User-Agent": "Orbit-Desktop" }, signal: AbortSignal.timeout(8_000) });
-    if (!response.ok) throw new Error(`Location is unavailable. Ask me "weather in Houston" or another city.`);
-    const data = await response.json() as { latitude?: number; longitude?: number; city?: string; region?: string };
-    if (data.latitude == null || data.longitude == null) throw new Error(`Location is unavailable. Ask me "weather in Houston" or another city.`);
-    return { latitude: data.latitude, longitude: data.longitude, label: [data.city, data.region].filter(Boolean).join(", ") || "your area" };
-  }
-}
-
-async function liveWeather(query = ""): Promise<LiveBrief> {
-  const { latitude, longitude, label } = await weatherLocation(query);
-  const endpoint = new URL("https://api.open-meteo.com/v1/forecast");
-  endpoint.search = new URLSearchParams({ latitude: String(latitude), longitude: String(longitude), current: "temperature_2m,apparent_temperature,weather_code,wind_speed_10m", temperature_unit: "fahrenheit", wind_speed_unit: "mph", timezone: "auto" }).toString();
-  const response = await fetch(endpoint, { signal: AbortSignal.timeout(8_000) });
-  if (!response.ok) throw new Error("The weather service is temporarily unavailable");
-  const data = await response.json() as { current?: { temperature_2m?: number; apparent_temperature?: number; weather_code?: number; wind_speed_10m?: number; time?: string } };
-  const current = data.current;
-  if (current?.temperature_2m == null) throw new Error("The weather service returned incomplete conditions");
-  const condition = weatherDescriptions[current.weather_code ?? -1] || "current conditions";
-  const summary = `${address()}, in ${label} it is ${Math.round(current.temperature_2m)} degrees with ${condition}. It feels like ${Math.round(current.apparent_temperature ?? current.temperature_2m)} degrees, with winds around ${Math.round(current.wind_speed_10m ?? 0)} miles per hour.`;
-  return { summary, source: "Open-Meteo", updatedAt: current.time || new Date().toISOString() };
-}
-
-function decodeXml(value: string) {
-  return value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/&amp;/g, "&").replace(/&quot;/g, "\"").replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/<[^>]+>/g, "").trim();
-}
-
-type RssStory = { title: string; publishedAt: number };
-
-async function rssStories(url: string, limit: number) {
-  const response = await fetch(url, { headers: { "User-Agent": "Orbit-Desktop/0.7" }, signal: AbortSignal.timeout(8_000) });
-  if (!response.ok) throw new Error(`The live source returned status ${response.status}`);
-  const xml = await response.text();
-  return [...xml.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item>/gi)]
-    .map(match => {
-      const item = match[1];
-      const title = decodeXml(item.match(/<title>([\s\S]*?)<\/title>/i)?.[1] || "");
-      const publishedAt = Date.parse(decodeXml(item.match(/<pubDate>([\s\S]*?)<\/pubDate>/i)?.[1] || "")) || 0;
-      return { title, publishedAt };
-    })
-    .filter(story => story.title)
-    .slice(0, limit);
-}
-
-async function rssTitles(url: string, limit: number) {
-  return (await rssStories(url, limit)).map(story => story.title);
-}
-
-function newsTopic(query = "") {
-  return query.match(/\b(?:news|headlines?|updates?|stories)\s+(?:about|on|for)\s+(.+?)[?.!]*$/i)?.[1]?.trim() || "";
-}
-
-async function liveNews(query = ""): Promise<LiveBrief> {
-  const topic = newsTopic(query);
-  const feed = topic
-    ? `https://news.google.com/rss/search?q=${encodeURIComponent(topic)}&hl=en-US&gl=US&ceid=US:en`
-    : "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en";
-  const topicWords = topic.toLowerCase().split(/\W+/).filter(word => word.length > 2);
-  const stories = await rssStories(feed, 12);
-  const ranked = stories
-    .map((story, index) => {
-      const title = story.title.toLowerCase();
-      const relevance = topicWords.reduce((score, word) => score + (title.includes(word) ? 1 : 0), 0);
-      const ageHours = story.publishedAt ? Math.max(0, (Date.now() - story.publishedAt) / 3_600_000) : 168;
-      return { ...story, score: relevance * 100 - Math.min(ageHours, 168) - index * 0.01 };
-    })
-    .filter(story => !topicWords.length || topicWords.every(word => story.title.toLowerCase().includes(word)))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 2);
-  if (!ranked.length) throw new Error(topic ? `No current, relevant news about ${topic} was available` : "No current headlines were available");
-  const clean = ranked.map(story => story.title.replace(/\s+-\s+[^-]+$/, ""));
-  const lead = topic ? `the latest relevant news about ${topic} is` : "today's top headlines are";
-  return { summary: `${address()}, ${lead}: ${clean.map((title, index) => `${index + 1}, ${title}`).join(". ")}.`, source: "Google News RSS", updatedAt: new Date().toISOString() };
-}
-
-async function liveCricket(): Promise<LiveBrief> {
-  const titles = await rssTitles("https://news.google.com/rss/search?q=live%20cricket%20score&hl=en-US&gl=US&ceid=US:en", 3);
-  if (!titles.length) throw new Error("I couldn't verify a current cricket score right now");
-  const update = titles.find(title => /\b(?:\d+\/\d+|won by|live score|runs?|wickets?)\b/i.test(title)) || titles[0];
-  return { summary: `${address()}, the latest cricket update I can verify is: ${update.replace(/\s+-\s+[^-]+$/, "")}.`, source: "Google News RSS", updatedAt: new Date().toISOString() };
-}
+const liveInfo = createLiveInformationEngine([
+  createWeatherService(currentLocation),
+  createNewsService(),
+  createSportsService(),
+  createFinanceService(),
+  createCalendarService(),
+  createEmailService(),
+]);
 
 function decodeHtml(value: string) {
   return value.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, "\"").replace(/&#x27;|&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ").trim();
@@ -571,13 +564,27 @@ function batteryStatus() {
   return { percentage, charging, timeRemaining, summary };
 }
 
-async function describeScreen(query: string): Promise<ResearchAnswer> {
-  if (!geminiKey()) throw new Error("Add your free Gemini API key in Settings before using screen understanding");
+async function capturePrimaryScreen() {
   const display = screen.getPrimaryDisplay();
   const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: display.size, fetchWindowIcons: false });
   const capture = sources.find(source => source.display_id === String(display.id)) || sources[0];
   if (!capture || capture.thumbnail.isEmpty()) throw new Error("Orbit could not capture the screen. Allow Screen Recording in System Settings → Privacy & Security.");
-  const answer = personalize(await answerWithGemini({ query: query || "Describe what is visible on my screen", history: conversation, imageBase64: capture.thumbnail.toPNG().toString("base64") }));
+  return capture.thumbnail.toPNG();
+}
+
+async function takeScreenshot() {
+  const png = await capturePrimaryScreen();
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const target = path.join(app.getPath("desktop"), `Orbit Screenshot ${stamp}.png`);
+  await writeFile(target, png);
+  shell.showItemInFolder(target);
+  return { saved: true, path: target, summary: `Screenshot saved to Desktop as ${path.basename(target)}.` };
+}
+
+async function describeScreen(query: string): Promise<ResearchAnswer> {
+  if (!geminiKey()) throw new Error("Add your free Gemini API key in Settings before using screen understanding");
+  const png = await capturePrimaryScreen();
+  const answer = personalize(await answerWithGemini({ query: query || "Describe what is visible on my screen", history: conversation, imageBase64: png.toString("base64") }));
   const spokenAnswer = answer.replace(/\s+/g, " ").slice(0, 470).trim();
   conversation.push({ role: "user", content: query }, { role: "assistant", content: answer });
   return { answer, spokenAnswer, sources: [], updatedAt: new Date().toISOString() };
@@ -618,20 +625,35 @@ function registerIPC() {
   }));
   ipcMain.handle("orbit:folder:open", (_event, requested: string) => traced("files.open", async () => {
     const folders: Record<string, string> = { documents: "Documents", downloads: "Downloads", desktop: "Desktop", projects: "Projects", developer: "Developer" };
+    if (requested === "__first__") {
+      if (!activeFolderPath) throw new Error("Open a Finder folder first, then ask Orbit to open its first file");
+      const entries = (await readdir(activeFolderPath, { withFileTypes: true }))
+        .filter(entry => !entry.name.startsWith("."))
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      const first = entries.find(entry => entry.isFile()) || entries[0];
+      if (!first) throw new Error("That Finder folder is empty");
+      const opened = (await shell.openPath(path.join(activeFolderPath, first.name))) === "";
+      return { opened, folder: first.name };
+    }
     const folder = folders[String(requested).toLowerCase()];
     if (!folder) throw new Error("Orbit only opens approved home folders");
-    const opened = (await shell.openPath(path.join(os.homedir(), folder))) === "";
+    activeFolderPath = path.join(os.homedir(), folder);
+    const opened = (await shell.openPath(activeFolderPath)) === "";
     return { opened, folder };
   }));
   ipcMain.handle("orbit:app:launch", (_event, application: string) => traced("app.launch", () => launchApplication(String(application))));
   ipcMain.handle("orbit:github:workflow", (_event, repository?: string) => traced("github.workflow", () => githubWorkflow(repository)));
   ipcMain.handle("orbit:browser:navigate", (_event, request: { url?: string; query?: string; site?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up" }) => traced("browser.navigate", () => browserNavigate(request || {})));
-  ipcMain.handle("orbit:live:weather", (_event, query?: string) => traced("live.weather", () => liveWeather(String(query || ""))));
-  ipcMain.handle("orbit:live:news", (_event, query?: string) => traced("live.news", () => liveNews(String(query || ""))));
-  ipcMain.handle("orbit:live:cricket", () => traced("live.cricket", liveCricket));
+  ipcMain.handle("orbit:live:info", (_event, request: { query: string; services?: string[] }) => traced("live.info", () => liveInfo.handle(String(request?.query || ""), request?.services)));
+  ipcMain.handle("orbit:browser:youtube", (_event, query: string) => traced("browser.agent.youtube", () => youtubePlayFirst(String(query || ""))));
+  ipcMain.handle("orbit:browser:amazon", (_event, request: { query: string; maxPrice?: number; minPrice?: number }) => traced("browser.agent.amazon", () => amazonSearchWithPriceFilter(String(request?.query || ""), request?.maxPrice, request?.minPrice)));
+  ipcMain.handle("orbit:browser:describe", () => traced("browser.agent.describe", async () => ({ summary: await describeCurrentPage() })));
+  ipcMain.handle("orbit:browser:summarize", () => traced("browser.agent.summarize", async () => ({ summary: await summarizeCurrentPage() })));
+  ipcMain.handle("orbit:browser:find", (_event, query: string) => traced("browser.agent.find", async () => ({ summary: await findOnPage(String(query || "")) })));
   ipcMain.handle("orbit:web:research", (_event, query: string) => traced("web.research", () => research(String(query))));
   ipcMain.handle("orbit:system:battery", () => traced("system.battery", async () => batteryStatus()));
   ipcMain.handle("orbit:screen:describe", (_event, query: string) => traced("screen.describe", () => describeScreen(String(query).slice(0, 500))));
+  ipcMain.handle("orbit:screen:capture", () => traced("screen.capture", takeScreenshot));
   ipcMain.handle("orbit:gemini:status", () => geminiStatus());
   ipcMain.handle("orbit:gemini:configure", (_event, key: string) => traced("gemini.configure", async () => { await saveGeminiKey(String(key)); return geminiStatus(); }));
   ipcMain.handle("orbit:gemini:budget", (_event, value: number) => traced("gemini.budget", async () => { setGeminiBudget(Number(value)); return geminiStatus(); }));

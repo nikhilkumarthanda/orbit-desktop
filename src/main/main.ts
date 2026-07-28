@@ -217,6 +217,30 @@ function retrieve(request: Record<string, unknown>): Promise<any> {
   });
 }
 
+function spokenAmazonPrice(command: string): { value?: number; phrase?: string } {
+  const numeric = command.match(/\b(?:under|below|less than)\s*\$?\s*(\d+(?:\.\d+)?)/);
+  if (numeric) return { value: Number(numeric[1]), phrase: numeric[0] };
+
+  // Speech recognition commonly transcribes "$250" as "two fifty" or
+  // "two hundred fifty". Support the useful shopping range without asking a
+  // language model to guess a price.
+  const compact = command.match(/\b(?:under|below|less than)\s+(one|two|three|four|five|six|seven|eight|nine)\s+(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\b/);
+  if (compact) {
+    const hundreds: Record<string, number> = { one: 100, two: 200, three: 300, four: 400, five: 500, six: 600, seven: 700, eight: 800, nine: 900 };
+    const remainder: Record<string, number> = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+    return { value: hundreds[compact[1]] + remainder[compact[2]], phrase: compact[0] };
+  }
+
+  const explicit = command.match(/\b(?:under|below|less than)\s+(one|two|three|four|five|six|seven|eight|nine)\s+hundred(?:\s+(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety))?\b/);
+  if (explicit) {
+    const hundreds: Record<string, number> = { one: 100, two: 200, three: 300, four: 400, five: 500, six: 600, seven: 700, eight: 800, nine: 900 };
+    const remainder: Record<string, number> = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+    return { value: hundreds[explicit[1]] + (explicit[2] ? remainder[explicit[2]] : 0), phrase: explicit[0] };
+  }
+
+  return {};
+}
+
 function planLocal(value: string): CommandPlan {
   const command = value.trim().toLowerCase()
     .replace(/\b(?:git|get)\s+hub\b/g, "github")
@@ -250,15 +274,18 @@ function planLocal(value: string): CommandPlan {
     return { intent: "youtube_play", confidence: 1, explanation: "Single-shot YouTube play request matched", query: query || value, source: "local" };
   }
   if (/\bamazon\b/.test(command) && /\b(search|find|look for|buy|shop for)\b/.test(command)) {
-    const priceMatch = command.match(/\b(?:under|below|less than)\s*\$?\s*(\d+(?:\.\d+)?)/);
+    const price = spokenAmazonPrice(command);
     const query = command
       .replace(/\b(search|find|look for|buy|shop for)\b/g, "")
       .replace(/\bamazon\b/g, "")
       .replace(/\bfor\b/g, "")
-      .replace(/\b(?:under|below|less than)\s*\$?\s*\d+(?:\.\d+)?\b/g, "")
+      .replace(price.phrase || /\b(?:under|below|less than)\s*\$?\s*\d+(?:\.\d+)?\b/g, "")
+      .replace(/^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:open|go to|visit)\b/, "")
+      .replace(/^(?:please\s+)?(?:can|could|would)\s+you\b/, "")
+      .replace(/^\s*(?:and|then)\b/, "")
       .replace(/\s+/g, " ")
       .trim();
-    return { intent: "amazon_search", confidence: 1, explanation: "Amazon search with optional price filter matched", query: query || value, maxPrice: priceMatch ? Number(priceMatch[1]) : undefined, source: "local" };
+    return { intent: "amazon_search", confidence: 1, explanation: "Amazon search with optional price filter matched", query: query || value, maxPrice: price.value, source: "local" };
   }
   if (/\b(?:what'?s|what is)\s+on\s+this\s+page\b|\bdescribe\s+(?:this|the)\s+page\b|\bwhat\s+(?:page|site)\s+is\s+this\b/.test(command)) return { intent: "page_describe", confidence: 1, explanation: "Page description request matched", query: value, source: "local" };
   if (/\bsummarize\s+(?:this|the)\s+(?:article|page|story)\b/.test(command)) return { intent: "page_summarize", confidence: 1, explanation: "Page summarization request matched", query: value, source: "local" };

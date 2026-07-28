@@ -45,14 +45,14 @@ function App(){
     if(run!==runRef.current)return;
     if(plan.intent==="unknown"){const message="Boss, I couldn't safely map that request. Would you like help rephrasing it?";setError(message);await window.orbit.speak(message);return}
     setCommand("");
-    if(plan.intent==="answer"||plan.intent==="clarify"||plan.intent==="notifications"){const reply=plan.reply||plan.explanation;setNotice(reply);await window.orbit.speak(reply);return}
+    if(plan.intent==="answer"||plan.intent==="clarify"||plan.intent==="notifications"||plan.intent==="memory"){const reply=plan.reply||plan.explanation;setNotice(reply);await window.orbit.speak(reply);return}
     if(plan.intent==="research"){const result=await window.orbit.research(plan.query||input);if(run!==runRef.current)return;setNotice(result.answer);setSources(result.sources);setStage("success");await window.orbit.speak(result.spokenAnswer);return}
     if(plan.intent==="battery"){const result=await window.orbit.batteryStatus();if(run!==runRef.current)return;setNotice(result.summary);setStage("success");await window.orbit.speak(result.summary);return}
     if(plan.intent==="screenshot"){const result=await window.orbit.takeScreenshot();if(run!==runRef.current)return;setNotice(result.summary);setStage("success");await window.orbit.speak(result.summary);return}
     if(plan.intent==="screen"){const result=await window.orbit.describeScreen(plan.query||input);if(run!==runRef.current)return;setNotice(result.answer);setStage("success");await window.orbit.speak(result.spokenAnswer);return}
     setStage("executing");
     if(plan.intent==="github"){const result=await window.orbit.githubWorkflow(plan.repository);if(run!==runRef.current)return;setStage("success");setNotice(result.summary);await window.orbit.speak(result.summary);return}
-    if(plan.intent==="browser"){const result=await window.orbit.browserNavigate({url:plan.url,query:plan.query,sameTab:plan.sameTab,browserAction:plan.browserAction});if(run!==runRef.current)return;setStage("success");setNotice(result.summary);await window.orbit.speak(result.summary);return}
+    if(plan.intent==="browser"){const result=await window.orbit.browserNavigate({url:plan.url,query:plan.query,sameTab:plan.sameTab,browserAction:plan.browserAction,resultIndex:plan.resultIndex});if(run!==runRef.current)return;setStage("success");setNotice(result.summary);await window.orbit.speak(result.summary);return}
     if(plan.intent==="folder"){const result=await window.orbit.openFolder(plan.folder||"");if(run!==runRef.current)return;setStage("success");setNotice(result.opened?`${result.folder} opened in Finder.`:`${result.folder} could not be opened.`);await window.orbit.speak(plan.reply||`Opening ${result.folder}.`);return}
     if(plan.intent==="weather"||plan.intent==="news"||plan.intent==="cricket"||plan.intent==="soccer"||plan.intent==="finance"||plan.intent==="daily_brief"){const result=await window.orbit.liveInfo({query:plan.query||input,services:plan.liveServices});if(run!==runRef.current)return;setStage("success");setNotice(`${result.summary} · Source: ${result.source}`);await window.orbit.speak(result.summary);return}
     if(plan.intent==="youtube_play"){const result=await window.orbit.youtubePlay(plan.query||input);if(run!==runRef.current)return;setStage("success");setNotice(result.summary);await window.orbit.speak(result.summary);return}

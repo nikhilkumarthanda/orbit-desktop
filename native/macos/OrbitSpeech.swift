@@ -19,12 +19,13 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
     private var locationManager: CLLocationManager?
     private var wakeListeningActive = false
     private var wakeHeartbeatTimer: Timer?
+    private var wakeRearmCount = 0
 
     override init() {
         super.init()
         transcriber.delegate = self
         let wake = NSSpeechRecognizer()
-        wake?.commands = ["Hey Orbit", "Orbit", "Stop", "Skip", "That's enough", "That is enough"]
+        wake?.commands = ["Hey Orbit", "Hey, Orbit", "Hi Orbit", "Okay Orbit", "OK Orbit", "Orbit", "Stop", "Skip", "That's enough", "That is enough"]
         wake?.listensInForegroundOnly = false
         wake?.blocksOtherRecognizers = false
         wake?.delegate = self
@@ -79,6 +80,18 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
         wakeHeartbeatTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             guard let self, self.wakeListeningActive else { return }
             self.trace("wake-idle-heartbeat", ["message": "Still idle-listening for Hey Orbit"])
+            self.wakeRearmCount += 1
+            // NSSpeechRecognizer can stay nominally active while recognition
+            // degrades after long idle periods. Refresh it once a minute.
+            if self.wakeRearmCount >= 12 {
+                self.wakeRearmCount = 0
+                self.wakeRecognizer?.stopListening()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+                    guard let self, !self.capturingCommand, !self.suspended else { return }
+                    self.wakeRecognizer?.startListening()
+                    self.trace("wake-listener-refreshed")
+                }
+            }
         }
     }
 
@@ -113,6 +126,7 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
         generation += 1
         wakeRecognizer?.stopListening()
         wakeListeningActive = false
+        wakeHeartbeatTimer?.invalidate()
         trace("wake-event-emit", ["followup": followup, "message": followup ? "Sending follow-up event to Electron" : "Sending wake event to Electron"])
         emit(followup ? "listening" : "wake", ["mode": "command", "message": followup ? "Listening for a follow-up" : "Wake phrase recognized"])
         // The wake acknowledgement is deliberately short. Begin capturing quickly

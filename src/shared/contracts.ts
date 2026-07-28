@@ -24,9 +24,9 @@ export interface GitContext { path: string; branch: string; status: string[]; la
 export interface CleanupCandidate extends RecentItem { reason: string; recoverable: true }
 export interface AuditEvent { id: string; at: string; tool: string; risk: Risk; status: string; summary: string }
 export interface SearchHit { path: string; title: string; excerpt: string; score: number; modified_at: number }
-export type Intent = "battery" | "screen" | "screenshot" | "system" | "recent" | "knowledge" | "git" | "github" | "browser" | "cleanup" | "audit" | "launch" | "folder" | "weather" | "news" | "cricket" | "soccer" | "finance" | "daily_brief" | "youtube_play" | "amazon_search" | "page_describe" | "page_summarize" | "page_find" | "notifications" | "research" | "answer" | "clarify" | "unknown";
+export type Intent = "battery" | "screen" | "screenshot" | "system" | "recent" | "knowledge" | "git" | "github" | "browser" | "cleanup" | "audit" | "launch" | "folder" | "weather" | "news" | "cricket" | "soccer" | "finance" | "daily_brief" | "youtube_play" | "amazon_search" | "page_describe" | "page_summarize" | "page_find" | "notifications" | "memory" | "research" | "answer" | "clarify" | "unknown";
 export interface ConversationTurn { role: "user" | "assistant"; content: string }
-export interface CommandPlan { intent: Intent; confidence: number; explanation: string; query?: string; application?: string; folder?: string; repository?: string; url?: string; reply?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up"; maxPrice?: number; minPrice?: number; liveServices?: string[]; requiresConfirmation?: boolean; source?: "local"|"ollama"; model?: string }
+export interface CommandPlan { intent: Intent; confidence: number; explanation: string; query?: string; application?: string; folder?: string; repository?: string; url?: string; reply?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up"|"select_result"|"selection_next"|"selection_previous"|"selection_open"; resultIndex?: number; maxPrice?: number; minPrice?: number; liveServices?: string[]; requiresConfirmation?: boolean; source?: "local"|"ollama"; model?: string }
 export interface GitHubWorkflowStatus { repository: string; state: "success"|"failure"|"pending"|"unknown"; workflow?: string; url: string; summary: string }
 export interface LiveBrief { summary: string; source: string; updatedAt: string }
 export interface ResearchSource { title: string; url: string; excerpt: string }
@@ -52,7 +52,7 @@ export interface OrbitAPI {
   openFolder(folder: string): Promise<{ opened: boolean; folder: string }>;
   launchApplication(application: string): Promise<{ launched: boolean; application: string }>;
   githubWorkflow(repository?: string): Promise<GitHubWorkflowStatus>;
-  browserNavigate(request: { url?: string; query?: string; site?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up" }): Promise<{ opened: boolean; url: string; site: string; summary: string }>;
+  browserNavigate(request: { url?: string; query?: string; site?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up"|"select_result"|"selection_next"|"selection_previous"|"selection_open"; resultIndex?: number }): Promise<{ opened: boolean; url: string; site: string; summary: string }>;
   liveInfo(request: { query: string; services?: string[] }): Promise<LiveBrief>;
   youtubePlay(query: string): Promise<{ summary: string }>;
   amazonSearch(request: { query: string; maxPrice?: number; minPrice?: number }): Promise<{ summary: string }>;

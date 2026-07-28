@@ -80,7 +80,7 @@ test("Amazon commands remove navigation filler and preserve spoken price limits"
 
 test("wake phrase uses a dedicated recognizer before fresh command capture", async () => {
   const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8"));
-  assert.match(source, /commands = \["Hey Orbit", "Orbit", "Stop", "Skip"/);
+  assert.match(source, /commands = \["Hey Orbit".*"Orbit".*"Stop", "Skip"/);
   assert.match(source, /startWakeListening/);
   assert.match(source, /activateCommandCapture/);
   assert.match(source, /requiresOnDeviceRecognition = false/);
@@ -126,7 +126,7 @@ test("browser follow-ups use active site context with safe URL adapters", async 
   assert.match(source, /sameTab/);
   assert.match(source, /input\[type=/);
   assert.match(source, /parsed\.protocol !== "https:"/);
-  assert.match(source, /\["answer", "clarify", "notifications", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"\]\.includes\(local\.intent\)/);
+  assert.match(source, /\["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"\]\.includes\(local\.intent\)/);
 });
 
 test("browser actions, explicit GitHub routing, weather fallback, and preferred names are reliable", async () => {
@@ -371,4 +371,39 @@ test("Ollama releases model memory shortly after fallback use", async () => {
   const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/main/ollama.ts", import.meta.url), "utf8"));
   assert.equal((source.match(/keep_alive: "30s"/g) || []).length, 2);
   assert.equal(source.includes('keep_alive: "10m"'), false);
+});
+
+test("Phase 4 YouTube selection routes before generic search and stays in the active tab", async () => {
+  const fs = await import("node:fs/promises");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  assert.ok(main.indexOf("Active YouTube ordinal selection matched before search") < main.indexOf("Browser navigation request matched"));
+  assert.match(main, /browserAction: "select_result"/);
+  assert.match(main, /browserAction: "selection_next"/);
+  assert.match(main, /browserAction: "selection_previous"/);
+  assert.match(main, /browserAction: "selection_open"/);
+  assert.match(main, /data-orbit-selected/);
+  assert.match(main, /const keepActiveTab = Boolean\(request\.sameTab \|\| \(!request\.url && activeBrowserSite\)\)/);
+  assert.match(renderer, /resultIndex:plan\.resultIndex/);
+});
+
+test("Phase 5 wake listener refreshes and supports natural wake variants", async () => {
+  const speech = await import("node:fs/promises").then(fs => fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8"));
+  assert.match(speech, /"Hey, Orbit", "Hi Orbit", "Okay Orbit", "OK Orbit"/);
+  assert.match(speech, /wakeRearmCount >= 12/);
+  assert.match(speech, /wake-listener-refreshed/);
+});
+
+test("Phase 5 memory is explicit, encrypted, bounded, and confirmation-gated for deletion", async () => {
+  const fs = await import("node:fs/promises");
+  const memory = await fs.readFile(new URL("../src/main/memory.ts", import.meta.url), "utf8");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  assert.match(memory, /safeStorage\.encryptString/);
+  assert.match(memory, /safeStorage\.decryptString/);
+  assert.match(memory, /mode: 0o600/);
+  assert.match(memory, /memories\.slice\(-200\)/);
+  assert.match(main, /rememberRequest/);
+  assert.match(main, /what do you remember/);
+  assert.match(main, /confirm forget/);
+  assert.match(main, /pendingMemoryDeletion/);
 });

@@ -20,6 +20,7 @@ import { createSportsService } from "./live-info/sports-service.js";
 import { createFinanceService } from "./live-info/finance-service.js";
 import { createCalendarService } from "./live-info/calendar-service.js";
 import { createEmailService } from "./live-info/email-service.js";
+import { forget, recall, remember } from "./memory.js";
 import type { CommandPlan, ConversationTurn, GitHubWorkflowStatus, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -32,6 +33,9 @@ const conversation: ConversationTurn[] = [];
 let lastFailureDetail = "";
 let selectedVoice: string | null = null;
 let activeBrowserSite: { name: string; hostname: string; query?: string } | null = null;
+let selectedYouTubeResult: number | null = null;
+let quitting = false;
+let pendingMemoryDeletion: string[] = [];
 let activeFolderPath: string | null = null;
 let preferredName = "Boss";
 let profilePath = "";
@@ -197,6 +201,7 @@ function startSpeech() {
     console.log(`[speech] close event: code=${code} signal=${signal}, pid was ${child.pid}`);
     if (speechProcess === child) speechProcess = null;
     sendVoice("stopped");
+    if (!quitting) setTimeout(startSpeech, 1_000);
   });
 }
 
@@ -261,6 +266,15 @@ function planLocal(value: string): CommandPlan {
   if (/\b(news|headlines|top stories|world update)\b/.test(command)) return { intent: "news", confidence: 1, explanation: "Live news request matched", query: value, liveServices: ["news"], source: "local" };
   if (/\b(stock|shares?|ticker|market cap|share price|trading at)\b/.test(command)) return { intent: "finance", confidence: 1, explanation: "Live finance request matched", query: value, liveServices: ["finance"], source: "local" };
   if (/\bgithub\b/.test(command) && /\b(workflow|actions?|deployment|ci|build (?:status|run)|check (?:the )?(?:workflow|actions?|deployment|ci|build))\b/.test(command)) return { intent: "github", confidence: .99, explanation: "Explicit GitHub workflow request matched", repository: "nikhilkumarthanda/orbit-desktop", query: value, source: "local" };
+  const ordinal = command.match(/^(?:please )?(?:open|play|select|highlight|click)\s+(?:the\s+)?(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d+(?:st|nd|rd|th)?)\s+(?:visible\s+)?(?:video|result)[.!]*$/);
+  if (ordinal) {
+    const names: Record<string, number> = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10 };
+    const resultIndex = names[ordinal[1]] || Number.parseInt(ordinal[1], 10);
+    return { intent: "browser", confidence: 1, explanation: "Active YouTube ordinal selection matched before search", browserAction: "select_result", resultIndex, sameTab: true, source: "local" };
+  }
+  if (/^(?:no[, ]*)?(?:the\s+)?next\s+one[.!]*$/.test(command)) return { intent: "browser", confidence: 1, explanation: "Move active browser selection forward", browserAction: "selection_next", sameTab: true, source: "local" };
+  if (/^(?:no[, ]*)?(?:the\s+)?previous\s+one[.!]*$/.test(command)) return { intent: "browser", confidence: 1, explanation: "Move active browser selection backward", browserAction: "selection_previous", sameTab: true, source: "local" };
+  if (/^(?:yes|yeah|yep|open it|play it|that one|this one)[.!]*$/.test(command)) return { intent: "browser", confidence: 1, explanation: "Confirm active browser selection", browserAction: "selection_open", sameTab: true, source: "local" };
   const folderMatch = command.match(/\b(?:open|show|go to)\s+(?:my\s+|the\s+)?(documents?|downloads?|desktop|projects?|developer)(?:\s+folder)?\b/);
   if (folderMatch) {
     const folder = ({ document: "Documents", documents: "Documents", download: "Downloads", downloads: "Downloads", desktop: "Desktop", project: "Projects", projects: "Projects", developer: "Developer" } as Record<string, string>)[folderMatch[1]];
@@ -330,6 +344,34 @@ function planLocal(value: string): CommandPlan {
 }
 
 async function planCommand(value: string) {
+  if (/^(?:orbit[, ]+)?(?:yes[, ]+)?confirm forget[.!]?$/iu.test(value.trim())) {
+    if (!pendingMemoryDeletion.length) return { intent: "memory" as const, confidence: 1, explanation: "No pending memory deletion", reply: "There is no pending memory deletion.", query: value, source: "local" as const };
+    const removed = await forget(pendingMemoryDeletion);
+    pendingMemoryDeletion = [];
+    return { intent: "memory" as const, confidence: 1, explanation: "Confirmed encrypted memory deletion", reply: `Deleted ${removed} saved ${removed === 1 ? "memory" : "memories"}.`, query: value, source: "local" as const };
+  }
+  if (/^(?:orbit[, ]+)?cancel forget[.!]?$/iu.test(value.trim())) {
+    pendingMemoryDeletion = [];
+    return { intent: "memory" as const, confidence: 1, explanation: "Memory deletion cancelled", reply: "Memory deletion cancelled.", query: value, source: "local" as const };
+  }
+  const forgetRequest = value.trim().match(/^(?:orbit[, ]+)?forget(?: everything| what (?:i|I) told you)?(?: about\s+(.+?))?[.!]?$/iu);
+  if (forgetRequest) {
+    const matches = await recall(forgetRequest[1] || "");
+    if (!matches.length) return { intent: "memory" as const, confidence: 1, explanation: "No matching memories", reply: "I couldn’t find a matching saved memory.", query: value, source: "local" as const };
+    pendingMemoryDeletion = matches.map(item => item.id);
+    return { intent: "memory" as const, confidence: 1, explanation: "Memory deletion requires confirmation", reply: `I found ${matches.length} matching ${matches.length === 1 ? "memory" : "memories"}. Say “confirm forget” to delete ${matches.length === 1 ? "it" : "them"}, or “cancel forget.”`, query: value, source: "local" as const };
+  }
+  const rememberRequest = value.trim().match(/^(?:orbit[, ]+)?remember(?: that)?\s+(.+?)[.!]?$/iu);
+  if (rememberRequest) {
+    const memory = await remember(rememberRequest[1].trim());
+    return { intent: "memory" as const, confidence: 1, explanation: "Explicit encrypted memory saved", reply: `I’ll remember that: ${memory.content}`, query: value, source: "local" as const };
+  }
+  const recallRequest = value.trim().match(/^(?:orbit[, ]+)?what do you remember(?: about\s+(.+?))?[?.!]?$/iu);
+  if (recallRequest) {
+    const memories = await recall(recallRequest[1] || "");
+    const reply = memories.length ? `I remember: ${memories.map(item => item.content).join("; ")}` : "I don’t have a matching saved memory yet.";
+    return { intent: "memory" as const, confidence: 1, explanation: "Encrypted local memory recalled", reply, query: value, source: "local" as const };
+  }
   const nameRequest = value.trim().match(/^(?:orbit[, ]+)?(?:please )?(?:call|address) me (?:as )?([\p{L}][\p{L} .'-]{0,39})[.!]?$/iu);
   if (nameRequest) {
     const name = nameRequest[1].replace(/[.!]+$/, "").trim();
@@ -338,7 +380,7 @@ async function planCommand(value: string) {
   }
   const local = planLocal(value);
   if (local.reply) local.reply = personalize(local.reply);
-  if (["answer", "clarify", "notifications", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"].includes(local.intent)) return local;
+  if (["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"].includes(local.intent)) return local;
   const status = await ollamaStatus();
   if (!status.available) return local;
   try {
@@ -419,7 +461,66 @@ end run`;
   });
 }
 
-async function browserNavigate(request: { url?: string; query?: string; site?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up" }) {
+function executeActiveChromeJavaScript(javascript: string): Promise<string> {
+  const script = `on run argv
+tell application "Google Chrome"
+activate
+if (count of windows) is 0 then return "NO_WINDOW"
+return execute active tab of front window javascript (item 1 of argv)
+end tell
+end run`;
+  return new Promise((resolve, reject) => {
+    const child = spawn("/usr/bin/osascript", ["-e", script, javascript], { stdio: ["ignore", "pipe", "pipe"] });
+    let output = "", error = "";
+    const timer = setTimeout(() => { child.kill(); reject(new Error("Chrome selection timed out")); }, 4_000);
+    child.stdout.on("data", chunk => { output += String(chunk); });
+    child.stderr.on("data", chunk => { error += String(chunk); });
+    child.once("close", code => {
+      clearTimeout(timer);
+      if (code === 0) resolve(output.trim());
+      else reject(new Error(error.trim() || "Orbit could not control the active Chrome tab"));
+    });
+    child.once("error", reason => { clearTimeout(timer); reject(reason); });
+  });
+}
+
+async function updateYouTubeSelection(action: "select_result"|"selection_next"|"selection_previous"|"selection_open", requestedIndex?: number) {
+  if (!activeBrowserSite?.hostname.includes("youtube.com")) throw new Error("Open YouTube search results first");
+  if (action === "selection_open" && selectedYouTubeResult === null) throw new Error("Choose a video first, then say open it");
+  const delta = action === "selection_next" ? 1 : action === "selection_previous" ? -1 : 0;
+  const requested = Math.max(1, Math.min(10, Number(requestedIndex || 1)));
+  const javascript = `(()=>{const action=${JSON.stringify(action)},requested=${requested},delta=${delta};
+const all=[...document.querySelectorAll('ytd-video-renderer,ytd-rich-item-renderer')].filter(el=>el.querySelector('a#thumbnail[href*="/watch"]'));
+if(!all.length)return JSON.stringify({error:'NO_RESULTS'});
+const visible=all.filter(el=>{const r=el.getBoundingClientRect();return r.bottom>0&&r.top<innerHeight&&r.width>0&&r.height>0});
+let absolute=Number(window.__orbitSelectedVideoIndex);
+if(action==='select_result'){const target=visible[requested-1];if(!target)return JSON.stringify({error:'NOT_ENOUGH',count:visible.length});absolute=all.indexOf(target)}
+else absolute=Math.max(0,Math.min(all.length-1,(Number.isFinite(absolute)?absolute:0)+delta));
+const target=all[absolute],link=target.querySelector('a#thumbnail[href*="/watch"]'),title=(target.querySelector('#video-title')?.textContent||'selected video').trim();
+if(action==='selection_open'){link.click();delete window.__orbitSelectedVideoIndex;return JSON.stringify({opened:true,title})}
+window.__orbitSelectedVideoIndex=absolute;
+document.querySelectorAll('[data-orbit-selected]').forEach(el=>{el.style.outline='';el.style.boxShadow='';el.removeAttribute('data-orbit-selected')});
+target.dataset.orbitSelected='true';target.style.outline='4px solid #9b7cff';target.style.boxShadow='0 0 0 8px rgba(155,124,255,.3)';target.scrollIntoView({behavior:'smooth',block:'center'});
+return JSON.stringify({opened:false,title,absolute:absolute+1})})()`;
+  let result: { error?: string; count?: number; opened?: boolean; title?: string; absolute?: number };
+  try { result = JSON.parse(await executeActiveChromeJavaScript(javascript)); }
+  catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : "Chrome selection failed"}. In Chrome, enable View → Developer → Allow JavaScript from Apple Events.`);
+  }
+  if (result.error === "NO_RESULTS") throw new Error("Orbit could not find YouTube video results in the active tab");
+  if (result.error === "NOT_ENOUGH") throw new Error(`Only ${result.count || 0} video results are visible. Scroll a little and try again.`);
+  if (result.opened) {
+    selectedYouTubeResult = null;
+    return { opened: true, url: "", site: "YouTube", summary: `Opening ${result.title || "the selected video"}, ${address()}.` };
+  }
+  selectedYouTubeResult = result.absolute || requested;
+  return { opened: true, url: "", site: "YouTube", summary: `I highlighted ${result.title || "that video"}. Is this the one, ${address()}?` };
+}
+
+async function browserNavigate(request: { url?: string; query?: string; site?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up"|"select_result"|"selection_next"|"selection_previous"|"selection_open"; resultIndex?: number }) {
+  if (request.browserAction && ["select_result", "selection_next", "selection_previous", "selection_open"].includes(request.browserAction)) {
+    return updateYouTubeSelection(request.browserAction as "select_result"|"selection_next"|"selection_previous"|"selection_open", request.resultIndex);
+  }
   if (request.browserAction === "scroll_down" || request.browserAction === "scroll_up") {
     if (!activeBrowserSite) throw new Error("Open a website first, then ask Orbit to scroll it");
     const direction = request.browserAction === "scroll_down" ? 1 : -1;
@@ -483,14 +584,16 @@ end run`;
     parsed.searchParams.set("i", "aps");
     parsed.searchParams.set("ref", "nb_sb_noss");
   }
-  if (request.sameTab) navigateActiveChromeTab(parsed.toString());
+  const keepActiveTab = Boolean(request.sameTab || (!request.url && activeBrowserSite));
+  if (keepActiveTab) navigateActiveChromeTab(parsed.toString());
   else openChromeTab(parsed.toString());
+  selectedYouTubeResult = null;
   const destination = parsed.hostname.replace(/^www\./, "");
   const names: Record<string, string> = { "youtube.com": "YouTube", "github.com": "GitHub", "google.com": "Google", "tesla.com": "Tesla", "reddit.com": "Reddit", "linkedin.com": "LinkedIn" };
   const matched = Object.entries(names).find(([domain]) => destination === domain || destination.endsWith(`.${domain}`));
   activeBrowserSite = { name: matched?.[1] || destination, hostname: parsed.hostname, query: parsed.hostname.includes("youtube.com") ? (parsed.searchParams.get("search_query") || undefined) : undefined };
   const searched = Boolean(request.query && !request.url);
-  const summary = usedSiteFallback && activeBrowserSite ? `I couldn't control that site's search box, ${address()}, so I searched its pages through Google.` : searched ? `Searching ${activeBrowserSite.name} for ${String(request.query).slice(0, 80)}, ${address()}.` : request.sameTab ? `Opening ${activeBrowserSite.name} in the current Chrome tab, ${address()}.` : `Opening ${activeBrowserSite.name} in a new Chrome tab, ${address()}.`;
+  const summary = usedSiteFallback && activeBrowserSite ? `I couldn't control that site's search box, ${address()}, so I searched its pages through Google.` : searched ? `Searching ${activeBrowserSite.name} for ${String(request.query).slice(0, 80)}, ${address()}.` : keepActiveTab ? `Opening ${activeBrowserSite.name} in the current Chrome tab, ${address()}.` : `Opening ${activeBrowserSite.name} in a new Chrome tab, ${address()}.`;
   return { opened: true, url: parsed.toString(), site: activeBrowserSite.name, summary };
 }
 
@@ -670,7 +773,7 @@ function registerIPC() {
   }));
   ipcMain.handle("orbit:app:launch", (_event, application: string) => traced("app.launch", () => launchApplication(String(application))));
   ipcMain.handle("orbit:github:workflow", (_event, repository?: string) => traced("github.workflow", () => githubWorkflow(repository)));
-  ipcMain.handle("orbit:browser:navigate", (_event, request: { url?: string; query?: string; site?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up" }) => traced("browser.navigate", () => browserNavigate(request || {})));
+  ipcMain.handle("orbit:browser:navigate", (_event, request: { url?: string; query?: string; site?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up"|"select_result"|"selection_next"|"selection_previous"|"selection_open"; resultIndex?: number }) => traced("browser.navigate", () => browserNavigate(request || {})));
   ipcMain.handle("orbit:live:info", (_event, request: { query: string; services?: string[] }) => traced("live.info", () => liveInfo.handle(String(request?.query || ""), request?.services)));
   ipcMain.handle("orbit:browser:youtube", (_event, query: string) => traced("browser.agent.youtube", () => youtubePlayFirst(String(query || ""))));
   ipcMain.handle("orbit:browser:amazon", (_event, request: { query: string; maxPrice?: number; minPrice?: number }) => traced("browser.agent.amazon", () => amazonSearchWithPriceFilter(String(request?.query || ""), request?.maxPrice, request?.minPrice)));
@@ -722,4 +825,4 @@ app.whenReady().then(async () => {
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
-app.on("will-quit", () => { globalShortcut.unregisterAll(); spokenReply?.kill(); speechProcess?.kill(); });
+app.on("will-quit", () => { quitting = true; globalShortcut.unregisterAll(); spokenReply?.kill(); speechProcess?.kill(); });

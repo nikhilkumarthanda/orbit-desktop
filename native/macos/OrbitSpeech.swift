@@ -129,9 +129,10 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
         wakeHeartbeatTimer?.invalidate()
         trace("wake-event-emit", ["followup": followup, "message": followup ? "Sending follow-up event to Electron" : "Sending wake event to Electron"])
         emit(followup ? "listening" : "wake", ["mode": "command", "message": followup ? "Listening for a follow-up" : "Wake phrase recognized"])
-        // The wake acknowledgement is deliberately short. Begin capturing quickly
-        // while still leaving enough time to avoid transcribing Orbit's own voice.
-        DispatchQueue.main.asyncAfter(deadline: .now() + (followup ? 0.12 : 0.25)) { [weak self] in
+        // A fresh wake gets a short spoken acknowledgement from Electron. Leave
+        // enough room for "Yes, Boss?" to finish so Orbit does not transcribe its
+        // own voice. Follow-up turns do not play an acknowledgement.
+        DispatchQueue.main.asyncAfter(deadline: .now() + (followup ? 0.12 : 0.65)) { [weak self] in
             guard let self, self.capturingCommand, !self.suspended else { return }
             self.startCommandRecognition()
         }
@@ -173,10 +174,36 @@ final class OrbitSpeech: NSObject, SFSpeechRecognizerDelegate, NSSpeechRecognize
         generation += 1
         let current = generation
         emit("partial", ["text": command])
-        // Natural sentences often contain short thinking pauses. Wait long enough
-        // for the transcription to continue instead of submitting a fragment.
-        let endsInFiller = command.range(of: #"\b(?:um+|uh+|erm+|hmm+|like|so|and|but)$"#, options: [.regularExpression, .caseInsensitive]) != nil
-        let settlingDelay = endsInFiller ? 4.5 : (final ? 1.1 : 1.6)
+        // Apple's recognizer can mark a fragment final during an ordinary
+        // mid-sentence pause. Treat "final" as a transcription hint, not proof
+        // that the user yielded the turn. Explicit control phrases remain fast;
+        // unfinished clauses receive a longer continuation window.
+        let normalized = command.lowercased()
+        let immediateControl = normalized.range(
+            of: #"^(?:stop|skip|cancel|never mind|that's enough|that is enough)[.!?]*$"#,
+            options: .regularExpression
+        ) != nil
+        let unfinishedClause = command.range(
+            of: #"(?:\b(?:um+|uh+|erm+|hmm+|like|so|and|but|because|then|also|with|to|for|if|when|which|that|the|a|an)|[,;:–—-])$"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
+        let wordCount = command.split(whereSeparator: \.isWhitespace).count
+        let settlingDelay: TimeInterval
+        if immediateControl {
+            settlingDelay = 0.15
+        } else if unfinishedClause {
+            settlingDelay = 4.8
+        } else if wordCount >= 12 {
+            settlingDelay = final ? 2.8 : 3.2
+        } else {
+            settlingDelay = final ? 2.4 : 2.8
+        }
+        trace("turn-end-candidate", [
+            "final": final,
+            "wordCount": wordCount,
+            "unfinishedClause": unfinishedClause,
+            "settlingDelay": settlingDelay
+        ])
         DispatchQueue.main.asyncAfter(deadline: .now() + settlingDelay) { [weak self] in
             guard let self, self.capturingCommand, current == self.generation else { return }
             self.emit("command", ["text": command])

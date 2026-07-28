@@ -1,6 +1,6 @@
 import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, screen, shell } from "electron";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import updater from "electron-updater";
@@ -21,7 +21,7 @@ import { createFinanceService } from "./live-info/finance-service.js";
 import { createCalendarService } from "./live-info/calendar-service.js";
 import { createEmailService } from "./live-info/email-service.js";
 import { forget, recall, remember } from "./memory.js";
-import type { CommandPlan, ConversationTurn, GitHubWorkflowStatus, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
+import type { CommandPlan, ConversationEntry, ConversationTurn, GitHubWorkflowStatus, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let audit: AuditStore;
@@ -30,8 +30,32 @@ let speechProcess: ChildProcessWithoutNullStreams | null = null;
 let spokenReply: ReturnType<typeof spawn> | null = null;
 const { autoUpdater } = updater;
 const conversation: ConversationTurn[] = [];
+let conversationEntries: ConversationEntry[] = [];
+function conversationPath() { return path.join(app.getPath("userData"), "conversation-history.json"); }
+function saveConversation() {
+  const file = conversationPath();
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify(conversationEntries.slice(-200), null, 2), { mode: 0o600 });
+}
+function loadConversation() {
+  try {
+    const parsed = JSON.parse(readFileSync(conversationPath(), "utf8")) as ConversationEntry[];
+    conversationEntries = Array.isArray(parsed) ? parsed.filter(item => item && ["user", "assistant"].includes(item.role) && typeof item.content === "string").slice(-200) : [];
+  } catch { conversationEntries = []; }
+  conversation.splice(0, conversation.length, ...conversationEntries.slice(-20).map(({ role, content }) => ({ role, content })));
+}
+function appendConversation(turn: ConversationTurn) {
+  const entry: ConversationEntry = { role: turn.role, content: String(turn.content).slice(0, 10_000), id: crypto.randomUUID(), at: new Date().toISOString() };
+  conversationEntries.push(entry);
+  conversation.push({ role: entry.role, content: entry.content });
+  if (conversationEntries.length > 200) conversationEntries.splice(0, conversationEntries.length - 200);
+  if (conversation.length > 20) conversation.splice(0, conversation.length - 20);
+  saveConversation();
+  return conversationEntries;
+}
 let lastFailureDetail = "";
 let selectedVoice: string | null = null;
+let wakeAcknowledgementIndex = 0;
 let activeBrowserSite: { name: string; hostname: string; query?: string } | null = null;
 let selectedYouTubeResult: number | null = null;
 let quitting = false;
@@ -44,8 +68,15 @@ let locationRequest: { resolve: (value: { latitude: number; longitude: number })
 function orbitVoice() {
   if (selectedVoice) return selectedVoice;
   const voices = spawnSync("/usr/bin/say", ["-v", "?"], { encoding: "utf8" }).stdout || "";
-  selectedVoice = ["Ava", "Samantha", "Daniel"].find(name => new RegExp(`^${name}\\s`, "m").test(voices)) || "Daniel";
+  selectedVoice = ["Ava", "Samantha", "Jamie", "Daniel"].find(name => new RegExp(`^${name}\\s`, "m").test(voices)) || "Daniel";
   return selectedVoice;
+}
+
+function nextWakeAcknowledgement() {
+  const options = [`Yes, ${address()}?`, `I'm listening, ${address()}.`, `Go ahead, ${address()}.`];
+  const reply = options[wakeAcknowledgementIndex % options.length];
+  wakeAcknowledgementIndex += 1;
+  return reply;
 }
 
 function naturalSpeech(text: string) {
@@ -121,7 +152,7 @@ function sendVoice(type: string, payload: Record<string, unknown> = {}) {
 function showListening() {
   mainWindow?.show(); mainWindow?.focus();
   sendVoice("wake");
-  speak("Yes?", false);
+  speak(nextWakeAcknowledgement(), false);
 }
 
 function stopSpeech() {
@@ -266,6 +297,17 @@ function planLocal(value: string): CommandPlan {
   if (/\b(news|headlines|top stories|world update)\b/.test(command)) return { intent: "news", confidence: 1, explanation: "Live news request matched", query: value, liveServices: ["news"], source: "local" };
   if (/\b(stock|shares?|ticker|market cap|share price|trading at)\b/.test(command)) return { intent: "finance", confidence: 1, explanation: "Live finance request matched", query: value, liveServices: ["finance"], source: "local" };
   if (/\bgithub\b/.test(command) && /\b(workflow|actions?|deployment|ci|build (?:status|run)|check (?:the )?(?:workflow|actions?|deployment|ci|build))\b/.test(command)) return { intent: "github", confidence: .99, explanation: "Explicit GitHub workflow request matched", repository: "nikhilkumarthanda/orbit-desktop", query: value, source: "local" };
+  if (/\b(?:outlook|email|e-mail)\b/.test(command) && /\b(?:draft|write|compose)\b/.test(command)) {
+    const recipient = command.match(/\bto\s+(.+?)(?=\s+(?:regarding|about|for)\b|[,.;]|$)/)?.[1]?.trim();
+    const leaveTomorrow = /\bleave\b/.test(command) && /\b(?:tomorrow|tomo)\b/.test(command);
+    const sender = command.match(/,\s*([a-z][a-z .'-]+)[.!]*$/i)?.[1]?.trim() || "Nikhil";
+    const displayName = recipient?.replace(/\b\w/g, letter => letter.toUpperCase()) || "";
+    const subject = leaveTomorrow ? "Leave Request" : "Draft Email";
+    const body = leaveTomorrow
+      ? `Hi ${displayName || "there"},\n\nI would like to request leave for tomorrow.\n\nThank you,\n${sender}`
+      : "";
+    return { intent: "email_draft", confidence: 1, explanation: "Explicit Outlook draft overrides stale browser context", recipient, subject, body, requiresConfirmation: true, source: "local" };
+  }
   const ordinal = command.match(/^(?:please )?(?:open|play|select|highlight|click)\s+(?:the\s+)?(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d+(?:st|nd|rd|th)?)\s+(?:visible\s+)?(?:video|result)[.!]*$/);
   if (ordinal) {
     const names: Record<string, number> = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10 };
@@ -380,15 +422,13 @@ async function planCommand(value: string) {
   }
   const local = planLocal(value);
   if (local.reply) local.reply = personalize(local.reply);
-  if (["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"].includes(local.intent)) return local;
+  if (["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "email_draft", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"].includes(local.intent)) return local;
   const status = await ollamaStatus();
   if (!status.available) return local;
   try {
     const applications = await installedApplications();
     const plan = await planWithOllama({ command: value, history: conversation, installedApplications: applications });
     if (plan.intent === "launch" && (!plan.application || !applications.includes(plan.application))) return { intent: "clarify" as const, confidence: 1, explanation: "Application is not installed", reply: `I couldn't find ${plan.application || "that application"} on this Mac.`, query: value, source: "ollama" as const, model: OLLAMA_MODEL };
-    conversation.push({ role: "user", content: value }, { role: "assistant", content: plan.reply || plan.explanation });
-    if (conversation.length > 20) conversation.splice(0, conversation.length - 20);
     if (plan.reply) plan.reply = personalize(plan.reply);
     return plan;
   } catch (error) {
@@ -607,6 +647,20 @@ async function launchApplication(application: string) {
   return { launched: true, application };
 }
 
+async function draftEmail(request: { recipient?: string; subject: string; body: string }) {
+  const recipient = String(request.recipient || "").trim();
+  if (!recipient.includes("@")) {
+    await launchApplication("Microsoft Outlook");
+    return { drafted: false, summary: `Outlook is open, ${address()}. What is ${recipient || "the recipient"}'s email address? I will prepare the draft but never send it without your approval.` };
+  }
+  const mailto = new URL(`mailto:${recipient}`);
+  mailto.searchParams.set("subject", String(request.subject || "").slice(0, 200));
+  mailto.searchParams.set("body", String(request.body || "").slice(0, 5_000));
+  const child = spawn("open", ["-a", "Microsoft Outlook", mailto.toString()], { detached: true, stdio: "ignore" });
+  child.unref();
+  return { drafted: true, summary: `I prepared the Outlook draft for ${recipient}, ${address()}. It has not been sent.` };
+}
+
 function currentLocation(): Promise<{ latitude: number; longitude: number }> {
   if (process.platform !== "darwin") return Promise.reject(new Error("Local weather location is currently available on macOS only"));
   if (locationRequest) return Promise.reject(new Error("A location request is already in progress"));
@@ -677,8 +731,6 @@ async function research(query: string): Promise<ResearchAnswer> {
   }
   answer = personalize(answer);
   const spokenAnswer = answer.replace(/\s*\[\d+\]/g, "").replace(/\s+/g, " ").slice(0, 470).trim();
-  conversation.push({ role: "user", content: clean }, { role: "assistant", content: answer });
-  if (conversation.length > 20) conversation.splice(0, conversation.length - 20);
   return { answer, spokenAnswer, sources, updatedAt: new Date().toISOString() };
 }
 
@@ -772,6 +824,15 @@ function registerIPC() {
     return { opened, folder };
   }));
   ipcMain.handle("orbit:app:launch", (_event, application: string) => traced("app.launch", () => launchApplication(String(application))));
+  ipcMain.handle("orbit:email:draft", (_event, request: { recipient?: string; subject: string; body: string }) => traced("email.draft", () => draftEmail(request || { subject: "", body: "" })));
+  ipcMain.handle("orbit:conversation:list", () => conversationEntries);
+  ipcMain.handle("orbit:conversation:append", (_event, turn: ConversationTurn) => appendConversation({ role: turn?.role === "assistant" ? "assistant" : "user", content: String(turn?.content || "") }));
+  ipcMain.handle("orbit:conversation:clear", () => {
+    conversationEntries = [];
+    conversation.splice(0);
+    saveConversation();
+    return { cleared: true };
+  });
   ipcMain.handle("orbit:github:workflow", (_event, repository?: string) => traced("github.workflow", () => githubWorkflow(repository)));
   ipcMain.handle("orbit:browser:navigate", (_event, request: { url?: string; query?: string; site?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up"|"select_result"|"selection_next"|"selection_previous"|"selection_open"; resultIndex?: number }) => traced("browser.navigate", () => browserNavigate(request || {})));
   ipcMain.handle("orbit:live:info", (_event, request: { query: string; services?: string[] }) => traced("live.info", () => liveInfo.handle(String(request?.query || ""), request?.services)));
@@ -817,6 +878,7 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   audit = new AuditStore(path.join(app.getPath("userData"), "orbit-audit.jsonl"));
+  loadConversation();
   await loadProfile();
   registerIPC(); createWindow();
   globalShortcut.register("CommandOrControl+Shift+Space", armVoice);

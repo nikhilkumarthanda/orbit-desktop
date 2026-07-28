@@ -94,7 +94,7 @@ test("microphone can be released and Orbit uses the boss voice persona", async (
   const planner = await fs.readFile(new URL("../src/main/ollama.ts", import.meta.url), "utf8");
   assert.match(main, /orbit:voice:stop/);
   assert.match(main, /speechProcess\.kill\(\)/);
-  assert.match(main, /\["Ava", "Samantha", "Daniel"\]/);
+  assert.match(main, /\["Ava", "Samantha", "Jamie", "Daniel"\]/);
   assert.match(main, /naturalSpeech/);
   assert.match(renderer, /Mic on/);
   assert.match(planner, /Address the user as Boss/);
@@ -126,7 +126,7 @@ test("browser follow-ups use active site context with safe URL adapters", async 
   assert.match(source, /sameTab/);
   assert.match(source, /input\[type=/);
   assert.match(source, /parsed\.protocol !== "https:"/);
-  assert.match(source, /\["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"\]\.includes\(local\.intent\)/);
+  assert.match(source, /\["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "email_draft", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"\]\.includes\(local\.intent\)/);
 });
 
 test("browser actions, explicit GitHub routing, weather fallback, and preferred names are reliable", async () => {
@@ -181,8 +181,39 @@ test("Mac context routes before web research and Gemini keys stay in Keychain", 
 test("voice commands tolerate natural pauses before submitting", async () => {
   const speech = await import("node:fs/promises").then(fs => fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8"));
   assert.match(speech, /followupMode \? 30 : 25/);
-  assert.match(speech, /followup \? 0\.12 : 0\.25/);
-  assert.match(speech, /endsInFiller \? 4\.5 : \(final \? 1\.1 : 1\.6\)/);
+  assert.match(speech, /followup \? 0\.12 : 0\.65/);
+  assert.match(speech, /Apple's recognizer can mark a fragment final/);
+  assert.match(speech, /unfinishedClause/);
+  assert.match(speech, /settlingDelay = 4\.8/);
+  assert.match(speech, /settlingDelay = final \? 2\.4 : 2\.8/);
+  assert.match(speech, /immediateControl/);
+});
+
+test("explicit Outlook drafts override stale browser and GitHub context", async () => {
+  const fs = await import("node:fs/promises");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const contracts = await fs.readFile(new URL("../src/shared/contracts.ts", import.meta.url), "utf8");
+  const preload = await fs.readFile(new URL("../preload.cjs", import.meta.url), "utf8");
+  assert.match(main, /Explicit Outlook draft overrides stale browser context/);
+  assert.ok(main.indexOf("Explicit Outlook draft overrides stale browser context") < main.indexOf("Browser navigation request matched"));
+  assert.match(main, /It has not been sent/);
+  assert.match(main, /never send it without your approval/);
+  assert.match(contracts, /"email_draft"/);
+  assert.match(preload, /orbit:email:draft/);
+});
+
+test("conversation history is local, bounded, restorable, and user-clearable", async () => {
+  const fs = await import("node:fs/promises");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
+  const preload = await fs.readFile(new URL("../preload.cjs", import.meta.url), "utf8");
+  assert.match(main, /conversation-history\.json/);
+  assert.match(main, /conversationEntries\.slice\(-200\)/);
+  assert.match(main, /mode: 0o600/);
+  assert.match(main, /loadConversation\(\)/);
+  assert.match(preload, /orbit:conversation:list/);
+  assert.match(preload, /orbit:conversation:clear/);
+  assert.match(renderer, /Clear Orbit conversation history from this Mac/);
 });
 
 test("phase two interruptions, stale-response cancellation, folders, and Orbit Space are wired", async () => {
@@ -225,7 +256,7 @@ test("reliability follow-ups preserve Finder context and recover from stalled ac
   assert.match(main, /setTimeout\(\(\) => \{ child\.kill\(\); resolve\(false\); \}, 4_000\)/);
   assert.match(renderer, /That action took too long and was cancelled/);
   assert.match(renderer, /setNotice\(""\);setSources\(\[\]\);setCommand\(""\)/);
-  assert.match(speech, /followup \? 0\.12 : 0\.25/);
+  assert.match(speech, /followup \? 0\.12 : 0\.65/);
 });
 
 test("Orbit Space is the startup home and diagnostics are a separate view", async () => {
@@ -248,9 +279,24 @@ test("phase two live answers stay relevant and speech is less repetitive", async
   assert.match(newsService, /news\.google\.com\/rss\/search\?q=/);
   assert.match(renderer, /liveInfo\(\{query:plan\.query\|\|input/);
   assert.match(main, /who won\|winner\|champion\|world cup\|fifa/);
-  assert.match(main, /speak\("Yes\?", false\)/);
+  assert.match(main, /speak\(nextWakeAcknowledgement\(\), false\)/);
   assert.doesNotMatch(main, /const spoken = named\.toLowerCase\(\)\.includes/);
   assert.match(main, /"-r", "172"/);
+});
+
+test("phase seven uses stable turn completion and a varied composed persona", async () => {
+  const fs = await import("node:fs/promises");
+  const speech = await fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8");
+  const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  const gemini = await fs.readFile(new URL("../src/main/gemini.ts", import.meta.url), "utf8");
+  const ollama = await fs.readFile(new URL("../src/main/ollama.ts", import.meta.url), "utf8");
+  assert.match(speech, /turn-end-candidate/);
+  assert.match(speech, /current == self\.generation/);
+  assert.match(main, /Yes, \$\{address\(\)\}\?/);
+  assert.match(main, /I'm listening, \$\{address\(\)\}\./);
+  assert.match(main, /Go ahead, \$\{address\(\)\}\./);
+  assert.match(gemini, /calm precision of a modern cinematic assistant/);
+  assert.match(ollama, /not mechanically in every sentence/);
 });
 
 test("phase three clarifies ambiguous FIFA requests and ranks at most two relevant recent stories", async () => {

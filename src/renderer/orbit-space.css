@@ -80,6 +80,15 @@
   overflow: auto;
 }
 
+.conversation-history{max-height:280px;overflow:auto;margin:0 0 12px;padding:14px;border:1px solid rgba(255,255,255,.12);border-radius:18px;background:rgba(8,10,20,.68);backdrop-filter:blur(18px)}
+.conversation-history>div{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.conversation-history>div button{border:0;background:transparent;color:rgba(255,255,255,.62);cursor:pointer}
+.conversation-history p{display:flex;gap:10px;margin:8px 0;padding:9px 12px;border-radius:14px;line-height:1.4}
+.conversation-history p.user{margin-left:12%;background:rgba(117,91,255,.18)}
+.conversation-history p.assistant{margin-right:12%;background:rgba(255,255,255,.07)}
+.conversation-history p small{min-width:34px;color:rgba(255,255,255,.55)}
+.conversation-history p span{white-space:pre-wrap}
+
 .space-stats {
   position: absolute;
   left: clamp(34px,6vw,92px);

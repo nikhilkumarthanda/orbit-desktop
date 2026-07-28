@@ -421,4 +421,8 @@ test("Phase 6 validates complete artifacts and gates public releases on Apple si
   assert.match(verifier, /NSMicrophoneUsageDescription/);
   assert.match(verifier, /codesign/);
   assert.match(verifier, /spctl/);
+  assert.match(
+    verifier,
+    /if \(!unsigned\) \{\s*execFileSync\("codesign"[\s\S]*execFileSync\("spctl"/,
+  );
 });

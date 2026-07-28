@@ -38,9 +38,13 @@ try {
   for (const key of ["NSMicrophoneUsageDescription", "NSSpeechRecognitionUsageDescription", "NSLocationWhenInUseUsageDescription"]) {
     execFileSync("/usr/libexec/PlistBuddy", ["-c", `Print :${key}`, path.join(app, "Contents/Info.plist")], { stdio: "ignore" });
   }
-  execFileSync("codesign", ["--verify", "--deep", "--strict", "--verbose=2", app], { stdio: "inherit" });
-  if (!unsigned) execFileSync("spctl", ["--assess", "--type", "execute", "--verbose=2", app], { stdio: "inherit" });
-  console.log(`Verified ${path.basename(dmg)}: helpers, privacy metadata, signature${unsigned ? "" : ", and Gatekeeper assessment"} passed.`);
+  if (!unsigned) {
+    execFileSync("codesign", ["--verify", "--deep", "--strict", "--verbose=2", app], { stdio: "inherit" });
+    execFileSync("spctl", ["--assess", "--type", "execute", "--verbose=2", app], { stdio: "inherit" });
+  }
+  console.log(
+    `Verified ${path.basename(dmg)}: helpers and privacy metadata${unsigned ? "" : ", signature, and Gatekeeper assessment"} passed.`,
+  );
 } finally {
   if (mounted) execFileSync("hdiutil", ["detach", mount], { stdio: "ignore" });
   rmSync(mount, { recursive: true, force: true });

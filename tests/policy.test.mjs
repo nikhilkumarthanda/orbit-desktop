@@ -230,6 +230,9 @@ test("Orbit Play is local, permission-visible, allowlisted, and has an emergency
   assert.match(renderer, /CAMERA ACTIVE/);
   assert.match(renderer, /Frames are never recorded or uploaded|frames never leave this Mac/i);
   assert.match(renderer, /Date\.now\(\)-fistSince\.current>850/);
+  assert.match(renderer, /maxNumHands:2/);
+  assert.match(renderer, /point:\{x:lm\[8\]\.x,y:lm\[8\]\.y\}/);
+  assert.doesNotMatch(renderer, /x:1-lm\[8\]\.x/);
   assert.match(main, /new Set\(\["move", "down", "up", "scroll", "media-toggle", "stop"\]\)/);
   assert.doesNotMatch(native, /keyDown|keyboardSetUnicodeString|deleteFile|sendEmail/);
   assert.match(contracts, /OrbitPlayGesture/);

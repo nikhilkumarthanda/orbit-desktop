@@ -5,12 +5,14 @@ import "./orbit-play.css";
 
 type GestureName = "Point"|"Pinch"|"Drag"|"Scroll"|"Open palm"|"Fist";
 type PlayScene = "energy"|"system"|"orbit";
-type OrbitActivity = "gravity"|"forge"|"comets";
+type OrbitActivity = "escape"|"gravity"|"forge"|"comets";
 type Point = { x:number;y:number };
 type HandState = { landmarks:NormalizedLandmark[];point:Point;palm:Point;gesture:GestureName;pinching:boolean };
 type Spark = { angle:number;radius:number;speed:number;size:number;alpha:number;hue:number;burstX:number;burstY:number };
 type EnergyState = { center:Point;scale:number;rotation:number;rotationVelocity:number;tension:number;burst:number;burstAt:number;lastSeparation:number;lastSeen:number };
-type UniverseState = { yaw:number;zoom:number;targetYaw:number;targetZoom:number;selected:number;portal:number;lastPinch:number;cometScore:number };
+type UniverseState = { yaw:number;zoom:number;targetYaw:number;targetZoom:number;selected:number;portal:number;lastPinch:number;cometScore:number;lastSeparation:number;lastAngle:number;lastMidpoint:Point|null;trackedHands:number };
+type EscapeObstacle = { lane:number;z:number;kind:"ice"|"debris"|"rift";passed:boolean };
+type EscapeState = { running:boolean;over:boolean;lane:number;targetLane:number;distance:number;score:number;best:number;speed:number;multiplier:number;dash:number;obstacles:EscapeObstacle[];lastSpawn:number };
 type HandsTracker = { setOptions(options:Record<string,unknown>):void;onResults(callback:(results:Results)=>void):void;send(input:{image:HTMLVideoElement}):Promise<void>;close():Promise<void> };
 declare global { interface Window { Hands: new(options:{locateFile:(file:string)=>string})=>HandsTracker } }
 
@@ -25,12 +27,12 @@ const mix=(from:number,to:number,amount:number)=>from+(to-from)*amount;
 const mixPoint=(from:Point,to:Point,amount:number)=>({x:mix(from.x,to.x,amount),y:mix(from.y,to.y,amount)});
 const palmPoint=(lm:NormalizedLandmark[]):Point=>({x:(lm[0].x+lm[5].x+lm[9].x+lm[13].x+lm[17].x)/5,y:(lm[0].y+lm[5].y+lm[9].y+lm[13].y+lm[17].y)/5});
 const planets=[
-  {name:"Astra",orbit:.20,size:.018,hue:38,speed:.48},
-  {name:"Vesper",orbit:.31,size:.026,hue:194,speed:.34},
-  {name:"Orbit",orbit:.44,size:.046,hue:268,speed:.23},
-  {name:"Pyra",orbit:.58,size:.033,hue:8,speed:.16},
-  {name:"Nox",orbit:.72,size:.024,hue:218,speed:.11},
-];
+  {name:"Astra",orbit:.20,size:.016,speed:.48,kind:"rock",day:"#b99a72",night:"#160f0b"},
+  {name:"Vesper",orbit:.31,size:.023,speed:.34,kind:"ocean",day:"#4f8ea6",night:"#07121c"},
+  {name:"Orbit",orbit:.44,size:.041,speed:.23,kind:"orbit",day:"#7786a8",night:"#090b18"},
+  {name:"Pyra",orbit:.58,size:.030,speed:.16,kind:"gas",day:"#b3704e",night:"#1d0a08"},
+  {name:"Nox",orbit:.72,size:.022,speed:.11,kind:"ice",day:"#91aab4",night:"#0a1017"},
+] as const;
 
 function classify(lm:NormalizedLandmark[], pinching:boolean):GestureName {
   const fingers=[raised(lm,8,6),raised(lm,12,10),raised(lm,16,14),raised(lm,20,18)];
@@ -48,13 +50,22 @@ export function OrbitPlay(){
   const stream=useRef<MediaStream|null>(null),tracker=useRef<HandsTracker|null>(null),raf=useRef(0),processing=useRef(false),handsNow=useRef<HandState[]>([]);
   const sparks=useRef<Spark[]>([]),pinching=useRef(false),lastScrollY=useRef(.5),fistSince=useRef(0),lastClick=useRef(0),phase=useRef(0),lastGestureUpdate=useRef(0);
   const energy=useRef<EnergyState>({center:{x:.5,y:.53},scale:1,rotation:0,rotationVelocity:0,tension:0,burst:0,burstAt:0,lastSeparation:.34,lastSeen:0});
-  const universe=useRef<UniverseState>({yaw:0,zoom:1,targetYaw:0,targetZoom:1,selected:2,portal:0,lastPinch:0,cometScore:0});
-  const sceneNow=useRef<PlayScene>("system"),activityNow=useRef<OrbitActivity>("gravity");
+  const universe=useRef<UniverseState>({yaw:0,zoom:1,targetYaw:0,targetZoom:1,selected:2,portal:0,lastPinch:0,cometScore:0,lastSeparation:0,lastAngle:0,lastMidpoint:null,trackedHands:0});
+  const escape=useRef<EscapeState>({running:false,over:false,lane:0,targetLane:0,distance:0,score:0,best:Number(localStorage.getItem("orbit-escape-best")??0),speed:.006,multiplier:1,dash:1,obstacles:[],lastSpawn:0});
+  const sceneNow=useRef<PlayScene>("system"),activityNow=useRef<OrbitActivity>("escape");
   const [active,setActive]=useState(false),[mode,setMode]=useState<OrbitPlayMode>("playground"),[gesture,setGesture]=useState("Waiting for hands"),[message,setMessage]=useState("Camera off · all tracking is local"),[immersive,setImmersive]=useState(false),[effect,setEffect]=useState("IDLE");
-  const [scene,setScene]=useState<PlayScene>("system"),[activity,setActivity]=useState<OrbitActivity>("gravity");
+  const [scene,setScene]=useState<PlayScene>("system"),[activity,setActivity]=useState<OrbitActivity>("escape");
+
+  const startEscape=()=>{
+    escape.current={...escape.current,running:true,over:false,lane:0,targetLane:0,distance:0,score:0,speed:.006,multiplier:1,dash:1,obstacles:[],lastSpawn:0};
+    setEffect("ORBIT ESCAPE");setGesture("Run started");setMessage("Steer with A/D or your hand · Space to phase dash");
+  };
+  const steerEscape=(direction:-1|1)=>{const game=escape.current;if(game.running)game.targetLane=clamp(game.targetLane+direction,-1,1)};
+  const dashEscape=()=>{const game=escape.current;if(game.running&&game.dash>=1){game.dash=0;setEffect("PHASE DASH")}};
 
   const chooseScene=(next:PlayScene)=>{
     sceneNow.current=next;setScene(next);setEffect(next==="system"?"CELESTIAL NAVIGATION":next==="orbit"?"ORBIT WORLD":"ENERGY STABLE");
+    if(next!=="orbit")escape.current.running=false;
     setMessage(next==="system"?"Rotate with both hands · pinch a planet to visit":next==="orbit"?"Choose an experience inside Orbit":"Pull with two pinches, then clap to burst");
   };
 
@@ -102,9 +113,18 @@ export function OrbitPlay(){
     if(hands.length===2){
       const ordered=[...hands].sort((a,b)=>a.palm.x-b.palm.x);
       const dx=ordered[1].palm.x-ordered[0].palm.x,dy=ordered[1].palm.y-ordered[0].palm.y;
-      const separation=Math.hypot(dx,dy),angle=Math.atan2(dy,dx);
-      state.targetYaw+=clamp(angle,-.7,.7)*.035;
-      state.targetZoom=clamp(.62+separation*1.45,.72,1.62);
+      const separation=Math.hypot(dx,dy),angle=Math.atan2(dy,dx),bothOpen=ordered.every(hand=>hand.gesture==="Open palm");
+      if(state.trackedHands===2&&bothOpen){
+        const separationDelta=separation-state.lastSeparation;
+        let angleDelta=angle-state.lastAngle;while(angleDelta>Math.PI)angleDelta-=Math.PI*2;while(angleDelta<-Math.PI)angleDelta+=Math.PI*2;
+        if(Math.abs(separationDelta)>.003){
+          state.targetZoom=clamp(state.targetZoom+separationDelta*3.8,.52,2.25);
+          setEffect(separationDelta>0?"ZOOMING IN":"ZOOMING OUT");setGesture(`Two palms · ${Math.round(state.targetZoom*100)}%`);
+        }else if(Math.abs(angleDelta)>.008){
+          state.targetYaw+=angleDelta*1.15;setEffect(angleDelta>0?"ROTATING CLOCKWISE":"ROTATING COUNTERCLOCKWISE");setGesture("Two palms · rotating system");
+        }
+      }
+      state.lastSeparation=separation;state.lastAngle=angle;state.trackedHands=2;
       const bothPinch=ordered.every(hand=>hand.pinching);
       if(bothPinch&&now-state.lastPinch>1200){
         state.lastPinch=now;
@@ -113,48 +133,95 @@ export function OrbitPlay(){
       }
     }else if(hands.length===1){
       const hand=hands[0];
-      state.targetYaw+=(hand.palm.x-.5)*.018;
+      if(sceneNow.current==="orbit"&&activityNow.current==="escape"&&escape.current.running){
+        escape.current.targetLane=hand.palm.x<.38?-1:hand.palm.x>.62?1:0;
+        if(hand.pinching)dashEscape();
+        state.lastMidpoint=hand.palm;state.trackedHands=1;
+        return;
+      }
+      if(state.trackedHands===1&&state.lastMidpoint&&hand.gesture==="Open palm"){
+        const dragX=hand.palm.x-state.lastMidpoint.x;
+        if(Math.abs(dragX)>.004){state.targetYaw+=dragX*2.6;setEffect("PANNING SYSTEM");setGesture("Open palm · dragging orbit")}
+      }
+      state.lastMidpoint=hand.palm;state.trackedHands=1;
       if(hand.pinching&&now-state.lastPinch>900){
         state.lastPinch=now;
         if(sceneNow.current==="system"&&state.selected===2){state.portal=1;chooseScene("orbit")}
         else if(sceneNow.current==="orbit"){
-          const index=clamp(Math.floor(hand.point.x*3),0,2);
-          const next=(["gravity","forge","comets"] as OrbitActivity[])[index];
+          if(activityNow.current==="escape"&&escape.current.running){
+            escape.current.targetLane=hand.palm.x<.38?-1:hand.palm.x>.62?1:0;
+            dashEscape();
+            return;
+          }
+          const index=clamp(Math.floor(hand.point.x*4),0,3);
+          const next=(["escape","gravity","forge","comets"] as OrbitActivity[])[index];
           activityNow.current=next;setActivity(next);setEffect(`${next.toUpperCase()} ACTIVE`);
-          setMessage(next==="gravity"?"Move both hands to bend the gravity wells":next==="forge"?"Pinch and pull to forge a new star":"Guide the comet through the orbital gates");
+          setMessage(next==="escape"?"Start a run · steer with one hand and pinch to dash":next==="gravity"?"Move both hands to bend the gravity wells":next==="forge"?"Pinch and pull to forge a new star":"Guide the comet through the orbital gates");
         }
       }
-    }
-    state.yaw=mix(state.yaw,state.targetYaw,.055);state.zoom=mix(state.zoom,state.targetZoom,.065);
+    }else state.trackedHands=0;
+    state.yaw=mix(state.yaw,state.targetYaw,.11);state.zoom=mix(state.zoom,state.targetZoom,.14);
     state.selected=((Math.round((-state.yaw)/(Math.PI*.36))%planets.length)+planets.length)%planets.length;
+  };
+
+  const drawEscape=(ctx:CanvasRenderingContext2D,width:number,height:number)=>{
+    const game=escape.current,t=phase.current,horizon=height*.29,roadBottom=height*1.04,centerX=width*.5;
+    const bg=ctx.createLinearGradient(0,0,0,height);bg.addColorStop(0,"#01030a");bg.addColorStop(.48,"#07101a");bg.addColorStop(1,"#020407");ctx.fillStyle=bg;ctx.fillRect(0,0,width,height);
+    for(let i=0;i<360;i++){const x=((Math.sin(i*73.37)*27183.17)%1+1)%1*width,y=((Math.sin(i*41.71)*13731.91)%1+1)%1*horizon*.95;ctx.fillStyle=`rgba(220,235,255,${.16+(i%13===0?.55:0)})`;ctx.fillRect(x,y,i%13===0?1.4:.55,i%13===0?1.4:.55)}
+    const anomaly=ctx.createRadialGradient(width*.78,height*.14,2,width*.78,height*.14,width*.22);anomaly.addColorStop(0,"#000");anomaly.addColorStop(.12,"#020207");anomaly.addColorStop(.16,"rgba(178,211,255,.78)");anomaly.addColorStop(.2,"rgba(43,91,155,.2)");anomaly.addColorStop(1,"rgba(0,0,0,0)");ctx.fillStyle=anomaly;ctx.fillRect(0,0,width,height*.55);
+    ctx.fillStyle="#080d14";ctx.beginPath();ctx.moveTo(0,height);ctx.lineTo(width*.34,horizon);ctx.lineTo(width*.66,horizon);ctx.lineTo(width,height);ctx.closePath();ctx.fill();
+    for(let line=-1;line<=1;line++){ctx.strokeStyle="rgba(111,161,202,.16)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(centerX+line*width*.055,horizon);ctx.lineTo(centerX+line*width*.28,roadBottom);ctx.stroke()}
+    if(game.running){
+      game.speed=Math.min(.018,game.speed+.0000022);game.distance+=game.speed;game.score+=game.speed*125*game.multiplier;game.dash=Math.min(1,game.dash+.0018);
+      if(game.distance-game.lastSpawn>.19){game.lastSpawn=game.distance;const lane=([-1,0,1] as const)[Math.floor(Math.random()*3)];game.obstacles.push({lane,z:1,kind:(["ice","debris","rift"] as const)[Math.floor(Math.random()*3)],passed:false})}
+      game.lane=mix(game.lane,game.targetLane,.13);
+      game.obstacles.forEach(obstacle=>{obstacle.z-=game.speed*(game.dash<.22?1.9:1)});
+      const collision=game.obstacles.find(item=>!item.passed&&item.z<.115&&item.z>.025&&Math.abs(item.lane-game.lane)<.42);
+      if(collision&&game.dash>.22){game.running=false;game.over=true;game.best=Math.max(game.best,Math.floor(game.score));localStorage.setItem("orbit-escape-best",String(game.best));setEffect("RUN ENDED");setMessage("Press Enter or click Restart · beat your best")}
+      game.obstacles.forEach(item=>{if(!item.passed&&item.z<=.02){item.passed=true;game.multiplier=Math.min(8,game.multiplier+.25)}});
+      game.obstacles=game.obstacles.filter(item=>item.z>-.2);
+    }
+    const project=(lane:number,z:number)=>{const depth=1-clamp(z,0,1),spread=width*(.055+depth*.225);return{x:centerX+lane*spread,y:horizon+(roadBottom-horizon)*depth,scale:.1+depth*1.22}};
+    game.obstacles.slice().sort((a,b)=>b.z-a.z).forEach(item=>{const p=project(item.lane,item.z),r=22*p.scale;ctx.save();ctx.translate(p.x,p.y);ctx.rotate(t*(item.kind==="debris"?.7:.18)+item.lane);ctx.shadowColor=item.kind==="rift"?"#509cff":"#8db9d1";ctx.shadowBlur=item.kind==="rift"?22:7;if(item.kind==="rift"){ctx.strokeStyle="rgba(102,170,255,.85)";ctx.lineWidth=5*p.scale;ctx.beginPath();ctx.ellipse(0,0,r*.6,r*1.35,0,0,Math.PI*2);ctx.stroke()}else{ctx.fillStyle=item.kind==="ice"?"#7692a4":"#343b43";ctx.strokeStyle="#b6d4df";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(-r,-r*.55);ctx.lineTo(r*.52,-r);ctx.lineTo(r,r*.4);ctx.lineTo(0,r);ctx.lineTo(-r*.75,r*.35);ctx.closePath();ctx.fill();ctx.stroke()}ctx.restore()});
+    const shipX=centerX+game.lane*width*.28,shipY=height*.81,shipScale=Math.min(width,height)/780;ctx.save();ctx.translate(shipX,shipY);ctx.scale(shipScale,shipScale);ctx.shadowColor=game.dash<.22?"#d9f6ff":"#5fcaff";ctx.shadowBlur=game.dash<.22?38:16;ctx.fillStyle="#c7d2d8";ctx.beginPath();ctx.moveTo(0,-31);ctx.lineTo(24,21);ctx.lineTo(7,14);ctx.lineTo(0,28);ctx.lineTo(-7,14);ctx.lineTo(-24,21);ctx.closePath();ctx.fill();ctx.fillStyle=game.dash<.22?"#fff":"#62cfff";ctx.beginPath();ctx.moveTo(-7,19);ctx.lineTo(0,48+(game.dash<.22?35:0));ctx.lineTo(7,19);ctx.fill();ctx.restore();
+    ctx.fillStyle="#eef6fb";ctx.font="600 12px Inter, sans-serif";ctx.textAlign="left";ctx.fillText(`SCORE  ${Math.floor(game.score).toString().padStart(6,"0")}`,32,42);ctx.fillStyle="#81909d";ctx.fillText(`BEST  ${game.best.toString().padStart(6,"0")}`,32,62);ctx.textAlign="right";ctx.fillStyle="#d7e8f2";ctx.fillText(`× ${game.multiplier.toFixed(2)}`,width-32,42);ctx.fillStyle="rgba(115,191,231,.25)";ctx.fillRect(width-152,54,120,3);ctx.fillStyle="#8edcff";ctx.fillRect(width-152,54,120*game.dash,3);
+    if(!game.running){ctx.textAlign="center";ctx.fillStyle="#f3f7fa";ctx.font="300 34px Inter, sans-serif";ctx.fillText(game.over?"SIGNAL LOST":"ORBIT ESCAPE",centerX,height*.42);ctx.fillStyle="#94a6b2";ctx.font="500 11px Inter, sans-serif";ctx.fillText(game.over?"ENTER TO RUN AGAIN":"A / D TO STEER  ·  SPACE TO PHASE DASH",centerX,height*.42+28)}
   };
 
   const drawUniverse=(ctx:CanvasRenderingContext2D,width:number,height:number)=>{
     const state=universe.current,t=phase.current,center={x:width*.5,y:height*.52},unit=Math.min(width,height);
     state.yaw=mix(state.yaw,state.targetYaw,.045);state.zoom=mix(state.zoom,state.targetZoom,.05);
-    const sky=ctx.createRadialGradient(center.x,center.y,0,center.x,center.y,unit*.85);
-    sky.addColorStop(0,scene==="orbit"?"#160b35":"#091731");sky.addColorStop(.45,"#030713");sky.addColorStop(1,"#010207");ctx.fillStyle=sky;ctx.fillRect(0,0,width,height);
-    for(let i=0;i<190;i++){const x=(Math.sin(i*91.73)*.5+.5)*width,y=(Math.sin(i*37.17+8)*.5+.5)*height,a=.15+(i%7)*.07;ctx.fillStyle=`rgba(190,220,255,${a})`;ctx.fillRect(x,y,i%11===0?1.7:1,i%11===0?1.7:1)}
+    const sky=ctx.createRadialGradient(width*.72,height*.25,0,center.x,center.y,Math.max(width,height));
+    sky.addColorStop(0,scene==="orbit"?"#101020":"#090d17");sky.addColorStop(.34,"#03050a");sky.addColorStop(1,"#000104");ctx.fillStyle=sky;ctx.fillRect(0,0,width,height);
+    for(let i=0;i<520;i++){const x=((Math.sin(i*91.73)*43758.5453)%1+1)%1*width,y=((Math.sin(i*37.17+8)*24634.6345)%1+1)%1*height,bright=i%43===0,size=bright?1.55:i%9===0?.9:.48,a=bright?.78:.16+(i%7)*.035;ctx.fillStyle=i%17===0?`rgba(178,201,255,${a})`:`rgba(235,239,242,${a})`;ctx.beginPath();ctx.arc(x,y,size,0,Math.PI*2);ctx.fill()}
     if(sceneNow.current==="system"){
-      const sunRadius=unit*.075*state.zoom,glow=ctx.createRadialGradient(center.x,center.y,0,center.x,center.y,sunRadius*4);
-      glow.addColorStop(0,"rgba(255,250,205,1)");glow.addColorStop(.2,"rgba(255,166,57,.72)");glow.addColorStop(1,"rgba(255,90,12,0)");ctx.fillStyle=glow;ctx.beginPath();ctx.arc(center.x,center.y,sunRadius*4,0,Math.PI*2);ctx.fill();
+      const sunRadius=unit*.062*state.zoom,glow=ctx.createRadialGradient(center.x,center.y,sunRadius*.45,center.x,center.y,sunRadius*5.4);
+      glow.addColorStop(0,"rgba(255,244,203,.98)");glow.addColorStop(.12,"rgba(255,190,92,.62)");glow.addColorStop(.42,"rgba(218,82,19,.16)");glow.addColorStop(1,"rgba(255,90,12,0)");ctx.fillStyle=glow;ctx.beginPath();ctx.arc(center.x,center.y,sunRadius*5.4,0,Math.PI*2);ctx.fill();
+      const sun=ctx.createRadialGradient(center.x-sunRadius*.28,center.y-sunRadius*.3,2,center.x,center.y,sunRadius);sun.addColorStop(0,"#fffdf1");sun.addColorStop(.26,"#ffe5a3");sun.addColorStop(.72,"#f39735");sun.addColorStop(1,"#a83b0e");ctx.fillStyle=sun;ctx.beginPath();ctx.arc(center.x,center.y,sunRadius,0,Math.PI*2);ctx.fill();
       planets.forEach((planet,index)=>{
         const orbit=unit*planet.orbit*state.zoom;
-        ctx.strokeStyle=index===state.selected?"rgba(165,119,255,.42)":"rgba(119,162,219,.12)";ctx.lineWidth=index===state.selected?1.5:1;ctx.beginPath();ctx.ellipse(center.x,center.y,orbit,orbit*.34,0,0,Math.PI*2);ctx.stroke();
+        ctx.strokeStyle=index===state.selected?"rgba(190,200,224,.3)":"rgba(160,174,195,.09)";ctx.lineWidth=index===state.selected?1.15:.65;ctx.beginPath();ctx.ellipse(center.x,center.y,orbit,orbit*.34,0,0,Math.PI*2);ctx.stroke();
         const angle=t*planet.speed+index*1.37+state.yaw,x=center.x+Math.cos(angle)*orbit,y=center.y+Math.sin(angle)*orbit*.34;
-        const radius=unit*planet.size*(index===state.selected?1.16:1),planetGlow=ctx.createRadialGradient(x-radius*.3,y-radius*.35,1,x,y,radius*2.8);
-        planetGlow.addColorStop(0,"#fff");planetGlow.addColorStop(.16,`hsl(${planet.hue} 88% 72%)`);planetGlow.addColorStop(.48,`hsl(${planet.hue} 72% 35%)`);planetGlow.addColorStop(1,`hsl(${planet.hue} 80% 20% / 0)`);
-        ctx.fillStyle=planetGlow;ctx.beginPath();ctx.arc(x,y,radius*2.8,0,Math.PI*2);ctx.fill();
-        if(index===2){ctx.strokeStyle="rgba(206,174,255,.75)";ctx.lineWidth=1.2;ctx.beginPath();ctx.ellipse(x,y,radius*1.8,radius*.55,-.3,0,Math.PI*2);ctx.stroke()}
+        const radius=unit*planet.size*(index===state.selected?1.12:1);
+        ctx.save();ctx.beginPath();ctx.arc(x,y,radius,0,Math.PI*2);ctx.clip();
+        const surface=ctx.createRadialGradient(x-radius*.36,y-radius*.42,radius*.06,x+radius*.2,y+radius*.12,radius*1.12);surface.addColorStop(0,"#edf0e7");surface.addColorStop(.16,planet.day);surface.addColorStop(.68,planet.day);surface.addColorStop(1,planet.night);ctx.fillStyle=surface;ctx.fillRect(x-radius,y-radius,radius*2,radius*2);
+        ctx.globalAlpha=.42;
+        for(let band=0;band<7;band++){const yy=y-radius+((band+1)/8)*radius*2+Math.sin(t*.2+band)*radius*.04;ctx.strokeStyle=planet.kind==="gas"?(band%2?"#e2a47b":"#633a31"):planet.kind==="ocean"?(band%2?"#d7e0d1":"#183d4a"):planet.kind==="orbit"?(band%2?"#c1c6ba":"#252d48"):"#5e534c";ctx.lineWidth=Math.max(.6,radius*(planet.kind==="gas"?.11:.035));ctx.beginPath();ctx.moveTo(x-radius,yy);ctx.bezierCurveTo(x-radius*.4,yy-radius*.13,x+radius*.3,yy+radius*.11,x+radius,yy);ctx.stroke()}
+        ctx.restore();ctx.strokeStyle="rgba(216,226,237,.25)";ctx.lineWidth=.65;ctx.beginPath();ctx.arc(x,y,radius,0,Math.PI*2);ctx.stroke();
+        if(index===2){ctx.save();ctx.translate(x,y);ctx.rotate(-.24);ctx.scale(1,.28);ctx.strokeStyle="rgba(185,177,166,.62)";ctx.lineWidth=Math.max(1.4,radius*.12);ctx.beginPath();ctx.arc(0,0,radius*1.62,0,Math.PI*2);ctx.stroke();ctx.restore()}
         if(index===state.selected){ctx.fillStyle="#f2efff";ctx.font="600 11px Inter, sans-serif";ctx.textAlign="center";ctx.fillText(planet.name.toUpperCase(),x,y-radius*2.2)}
       });
       ctx.fillStyle="rgba(222,229,255,.7)";ctx.font="500 10px Inter, sans-serif";ctx.textAlign="center";ctx.fillText("ROTATE THE SYSTEM  ·  PINCH ORBIT TO ENTER",center.x,height-62);
     }else{
       state.portal*=.94;
-      const r=unit*(.22+state.portal*.6),world=ctx.createRadialGradient(center.x-r*.25,center.y-r*.3,2,center.x,center.y,r);
-      world.addColorStop(0,"#fff");world.addColorStop(.1,"#cbb7ff");world.addColorStop(.37,"#7449d8");world.addColorStop(.7,"#231258");world.addColorStop(1,"rgba(15,5,40,0)");
-      ctx.fillStyle=world;ctx.beginPath();ctx.arc(center.x,center.y,r,0,Math.PI*2);ctx.fill();
-      for(let ring=0;ring<5;ring++){ctx.save();ctx.translate(center.x,center.y);ctx.rotate(t*(.18+ring*.05)+ring);ctx.scale(1,.35);ctx.strokeStyle=`rgba(${135+ring*18},${85+ring*14},255,${.38-ring*.045})`;ctx.lineWidth=1.4;ctx.beginPath();ctx.arc(0,0,r*(1.08+ring*.09),0,Math.PI*2);ctx.stroke();ctx.restore()}
+      const r=unit*(.205+state.portal*.6),singularity=ctx.createRadialGradient(center.x,center.y,1,center.x,center.y,r*.56);
+      singularity.addColorStop(0,"#000");singularity.addColorStop(.24,"#000107");singularity.addColorStop(.34,"rgba(229,247,255,.94)");singularity.addColorStop(.42,"rgba(71,139,201,.38)");singularity.addColorStop(1,"rgba(4,9,17,0)");ctx.fillStyle=singularity;ctx.beginPath();ctx.arc(center.x,center.y,r*.58,0,Math.PI*2);ctx.fill();
+      ctx.save();ctx.beginPath();ctx.arc(center.x,center.y,r,0,Math.PI*2);ctx.clip();
+      const ice=ctx.createRadialGradient(center.x-r*.42,center.y-r*.48,r*.04,center.x+r*.12,center.y+r*.14,r*1.08);ice.addColorStop(0,"#a9bec7");ice.addColorStop(.2,"#4b6170");ice.addColorStop(.58,"#111b26");ice.addColorStop(1,"#02050a");ctx.fillStyle=ice;ctx.fillRect(center.x-r,center.y-r,r*2,r*2);
+      ctx.strokeStyle="rgba(122,199,241,.68)";ctx.shadowColor="#4db7f2";ctx.shadowBlur=8;ctx.lineWidth=Math.max(1,r*.009);
+      for(let crack=0;crack<19;crack++){const angle=crack*.91+t*.012,start=r*(.22+(crack%4)*.08),end=r*(.62+(crack%3)*.1);ctx.beginPath();ctx.moveTo(center.x+Math.cos(angle)*start,center.y+Math.sin(angle)*start);ctx.lineTo(center.x+Math.cos(angle+.08)*end*.58,center.y+Math.sin(angle+.08)*end*.58);ctx.lineTo(center.x+Math.cos(angle-.04)*end,center.y+Math.sin(angle-.04)*end);ctx.stroke()}
+      ctx.restore();ctx.shadowBlur=0;ctx.fillStyle=singularity;ctx.beginPath();ctx.arc(center.x,center.y,r*.58,0,Math.PI*2);ctx.fill();ctx.strokeStyle="rgba(176,215,231,.3)";ctx.lineWidth=1;ctx.beginPath();ctx.arc(center.x,center.y,r,0,Math.PI*2);ctx.stroke();
+      for(let fragment=0;fragment<18;fragment++){const angle=t*(fragment%2?-.1:.08)+fragment*.73,distance=r*(1.12+(fragment%5)*.09),x=center.x+Math.cos(angle)*distance,y=center.y+Math.sin(angle)*distance*.43,size=r*(.018+(fragment%4)*.009);ctx.save();ctx.translate(x,y);ctx.rotate(angle*2);ctx.fillStyle=fragment%3?"#293a46":"#6d8794";ctx.beginPath();ctx.moveTo(-size,-size*.3);ctx.lineTo(size*.5,-size);ctx.lineTo(size,size*.45);ctx.lineTo(-size*.35,size);ctx.closePath();ctx.fill();ctx.restore()}
       if(activityNow.current==="gravity"){
         handsNow.current.forEach((hand,index)=>{const x=hand.palm.x*width,y=hand.palm.y*height,well=ctx.createRadialGradient(x,y,2,x,y,unit*.12);well.addColorStop(0,index?"rgba(255,105,218,.85)":"rgba(75,218,255,.85)");well.addColorStop(.3,"rgba(126,71,255,.25)");well.addColorStop(1,"rgba(0,0,0,0)");ctx.fillStyle=well;ctx.beginPath();ctx.arc(x,y,unit*.12,0,Math.PI*2);ctx.fill();for(let n=0;n<4;n++){ctx.strokeStyle=`rgba(190,157,255,${.3-n*.05})`;ctx.beginPath();ctx.ellipse(x,y,unit*(.035+n*.019),unit*(.016+n*.008),t*(index?-.6:.6)+n,0,Math.PI*2);ctx.stroke()}});
       }else if(activityNow.current==="forge"){
@@ -175,6 +242,7 @@ export function OrbitPlay(){
     if(canvas.width!==Math.floor(box.width*ratio)||canvas.height!==Math.floor(box.height*ratio)){canvas.width=Math.floor(box.width*ratio);canvas.height=Math.floor(box.height*ratio)}
     const ctx=canvas.getContext("2d")!;ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,box.width,box.height);
     const hands=handsNow.current,state=energy.current;phase.current+=.013;
+    if(sceneNow.current==="orbit"&&activityNow.current==="escape"){drawEscape(ctx,box.width,box.height);return}
     if(sceneNow.current!=="energy"){drawUniverse(ctx,box.width,box.height);return}
     const center={x:state.center.x*box.width,y:state.center.y*box.height};
     const pinchCharge=hands.filter(hand=>hand.pinching).length,base=Math.min(box.width,box.height)*.225;
@@ -251,23 +319,23 @@ export function OrbitPlay(){
       const loop=async()=>{drawWorld();if(video.current&&tracker.current&&!processing.current&&video.current.readyState>=2){processing.current=true;try{await tracker.current.send({image:video.current})}catch{processing.current=false}}raf.current=requestAnimationFrame(loop)};void loop();
     }catch(error){await stop();setMessage(error instanceof Error?error.message:"Camera permission was denied")}
   };
-  useEffect(()=>{const changed=()=>setImmersive(Boolean(document.fullscreenElement));const keydown=(event:KeyboardEvent)=>{if(event.key==="Escape"&&stream.current)void stop()};document.addEventListener("fullscreenchange",changed);document.addEventListener("keydown",keydown);drawWorld();return()=>{document.removeEventListener("fullscreenchange",changed);document.removeEventListener("keydown",keydown);void stop()}},[]);
+  useEffect(()=>{const changed=()=>setImmersive(Boolean(document.fullscreenElement));const keydown=(event:KeyboardEvent)=>{if(event.key==="Escape"&&stream.current){void stop();return}if(sceneNow.current==="orbit"&&activityNow.current==="escape"){if(event.key==="ArrowLeft"||event.key.toLowerCase()==="a")steerEscape(-1);if(event.key==="ArrowRight"||event.key.toLowerCase()==="d")steerEscape(1);if(event.code==="Space"){event.preventDefault();dashEscape()}if(event.key==="Enter")startEscape()}};document.addEventListener("fullscreenchange",changed);document.addEventListener("keydown",keydown);drawWorld();return()=>{document.removeEventListener("fullscreenchange",changed);document.removeEventListener("keydown",keydown);void stop()}},[]);
 
   return <div ref={root} className={`orbit-play ${active?"is-active":""} ${effect==="SUPERNOVA"?"is-bursting":""}`}>
     <canvas className="energy-world" ref={world}/>
     <video ref={video} muted playsInline aria-hidden="true"/>
     <canvas className="hand-overlay" ref={overlay}/>
-    <div className="play-vignette"/><div className="play-grain"/>
     <header><div><small>ORBIT PLAY · PHASE 10 UNIVERSE</small><h1>{scene==="system"?"A universe in your hands.":scene==="orbit"?"Welcome to Orbit.":"Shape the impossible."}</h1><p>{scene==="system"?"Rotate, zoom, select planets, and enter Orbit World.":scene==="orbit"?"Explore gravity, forge stars, and race comets.":"Move the field. Rotate both hands. Pinch and pull, then clap to release."}</p></div><span className={active?"camera-live":""}>● {active?"CAMERA ACTIVE · LOCAL ONLY":"CAMERA OFF"}</span></header>
     <div className="play-controls">
       <div className="scene-switch"><button className={scene==="system"?"selected":""} onClick={()=>chooseScene("system")}>Solar system</button><button className={scene==="orbit"?"selected":""} onClick={()=>chooseScene("orbit")}>Orbit world</button><button className={scene==="energy"?"selected":""} onClick={()=>chooseScene("energy")}>Energy lab</button></div>
-      {scene==="orbit"&&<div className="activity-switch">{(["gravity","forge","comets"] as OrbitActivity[]).map(item=><button key={item} className={activity===item?"selected":""} onClick={()=>{activityNow.current=item;setActivity(item);setEffect(`${item.toUpperCase()} ACTIVE`)}}>{item==="gravity"?"Gravity":item==="forge"?"Forge":"Comets"}</button>)}</div>}
+      {scene==="orbit"&&<div className="activity-switch">{(["escape","gravity","forge","comets"] as OrbitActivity[]).map(item=><button key={item} className={activity===item?"selected":""} onClick={()=>{activityNow.current=item;setActivity(item);escape.current.running=false;setEffect(`${item.toUpperCase()} ACTIVE`)}}>{item==="escape"?"Escape":item==="gravity"?"Gravity":item==="forge"?"Forge":"Comets"}</button>)}</div>}
       <div className="mode-switch"><button className={mode==="playground"?"selected":""} disabled={active} onClick={()=>setMode("playground")}>Play</button><button className={mode==="desktop"?"selected":""} disabled={active} onClick={()=>setMode("desktop")}>Desktop</button></div>
       {active?<button className="play-stop" onClick={()=>void stop()}>Stop</button>:<button className="play-start" onClick={()=>void start()}>Enter Orbit Play</button>}
+      {scene==="orbit"&&activity==="escape"&&<button className="escape-start" disabled={!active} onClick={startEscape}>{escape.current.over?"Restart":"Launch"}</button>}
       <button className="play-immersive" onClick={()=>void toggleImmersive()}>{immersive?"Exit full screen":"Full screen"}</button>
     </div>
     <div className="gesture-readout"><small>{effect}</small><b>{gesture}</b><span>{message}</span></div>
-    <div className="play-hint">{scene==="energy"?<><span>MOVE TOGETHER</span><i/><span>ROTATE</span><i/><span>PINCH + PULL</span><i/><span>CLAP TO BURST</span></>:scene==="system"?<><span>ROTATE SYSTEM</span><i/><span>SPREAD TO ZOOM</span><i/><span>PINCH TO VISIT</span></>:<><span>GRAVITY GARDEN</span><i/><span>STAR FORGE</span><i/><span>COMET RUN</span></>}</div>
+    <div className="play-hint">{scene==="energy"?<><span>MOVE TOGETHER</span><i/><span>ROTATE</span><i/><span>PINCH + PULL</span><i/><span>CLAP TO BURST</span></>:scene==="system"?<><span>ROTATE SYSTEM</span><i/><span>SPREAD TO ZOOM</span><i/><span>PINCH TO VISIT</span></>:activity==="escape"?<><span>A / D OR HAND TO STEER</span><i/><span>SPACE OR PINCH TO DASH</span></>:<><span>GRAVITY GARDEN</span><i/><span>STAR FORGE</span><i/><span>COMET RUN</span></>}</div>
     <aside className="play-safety"><b>LOCAL CAMERA</b><span>Only hand landmarks appear; the camera image stays hidden. Frames are never recorded or uploaded. Press Esc or hold both fists for 2 seconds to stop.</span></aside>
   </div>;
 }

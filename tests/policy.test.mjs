@@ -244,7 +244,14 @@ test("Orbit Play is local, permission-visible, allowlisted, and has an emergency
   assert.match(renderer, /GRAVITY GARDEN/);
   assert.match(renderer, /STAR FORGE/);
   assert.match(renderer, /COMET RUN/);
+  assert.match(renderer, /ORBIT ESCAPE/);
+  assert.match(renderer, /orbit-escape-best/);
+  assert.match(renderer, /PHASE DASH/);
+  assert.match(renderer, /A \/ D OR HAND TO STEER/);
   assert.match(renderer, /PINCH ORBIT TO ENTER/);
+  assert.doesNotMatch(renderer, /className="play-vignette"/);
+  assert.doesNotMatch(renderer, /className="play-grain"/);
+  assert.doesNotMatch(playStyles, /\.play-vignette|\.play-grain/);
   assert.doesNotMatch(playStyles, /\.orbit-play\.is-active:hover header p/);
   assert.match(main, /new Set\(\["move", "down", "up", "scroll", "media-toggle", "stop"\]\)/);
   assert.doesNotMatch(native, /keyDown|keyboardSetUnicodeString|deleteFile|sendEmail/);

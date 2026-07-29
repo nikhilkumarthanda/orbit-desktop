@@ -218,9 +218,10 @@ test("conversation history is local, bounded, restorable, and user-clearable", a
 
 test("Orbit Play is local, permission-visible, allowlisted, and has an emergency stop", async () => {
   const fs = await import("node:fs/promises");
-  const [main, renderer, contracts, preload, pkg, native] = await Promise.all([
+  const [main, renderer, playStyles, contracts, preload, pkg, native] = await Promise.all([
     fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8"),
     fs.readFile(new URL("../src/renderer/orbit-play.tsx", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/renderer/orbit-play.css", import.meta.url), "utf8"),
     fs.readFile(new URL("../src/shared/contracts.ts", import.meta.url), "utf8"),
     fs.readFile(new URL("../preload.cjs", import.meta.url), "utf8"),
     fs.readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -231,8 +232,12 @@ test("Orbit Play is local, permission-visible, allowlisted, and has an emergency
   assert.match(renderer, /Frames are never recorded or uploaded|frames never leave this Mac/i);
   assert.match(renderer, /Date\.now\(\)-fistSince\.current>850/);
   assert.match(renderer, /maxNumHands:2/);
-  assert.match(renderer, /point:\{x:lm\[8\]\.x,y:lm\[8\]\.y\}/);
+  assert.match(renderer, /point:\{x:smoothLm\[8\]\.x,y:smoothLm\[8\]\.y\}/);
   assert.doesNotMatch(renderer, /x:1-lm\[8\]\.x/);
+  assert.match(playStyles, /\.orbit-play video\{display:none!important/);
+  assert.match(renderer, /Math\.atan2/);
+  assert.match(renderer, /const clap=/);
+  assert.match(renderer, /SUPERNOVA/);
   assert.match(main, /new Set\(\["move", "down", "up", "scroll", "media-toggle", "stop"\]\)/);
   assert.doesNotMatch(native, /keyDown|keyboardSetUnicodeString|deleteFile|sendEmail/);
   assert.match(contracts, /OrbitPlayGesture/);

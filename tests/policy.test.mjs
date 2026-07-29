@@ -240,6 +240,12 @@ test("Orbit Play is local, permission-visible, allowlisted, and has an emergency
   assert.match(renderer, /Math\.atan2/);
   assert.match(renderer, /const clap=/);
   assert.match(renderer, /SUPERNOVA/);
+  assert.match(renderer, /type PlayScene = "energy"\|"system"\|"orbit"/);
+  assert.match(renderer, /GRAVITY GARDEN/);
+  assert.match(renderer, /STAR FORGE/);
+  assert.match(renderer, /COMET RUN/);
+  assert.match(renderer, /PINCH ORBIT TO ENTER/);
+  assert.doesNotMatch(playStyles, /\.orbit-play\.is-active:hover header p/);
   assert.match(main, /new Set\(\["move", "down", "up", "scroll", "media-toggle", "stop"\]\)/);
   assert.doesNotMatch(native, /keyDown|keyboardSetUnicodeString|deleteFile|sendEmail/);
   assert.match(contracts, /OrbitPlayGesture/);

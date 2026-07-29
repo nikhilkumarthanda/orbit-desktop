@@ -135,8 +135,8 @@ export function OrbitPlay(){
       HAND_CONNECTIONS.forEach(([a,b])=>{ctx.beginPath();ctx.moveTo(hand.landmarks[a].x*box.width,hand.landmarks[a].y*box.height);ctx.lineTo(hand.landmarks[b].x*box.width,hand.landmarks[b].y*box.height);ctx.stroke()});
       hand.landmarks.forEach((p,i)=>{ctx.beginPath();ctx.fillStyle=i===8?"#fff2ba":handIndex?"#ffad62":"#73efff";ctx.arc(p.x*box.width,p.y*box.height,i===8?4.5:2.2,0,Math.PI*2);ctx.fill()});
     });
-    const fist=handsNow.current.find(hand=>hand.gesture==="Fist");
-    if(fist){if(!fistSince.current)fistSince.current=Date.now();if(Date.now()-fistSince.current>850){setMessage("Emergency stop detected");void stop();return}}else fistSince.current=0;
+    const deliberateStop=handsNow.current.length===2&&handsNow.current.every(hand=>hand.gesture==="Fist");
+    if(deliberateStop){if(!fistSince.current)fistSince.current=Date.now();if(Date.now()-fistSince.current>2000){setMessage("Two-hand emergency stop detected");void stop();return}}else fistSince.current=0;
     const primary=handsNow.current[0];
     if(mode==="desktop"&&primary){
       if(["Point","Pinch","Drag"].includes(primary.gesture))void window.orbit.orbitPlayAction({action:"move",x:primary.point.x,y:primary.point.y});
@@ -155,11 +155,11 @@ export function OrbitPlay(){
       await loadHands();const hands=new window.Hands({locateFile:mediaPipeAsset});tracker.current=hands;
       hands.setOptions({selfieMode:true,maxNumHands:2,modelComplexity:1,minDetectionConfidence:.62,minTrackingConfidence:.62});hands.onResults(onResults);
       const status=await window.orbit.orbitPlayStart(mode);if(!status.supported)throw new Error(status.message);
-      setActive(true);setEffect("ENERGY STABLE");setMessage(mode==="desktop"?"Desktop control active · hold a fist to stop":"Pull with two pinches, then clap to burst");
+      setActive(true);setEffect("ENERGY STABLE");setMessage(mode==="desktop"?"Desktop control active · press Esc or hold both fists to stop":"Pull with two pinches, then clap to burst");
       const loop=async()=>{drawWorld();if(video.current&&tracker.current&&!processing.current&&video.current.readyState>=2){processing.current=true;try{await tracker.current.send({image:video.current})}catch{processing.current=false}}raf.current=requestAnimationFrame(loop)};void loop();
     }catch(error){await stop();setMessage(error instanceof Error?error.message:"Camera permission was denied")}
   };
-  useEffect(()=>{const changed=()=>setImmersive(Boolean(document.fullscreenElement));document.addEventListener("fullscreenchange",changed);drawWorld();return()=>{document.removeEventListener("fullscreenchange",changed);void stop()}},[]);
+  useEffect(()=>{const changed=()=>setImmersive(Boolean(document.fullscreenElement));const keydown=(event:KeyboardEvent)=>{if(event.key==="Escape"&&stream.current)void stop()};document.addEventListener("fullscreenchange",changed);document.addEventListener("keydown",keydown);drawWorld();return()=>{document.removeEventListener("fullscreenchange",changed);document.removeEventListener("keydown",keydown);void stop()}},[]);
 
   return <div ref={root} className={`orbit-play ${active?"is-active":""} ${effect==="SUPERNOVA"?"is-bursting":""}`}>
     <canvas className="energy-world" ref={world}/>
@@ -174,6 +174,6 @@ export function OrbitPlay(){
     </div>
     <div className="gesture-readout"><small>{effect}</small><b>{gesture}</b><span>{message}</span></div>
     <div className="play-hint"><span>MOVE TOGETHER</span><i/><span>ROTATE</span><i/><span>PINCH + PULL</span><i/><span>CLAP TO BURST</span></div>
-    <aside className="play-safety"><b>LOCAL CAMERA</b><span>Only hand landmarks appear; the camera image stays hidden. Frames are never recorded or uploaded. Hold either fist to stop.</span></aside>
+    <aside className="play-safety"><b>LOCAL CAMERA</b><span>Only hand landmarks appear; the camera image stays hidden. Frames are never recorded or uploaded. Press Esc or hold both fists for 2 seconds to stop.</span></aside>
   </div>;
 }

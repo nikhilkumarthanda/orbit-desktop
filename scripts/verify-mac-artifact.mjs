@@ -30,12 +30,13 @@ try {
     "Contents/Info.plist",
     "Contents/Resources/app.asar",
     "Contents/Resources/sidecar/orbit-speech",
+    "Contents/Resources/sidecar/orbit-gesture",
     "Contents/Resources/sidecar/orbit-retrieval",
   ];
   for (const relative of required) {
     if (!existsSync(path.join(app, relative))) throw new Error(`Packaged Orbit is missing ${relative}`);
   }
-  for (const key of ["NSMicrophoneUsageDescription", "NSSpeechRecognitionUsageDescription", "NSLocationWhenInUseUsageDescription"]) {
+  for (const key of ["NSCameraUsageDescription", "NSMicrophoneUsageDescription", "NSSpeechRecognitionUsageDescription", "NSLocationWhenInUseUsageDescription"]) {
     execFileSync("/usr/libexec/PlistBuddy", ["-c", `Print :${key}`, path.join(app, "Contents/Info.plist")], { stdio: "ignore" });
   }
   if (!unsigned) {

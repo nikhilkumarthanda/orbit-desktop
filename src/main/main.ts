@@ -21,12 +21,16 @@ import { createFinanceService } from "./live-info/finance-service.js";
 import { createCalendarService } from "./live-info/calendar-service.js";
 import { createEmailService } from "./live-info/email-service.js";
 import { forget, recall, remember } from "./memory.js";
-import type { CommandPlan, ConversationEntry, ConversationTurn, GitHubWorkflowStatus, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
+import type { CommandPlan, ConversationEntry, ConversationTurn, GitHubWorkflowStatus, OrbitPlayGesture, OrbitPlayMode, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let audit: AuditStore;
 let mainWindow: BrowserWindow | null = null;
 let speechProcess: ChildProcessWithoutNullStreams | null = null;
+let gestureProcess: ChildProcessWithoutNullStreams | null = null;
+let orbitPlayMode: OrbitPlayMode = "playground";
+let orbitPlayActive = false;
+let lastGestureAt = 0;
 let spokenReply: ReturnType<typeof spawn> | null = null;
 const { autoUpdater } = updater;
 const conversation: ConversationTurn[] = [];
@@ -848,6 +852,47 @@ function registerIPC() {
   ipcMain.handle("orbit:gemini:status", () => geminiStatus());
   ipcMain.handle("orbit:gemini:configure", (_event, key: string) => traced("gemini.configure", async () => { await saveGeminiKey(String(key)); return geminiStatus(); }));
   ipcMain.handle("orbit:gemini:budget", (_event, value: number) => traced("gemini.budget", async () => { setGeminiBudget(Number(value)); return geminiStatus(); }));
+  ipcMain.handle("orbit:play:start", (_event, requested: OrbitPlayMode) => {
+    orbitPlayMode = requested === "desktop" ? "desktop" : "playground";
+    orbitPlayActive = true;
+    if (orbitPlayMode === "desktop" && process.platform === "darwin" && !gestureProcess) {
+      const binary = app.isPackaged
+        ? path.join(process.resourcesPath, "sidecar", "orbit-gesture")
+        : path.join(app.getAppPath(), "release-sidecar", "orbit-gesture");
+      if (existsSync(binary)) {
+        gestureProcess = spawn(binary, [], { stdio: ["pipe", "pipe", "pipe"] });
+        gestureProcess.once("close", () => { gestureProcess = null; orbitPlayActive = false; });
+      }
+    }
+    const supported = orbitPlayMode === "playground" || Boolean(gestureProcess);
+    if (!supported) orbitPlayActive = false;
+    return { active: orbitPlayActive, mode: orbitPlayMode, supported, permission: "unknown", message: supported ? "Orbit Play is active. Camera processing stays on this Mac." : "Build the macOS gesture helper before using desktop control." };
+  });
+  ipcMain.handle("orbit:play:stop", () => {
+    orbitPlayActive = false;
+    if (gestureProcess) { gestureProcess.stdin.write('{"action":"up","x":0.5,"y":0.5}\n'); gestureProcess.kill(); gestureProcess = null; }
+    return { active: false, mode: orbitPlayMode, supported: true, permission: "unknown", message: "Orbit Play stopped." };
+  });
+  ipcMain.handle("orbit:play:action", (_event, gesture: OrbitPlayGesture) => {
+    if (!orbitPlayActive) return { accepted: false };
+    const allowed = new Set(["move", "down", "up", "scroll", "media-toggle", "stop"]);
+    if (!gesture || !allowed.has(gesture.action)) return { accepted: false };
+    if (gesture.action === "stop") {
+      orbitPlayActive = false;
+      gestureProcess?.stdin.write('{"action":"up","x":0.5,"y":0.5}\n');
+      return { accepted: true };
+    }
+    if (orbitPlayMode !== "desktop" || !gestureProcess) return { accepted: false };
+    const now = Date.now();
+    if (gesture.action === "move" && now - lastGestureAt < 24) return { accepted: false };
+    lastGestureAt = now;
+    const safe: OrbitPlayGesture = { action: gesture.action };
+    if (gesture.x !== undefined) safe.x = Math.max(0, Math.min(1, Number(gesture.x)));
+    if (gesture.y !== undefined) safe.y = Math.max(0, Math.min(1, Number(gesture.y)));
+    if (gesture.deltaY !== undefined) safe.deltaY = Math.max(-80, Math.min(80, Number(gesture.deltaY)));
+    gestureProcess.stdin.write(`${JSON.stringify(safe)}\n`);
+    return { accepted: true };
+  });
   ipcMain.handle("orbit:voice:speak", (_event, text: string) => { speak(text); return true; });
   ipcMain.handle("orbit:voice:start", () => { startSpeech(); return { started: Boolean(speechProcess) }; });
   ipcMain.handle("orbit:voice:stop", () => { stopSpeech(); return { stopped: true }; });
@@ -887,4 +932,4 @@ app.whenReady().then(async () => {
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
-app.on("will-quit", () => { quitting = true; globalShortcut.unregisterAll(); spokenReply?.kill(); speechProcess?.kill(); });
+app.on("will-quit", () => { quitting = true; globalShortcut.unregisterAll(); spokenReply?.kill(); speechProcess?.kill(); gestureProcess?.kill(); });

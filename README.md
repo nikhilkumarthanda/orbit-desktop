@@ -1,5 +1,14 @@
 # Orbit
 
+## Orbit Play (Phase 8)
+
+Orbit Play adds local webcam hand tracking with two explicitly activated modes:
+
+- **Playground:** point and pinch to influence a reactive particle world.
+- **Desktop control (macOS):** point to move, pinch to click or drag, use two fingers to scroll, and hold a fist for emergency stop.
+
+Camera frames are processed locally with MediaPipe and are never recorded, stored, or uploaded. Desktop gestures cross a narrow IPC allowlist and cannot type, send, delete, purchase, or modify files. Build the native macOS helpers with `npm run native:mac` before using desktop mode.
+
 Orbit is a voice-first, zero-cost local operating layer for macOS. It combines on-device speech recognition, permission-scoped desktop tools, and local Ollama reasoning so natural requests become safe, auditable actions without cloud AI charges.
 
 ## Local Orbit Intelligence

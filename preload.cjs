@@ -41,4 +41,7 @@ contextBridge.exposeInMainWorld("orbit", Object.freeze({
   geminiStatus: () => ipcRenderer.invoke("orbit:gemini:status"),
   configureGemini: apiKey => ipcRenderer.invoke("orbit:gemini:configure", apiKey),
   setGeminiBudget: monthlyBudgetUsd => ipcRenderer.invoke("orbit:gemini:budget", monthlyBudgetUsd),
+  orbitPlayStart: mode => ipcRenderer.invoke("orbit:play:start", mode),
+  orbitPlayStop: () => ipcRenderer.invoke("orbit:play:stop"),
+  orbitPlayAction: gesture => ipcRenderer.invoke("orbit:play:action", gesture),
 }));

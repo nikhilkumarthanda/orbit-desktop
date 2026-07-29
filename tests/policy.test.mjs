@@ -216,6 +216,27 @@ test("conversation history is local, bounded, restorable, and user-clearable", a
   assert.match(renderer, /Clear Orbit conversation history from this Mac/);
 });
 
+test("Orbit Play is local, permission-visible, allowlisted, and has an emergency stop", async () => {
+  const fs = await import("node:fs/promises");
+  const [main, renderer, contracts, preload, pkg, native] = await Promise.all([
+    fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/renderer/orbit-play.tsx", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/shared/contracts.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../preload.cjs", import.meta.url), "utf8"),
+    fs.readFile(new URL("../package.json", import.meta.url), "utf8"),
+    fs.readFile(new URL("../native/macos/OrbitGesture.swift", import.meta.url), "utf8"),
+  ]);
+  assert.match(renderer, /getUserMedia/);
+  assert.match(renderer, /CAMERA ACTIVE/);
+  assert.match(renderer, /Frames are never recorded or uploaded|frames never leave this Mac/i);
+  assert.match(renderer, /Date\.now\(\)-fistSince\.current>850/);
+  assert.match(main, /new Set\(\["move", "down", "up", "scroll", "media-toggle", "stop"\]\)/);
+  assert.doesNotMatch(native, /keyDown|keyboardSetUnicodeString|deleteFile|sendEmail/);
+  assert.match(contracts, /OrbitPlayGesture/);
+  assert.match(preload, /orbit:play:stop/);
+  assert.match(pkg, /NSCameraUsageDescription/);
+});
+
 test("phase two interruptions, stale-response cancellation, folders, and Orbit Space are wired", async () => {
   const fs = await import("node:fs/promises");
   const speech = await fs.readFile(new URL("../native/macos/OrbitSpeech.swift", import.meta.url), "utf8");

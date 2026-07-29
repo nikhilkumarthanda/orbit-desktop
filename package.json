@@ -1,6 +1,6 @@
 {
   "name": "orbit-desktop",
-  "version": "0.9.3",
+  "version": "0.10.0",
   "private": true,
   "description": "Local-first AI operating layer for desktop work",
   "author": "Nikhil Kumar Thanda",
@@ -35,7 +35,8 @@
         "to": "sidecar",
         "filter": [
           "orbit-retrieval*",
-          "orbit-speech*"
+          "orbit-speech*",
+          "orbit-gesture*"
         ]
       }
     ],
@@ -46,6 +47,7 @@
       "entitlements": "native/macos/OrbitSpeech.entitlements",
       "entitlementsInherit": "native/macos/OrbitSpeech.entitlements",
       "extendInfo": {
+        "NSCameraUsageDescription": "Orbit Play uses the camera for local hand tracking. Frames are never recorded, stored, or uploaded.",
         "NSMicrophoneUsageDescription": "Orbit listens for the Hey Orbit wake phrase and voice commands while voice mode is enabled.",
         "NSSpeechRecognitionUsageDescription": "Orbit transcribes approved voice commands into local desktop actions.",
         "NSLocationWhenInUseUsageDescription": "Orbit uses your approximate location only when you ask for local weather. Coordinates are not stored."
@@ -73,6 +75,7 @@
     ]
   },
   "dependencies": {
+    "@mediapipe/hands": "^0.4.1675469240",
     "electron-updater": "^6.8.9",
     "playwright-core": "^1.61.1",
     "react": "latest",

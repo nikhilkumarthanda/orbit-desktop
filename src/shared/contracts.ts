@@ -37,6 +37,10 @@ export interface GeminiUsageStatus { month: string; requests: number; inputToken
 export interface GeminiStatus { provider: "gemini"; configured: boolean; available: boolean; model: string; cost: "$0 on Google free tier"; usage: GeminiUsageStatus }
 export interface BatteryStatus { percentage: number; charging: boolean; timeRemaining?: string; summary: string }
 export interface VoiceEvent { type: "ready"|"wake"|"listening"|"partial"|"command"|"speaking"|"interrupted"|"error"|"unavailable"|"stopped"; text?: string; message?: string; onDevice?: boolean; mode?: "wake-word"|"command" }
+export type OrbitPlayMode = "playground" | "desktop";
+export type OrbitPlayAction = "move" | "down" | "up" | "scroll" | "media-toggle" | "stop";
+export interface OrbitPlayStatus { active: boolean; mode: OrbitPlayMode; supported: boolean; permission: "unknown"|"granted"|"denied"; message: string }
+export interface OrbitPlayGesture { action: OrbitPlayAction; x?: number; y?: number; deltaY?: number }
 
 export interface OrbitAPI {
   policies(): Promise<ToolPolicy[]>;
@@ -79,4 +83,7 @@ export interface OrbitAPI {
   geminiStatus(): Promise<GeminiStatus>;
   configureGemini(apiKey: string): Promise<GeminiStatus>;
   setGeminiBudget(monthlyBudgetUsd: number): Promise<GeminiStatus>;
+  orbitPlayStart(mode: OrbitPlayMode): Promise<OrbitPlayStatus>;
+  orbitPlayStop(): Promise<OrbitPlayStatus>;
+  orbitPlayAction(gesture: OrbitPlayGesture): Promise<{ accepted: boolean }>;
 }

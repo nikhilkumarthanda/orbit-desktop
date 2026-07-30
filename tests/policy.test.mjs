@@ -218,7 +218,7 @@ test("conversation history is local, bounded, restorable, and user-clearable", a
 
 test("Orbit Play is local, permission-visible, allowlisted, and has an emergency stop", async () => {
   const fs = await import("node:fs/promises");
-  const [main, renderer, playStyles, contracts, preload, pkg, native] = await Promise.all([
+  const [main, renderer, playStyles, contracts, preload, pkg, native, gestureMachine, escapeState] = await Promise.all([
     fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8"),
     fs.readFile(new URL("../src/renderer/orbit-play.tsx", import.meta.url), "utf8"),
     fs.readFile(new URL("../src/renderer/orbit-play.css", import.meta.url), "utf8"),
@@ -226,6 +226,8 @@ test("Orbit Play is local, permission-visible, allowlisted, and has an emergency
     fs.readFile(new URL("../preload.cjs", import.meta.url), "utf8"),
     fs.readFile(new URL("../package.json", import.meta.url), "utf8"),
     fs.readFile(new URL("../native/macos/OrbitGesture.swift", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/renderer/orbit-universe/gestures/gestureStateMachine.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/renderer/orbit-universe/escape/escapeState.ts", import.meta.url), "utf8"),
   ]);
   assert.match(renderer, /getUserMedia/);
   assert.match(renderer, /CAMERA ACTIVE/);
@@ -234,8 +236,8 @@ test("Orbit Play is local, permission-visible, allowlisted, and has an emergency
   assert.match(renderer, /Date\.now\(\)-fistSince\.current>2000/);
   assert.match(renderer, /event\.key==="Escape"/);
   assert.match(renderer, /maxNumHands:2/);
-  assert.match(renderer, /point:\{x:smoothLm\[8\]\.x,y:smoothLm\[8\]\.y\}/);
-  assert.doesNotMatch(renderer, /x:1-lm\[8\]\.x/);
+  assert.match(gestureMachine, /point = \{ x: this\.pointXFilter\.filter\(landmarks\[8\]\.x/);
+  assert.doesNotMatch(gestureMachine, /1\s*-\s*landmarks\[8\]/);
   assert.match(playStyles, /\.orbit-play video\{display:none!important/);
   assert.match(renderer, /Math\.atan2/);
   assert.match(renderer, /const clap=/);
@@ -245,10 +247,11 @@ test("Orbit Play is local, permission-visible, allowlisted, and has an emergency
   assert.match(renderer, /STAR FORGE/);
   assert.match(renderer, /COMET RUN/);
   assert.match(renderer, /ORBIT ESCAPE/);
-  assert.match(renderer, /orbit-escape-best/);
+  assert.match(escapeState, /orbit-escape-best/);
   assert.match(renderer, /PHASE DASH/);
   assert.match(renderer, /A \/ D OR HAND TO STEER/);
-  assert.match(renderer, /PINCH ORBIT TO ENTER/);
+  assert.match(renderer, /PINCH TO ADVANCE/);
+  assert.match(renderer, /Play Orbit Escape/);
   assert.doesNotMatch(renderer, /className="play-vignette"/);
   assert.doesNotMatch(renderer, /className="play-grain"/);
   assert.doesNotMatch(playStyles, /\.play-vignette|\.play-grain/);

@@ -218,7 +218,7 @@ test("conversation history is local, bounded, restorable, and user-clearable", a
 
 test("Orbit Play is local, permission-visible, allowlisted, and has an emergency stop", async () => {
   const fs = await import("node:fs/promises");
-  const [main, renderer, playStyles, contracts, preload, pkg, native, gestureMachine, escapeState] = await Promise.all([
+  const [main, renderer, playStyles, contracts, preload, pkg, native, gestureMachine, escapeState, gauntletState] = await Promise.all([
     fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8"),
     fs.readFile(new URL("../src/renderer/orbit-play.tsx", import.meta.url), "utf8"),
     fs.readFile(new URL("../src/renderer/orbit-play.css", import.meta.url), "utf8"),
@@ -228,6 +228,7 @@ test("Orbit Play is local, permission-visible, allowlisted, and has an emergency
     fs.readFile(new URL("../native/macos/OrbitGesture.swift", import.meta.url), "utf8"),
     fs.readFile(new URL("../src/renderer/orbit-universe/gestures/gestureStateMachine.ts", import.meta.url), "utf8"),
     fs.readFile(new URL("../src/renderer/orbit-universe/escape/escapeState.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/renderer/energy-gauntlet/gauntletState.ts", import.meta.url), "utf8"),
   ]);
   assert.match(renderer, /getUserMedia/);
   assert.match(renderer, /CAMERA ACTIVE/);
@@ -240,12 +241,10 @@ test("Orbit Play is local, permission-visible, allowlisted, and has an emergency
   assert.doesNotMatch(gestureMachine, /1\s*-\s*landmarks\[8\]/);
   assert.match(playStyles, /\.orbit-play video\{display:none!important/);
   assert.match(renderer, /Math\.atan2/);
-  assert.match(renderer, /const clap=/);
+  assert.match(gauntletState, /const clap =/);
   assert.match(renderer, /SUPERNOVA/);
-  assert.match(renderer, /type PlayScene = "energy"\|"system"\|"orbit"/);
-  assert.match(renderer, /GRAVITY GARDEN/);
-  assert.match(renderer, /STAR FORGE/);
-  assert.match(renderer, /COMET RUN/);
+  assert.match(renderer, /type PlayScene = "energy"\|"system"/);
+  assert.doesNotMatch(renderer, /GRAVITY GARDEN|STAR FORGE|COMET RUN|OrbitActivity/);
   assert.match(renderer, /ORBIT ESCAPE/);
   assert.match(escapeState, /orbit-escape-best/);
   assert.match(renderer, /PHASE DASH/);

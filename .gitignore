@@ -6,6 +6,7 @@ dist/
 .electron-cache/
 release-sidecar/orbit-retrieval*
 release-sidecar/orbit-speech*
+release-sidecar/orbit-gesture*
 .env
 *.log
 .npm-cache/

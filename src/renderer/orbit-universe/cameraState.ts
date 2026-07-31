@@ -63,6 +63,15 @@ export const currentNavStepIndex = (tier: Tier, focusIndex: number) => {
 
 export const nextNavStep = (tier: Tier, focusIndex: number): NavStep => NAV_STEPS[(currentNavStepIndex(tier, focusIndex) + 1) % NAV_STEPS.length];
 
+const ORBIT_STEP_INDEX = NAV_STEPS.findIndex((step) => step.tier === "planet" && step.focusIndex === ORBIT_INDEX);
+
+/** How many more pinch-taps until the ladder reaches Orbit (0 once you're there). */
+export const stepsToOrbit = (tier: Tier, focusIndex: number): number => {
+  if (tier === "planet" && focusIndex === ORBIT_INDEX) return 0;
+  const current = currentNavStepIndex(tier, focusIndex);
+  return (ORBIT_STEP_INDEX - current + NAV_STEPS.length) % NAV_STEPS.length;
+};
+
 /** World-space position of a body's live orbit at elapsed time t (seconds). */
 export const bodyPosition = (index: number, t: number): THREE.Vector3 => {
   const body = ALL_BODIES[index];

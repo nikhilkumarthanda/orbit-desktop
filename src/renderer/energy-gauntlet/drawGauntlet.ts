@@ -15,6 +15,32 @@ const drawBall = (ctx: CanvasRenderingContext2D, width: number, height: number, 
   const atmosphere = ctx.createRadialGradient(center.x, center.y, 0, center.x, center.y, radius * 3.1);
   atmosphere.addColorStop(0, `rgba(255,181,73,${.28 + ball.tension * .16})`); atmosphere.addColorStop(.34, "rgba(255,72,19,.1)"); atmosphere.addColorStop(1, "rgba(1,3,10,0)");
   ctx.fillStyle = atmosphere; ctx.fillRect(0, 0, width, height);
+
+  // Sharp radiating rays (starburst/corona), matching a reactor-core look rather than a soft glow.
+  const rayCount = 14;
+  ctx.save(); ctx.translate(center.x, center.y); ctx.rotate(ball.rotation * .6 + phase * .18);
+  ctx.globalCompositeOperation = "screen";
+  for (let i = 0; i < rayCount; i++) {
+    const a = (i / rayCount) * Math.PI * 2, len = radius * (2.1 + Math.sin(phase * 1.7 + i * 1.9) * .5 + ball.tension * .9);
+    const ray = ctx.createLinearGradient(0, 0, Math.cos(a) * len, Math.sin(a) * len);
+    ray.addColorStop(0, `rgba(255,238,190,${.5 + ball.tension * .3})`); ray.addColorStop(.5, "rgba(255,150,50,.14)"); ray.addColorStop(1, "rgba(255,90,20,0)");
+    ctx.strokeStyle = ray; ctx.lineWidth = radius * (i % 2 ? .05 : .09);
+    ctx.beginPath(); ctx.moveTo(Math.cos(a) * radius * .3, Math.sin(a) * radius * .3); ctx.lineTo(Math.cos(a) * len, Math.sin(a) * len); ctx.stroke();
+  }
+  ctx.restore(); ctx.globalCompositeOperation = "source-over";
+
+  // Fine angular circuit-fractal ticks around the sphere for a machined, geometric texture.
+  ctx.save(); ctx.translate(center.x, center.y);
+  for (let i = 0; i < 40; i++) {
+    const a = i * 2.399963 + ball.rotation, r = radius * (0.72 + (i % 5) * .09);
+    const x = Math.cos(a) * r, y = Math.sin(a) * r * .82, tickLen = radius * (0.05 + (i % 3) * .02);
+    ctx.save(); ctx.translate(x, y); ctx.rotate(a + Math.PI / 2);
+    ctx.strokeStyle = `rgba(255,214,150,${.35 + (i % 4 === 0 ? .25 : 0)})`; ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.moveTo(0, -tickLen / 2); ctx.lineTo(0, tickLen / 2); ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore();
+
   for (let ring = 0; ring < 7; ring++) {
     ctx.save(); ctx.translate(center.x, center.y); ctx.rotate(ball.rotation + phase * (ring % 2 ? -.34 : .5) + ring * .78);
     ctx.scale(1, .5 + ring * .035); ctx.beginPath(); ctx.strokeStyle = `rgba(255,${100 + ring * 18},45,${.2 - ring * .02 + ball.tension * .08})`; ctx.lineWidth = 1.1 + ring * .35;
@@ -34,6 +60,8 @@ const drawBall = (ctx: CanvasRenderingContext2D, width: number, height: number, 
   const core = ctx.createRadialGradient(center.x - radius * .2, center.y - radius * .25, radius * .01, center.x, center.y, radius);
   core.addColorStop(0, "rgba(255,255,235,.99)"); core.addColorStop(.1, "rgba(255,226,143,.96)"); core.addColorStop(.38, `rgba(255,112,31,${.58 + ball.tension * .25})`); core.addColorStop(.76, "rgba(255,38,10,.15)"); core.addColorStop(1, "rgba(255,70,20,0)");
   ctx.globalCompositeOperation = "screen"; ctx.fillStyle = core; ctx.beginPath(); ctx.arc(center.x, center.y, radius * (1 - ball.burst * .8), 0, Math.PI * 2); ctx.fill(); ctx.globalCompositeOperation = "source-over";
+  ctx.strokeStyle = `rgba(255,244,214,${.55 + ball.tension * .3})`; ctx.lineWidth = Math.max(1.2, radius * .015); ctx.shadowColor = "#ffcf8a"; ctx.shadowBlur = 14;
+  ctx.beginPath(); ctx.arc(center.x, center.y, radius * .58, 0, Math.PI * 2); ctx.stroke(); ctx.shadowBlur = 0;
   hands.forEach((hand, index) => {
     const x = hand.point.x * width, y = hand.point.y * height, hot = hand.pinching;
     const beam = ctx.createLinearGradient(x, y, center.x, center.y); beam.addColorStop(0, hot ? "rgba(255,235,155,.72)" : "rgba(107,239,255,.28)"); beam.addColorStop(1, "rgba(255,96,28,0)");

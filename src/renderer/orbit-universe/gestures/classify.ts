@@ -11,8 +11,11 @@ export const handScale = (lm: NormalizedLandmark[]) => Math.max(0.02, distance(l
 
 export const pinchRatio = (lm: NormalizedLandmark[]) => distance(lm[4], lm[8]) / handScale(lm);
 
-const PINCH_ENGAGE_RATIO = 0.42;
-const PINCH_RELEASE_RATIO = 0.58;
+// Tight on purpose: a resting/open hand can otherwise cross a looser threshold and get
+// mistaken for a pinch, which reads as constant unwanted dragging. Engage requires a real
+// thumb-index touch; release needs a clearly open gap before it lets go.
+const PINCH_ENGAGE_RATIO = 0.24;
+const PINCH_RELEASE_RATIO = 0.42;
 
 export function classify(lm: NormalizedLandmark[], pinching: boolean, ratio: number): GestureName {
   const threshold = pinching ? PINCH_RELEASE_RATIO : PINCH_ENGAGE_RATIO;

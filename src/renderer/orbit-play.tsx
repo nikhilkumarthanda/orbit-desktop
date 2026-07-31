@@ -3,7 +3,7 @@ import type { NormalizedLandmark, Results } from "@mediapipe/hands";
 import type { OrbitPlayMode } from "../shared/contracts";
 import "./orbit-play.css";
 import { OrbitUniverse } from "./orbit-universe/OrbitUniverse";
-import { createCameraState, nextNavStep, radiusRangeFor, type CameraState } from "./orbit-universe/cameraState";
+import { createCameraState, nextNavStep, radiusRangeFor, stepsToOrbit, type CameraState } from "./orbit-universe/cameraState";
 import { ALL_BODIES, ORBIT_INDEX } from "./orbit-universe/planets";
 import { OrbitEscapeGame } from "./orbit-universe/escape/OrbitEscapeGame";
 import { createEscapeState, steerEscape as steerEscapeState, dashEscape as dashEscapeState, type EscapeState } from "./orbit-universe/escape/escapeState";
@@ -13,7 +13,7 @@ import { drawGauntlet } from "./energy-gauntlet/drawGauntlet";
 import { ensureAudioContext, playPowerDownSequence, playProjectileZap, playSuitUpSequence } from "./energy-gauntlet/gauntletAudio";
 
 type PlayScene = "energy"|"system";
-type NavGestureState = { lastAngle:number;lastMidpoint:Point|null;trackedHands:number;pinchActive:boolean;pinchStartScale:number;pinchStartTime:number;lastPinchScale:number };
+type NavGestureState = { lastAngle:number;lastMidpoint:Point|null;trackedHands:number;pinchActive:boolean;pinchStartY:number;pinchStartTime:number;lastPinchY:number };
 type HandsTracker = { setOptions(options:Record<string,unknown>):void;onResults(callback:(results:Results)=>void):void;send(input:{image:HTMLVideoElement}):Promise<void>;close():Promise<void> };
 declare global { interface Window { Hands: new(options:{locateFile:(file:string)=>string})=>HandsTracker } }
 
@@ -28,7 +28,7 @@ export function OrbitPlay(){
   const pinching=useRef(false),lastScrollY=useRef(.5),fistSince=useRef(0),lastClick=useRef(0),phase=useRef(0),lastGestureUpdate=useRef(0),lastGauntletTick=useRef(0);
   const gauntlet=useRef<GauntletState>(createGauntletState());
   const camera=useRef<CameraState>(createCameraState());
-  const nav=useRef<NavGestureState>({lastAngle:0,lastMidpoint:null,trackedHands:0,pinchActive:false,pinchStartScale:0,pinchStartTime:0,lastPinchScale:0});
+  const nav=useRef<NavGestureState>({lastAngle:0,lastMidpoint:null,trackedHands:0,pinchActive:false,pinchStartY:0,pinchStartTime:0,lastPinchY:0});
   const escape=useRef<EscapeState>(createEscapeState());
   const escapeNow=useRef(false);
   const stabilizers=useRef<[GestureStabilizer,GestureStabilizer]>([new GestureStabilizer(),new GestureStabilizer()]);
@@ -53,7 +53,7 @@ export function OrbitPlay(){
     sceneNow.current=next;setScene(next);setEffect(next==="system"?"SOLAR SYSTEM":"ENERGY STABLE");
     escape.current.running=false;
     setEscapeActive(false);
-    setMessage(next==="system"?"Rotate with both hands · pinch and pull to zoom · quick pinch to travel":"Pull with two pinches, then clap to burst");
+    setMessage(next==="system"?"Rotate with both hands · pinch and drag up/down to zoom · quick pinch to travel":"Pull with two pinches, then clap to burst");
   };
 
   const stop=async()=>{
@@ -83,11 +83,12 @@ export function OrbitPlay(){
     const step=nextNavStep(camera.current.tier,camera.current.focusIndex);
     camera.current.targetTier=step.tier;camera.current.targetFocusIndex=step.focusIndex;camera.current.targetRadius=step.radius;
     const name=step.focusIndex===-1?(step.tier==="galaxy"?"the Milky Way":"the solar system"):ALL_BODIES[step.focusIndex].name;
+    const remaining=stepsToOrbit(step.tier,step.focusIndex);
     setEffect(step.tier==="galaxy"?"GALACTIC VIEW":step.tier==="system"?"SYSTEM OVERVIEW":`${name.toUpperCase()} APPROACH`);
     setGesture(`Pinch · traveling to ${name}`);
-    setMessage(step.focusIndex===ORBIT_INDEX?"Arriving at Orbit — hold steady, then press Play.":`Spread hands to zoom · rotate to look around ${name}.`);
+    setMessage(step.focusIndex===ORBIT_INDEX?"Arrived at Orbit — hold steady, then press Play.":`${remaining} more ${remaining===1?"pinch":"pinches"} to reach Orbit · pinch+drag up/down to zoom`);
   };
-  const ZOOM_TAP_MAX_MS=350,ZOOM_TAP_MAX_SCALE_CHANGE=.15,ZOOM_SCALE_EPS=.0015,ZOOM_SENSITIVITY=2.4;
+  const ZOOM_TAP_MAX_MS=350,ZOOM_TAP_MAX_DRAG=.03,ZOOM_DEAD_ZONE=.006,ZOOM_SENSITIVITY=1.1;
   const updateCamera=(hands:HandState[])=>{
     const state=camera.current,gestureState=nav.current;
     const bothOpen=hands.length===2&&hands.every(hand=>hand.gesture==="Open palm");
@@ -105,21 +106,21 @@ export function OrbitPlay(){
     const hand=hands[0];
     if(hand.pinching){
       if(!gestureState.pinchActive){
-        gestureState.pinchActive=true;gestureState.pinchStartScale=hand.scale;gestureState.pinchStartTime=performance.now();gestureState.lastPinchScale=hand.scale;
+        gestureState.pinchActive=true;gestureState.pinchStartY=hand.palm.y;gestureState.pinchStartTime=performance.now();gestureState.lastPinchY=hand.palm.y;
       }else{
-        const scaleDelta=hand.scale-gestureState.lastPinchScale;
-        if(Math.abs(scaleDelta)>ZOOM_SCALE_EPS){
+        const dragDelta=hand.palm.y-gestureState.lastPinchY;
+        if(Math.abs(dragDelta)>ZOOM_DEAD_ZONE){
           const [min,max]=radiusRangeFor(state.tier,state.focusIndex);
-          state.targetRadius=clamp(state.targetRadius-scaleDelta*(max-min)*ZOOM_SENSITIVITY,min,max);
-          setEffect(scaleDelta>0?"ZOOMING IN":"ZOOMING OUT");setGesture(`Pinch · ${Math.round((1-(state.targetRadius-min)/(max-min))*100)}% in`);
+          state.targetRadius=clamp(state.targetRadius+dragDelta*(max-min)*ZOOM_SENSITIVITY,min,max);
+          setEffect(dragDelta<0?"ZOOMING IN":"ZOOMING OUT");setGesture(`Pinch · ${Math.round((1-(state.targetRadius-min)/(max-min))*100)}% in`);
         }
-        gestureState.lastPinchScale=hand.scale;
+        gestureState.lastPinchY=hand.palm.y;
       }
     }else{
       if(gestureState.pinchActive){
         const heldMs=performance.now()-gestureState.pinchStartTime;
-        const scaleChange=Math.abs(gestureState.lastPinchScale-gestureState.pinchStartScale)/Math.max(.001,gestureState.pinchStartScale);
-        if(heldMs<ZOOM_TAP_MAX_MS&&scaleChange<ZOOM_TAP_MAX_SCALE_CHANGE)advanceFocus();
+        const totalDrag=Math.abs(gestureState.lastPinchY-gestureState.pinchStartY);
+        if(heldMs<ZOOM_TAP_MAX_MS&&totalDrag<ZOOM_TAP_MAX_DRAG)advanceFocus();
         gestureState.pinchActive=false;
       }
       if(gestureState.trackedHands===1&&gestureState.lastMidpoint&&hand.gesture==="Open palm"){
@@ -187,7 +188,7 @@ export function OrbitPlay(){
       await loadHands();const hands=new window.Hands({locateFile:mediaPipeAsset});tracker.current=hands;
       hands.setOptions({selfieMode:true,maxNumHands:2,modelComplexity:1,minDetectionConfidence:.62,minTrackingConfidence:.62});hands.onResults(onResults);
       const status=await window.orbit.orbitPlayStart(mode);if(!status.supported)throw new Error(status.message);
-      setActive(true);setEffect(sceneNow.current==="system"?"SOLAR SYSTEM":"ENERGY STABLE");setMessage(mode==="desktop"?"Desktop control active · press Esc or hold both fists to stop":sceneNow.current==="system"?"Rotate with both hands · pinch and pull to zoom · quick pinch to travel":"Pull with two pinches, then clap to burst");
+      setActive(true);setEffect(sceneNow.current==="system"?"SOLAR SYSTEM":"ENERGY STABLE");setMessage(mode==="desktop"?"Desktop control active · press Esc or hold both fists to stop":sceneNow.current==="system"?"Rotate with both hands · pinch and drag up/down to zoom · quick pinch to travel":"Pull with two pinches, then clap to burst");
       const loop=async()=>{drawWorld();if(video.current&&tracker.current&&!processing.current&&video.current.readyState>=2){processing.current=true;try{await tracker.current.send({image:video.current})}catch{processing.current=false}}raf.current=requestAnimationFrame(loop)};void loop();
     }catch(error){await stop();setMessage(error instanceof Error?error.message:"Camera permission was denied")}
   };
@@ -210,7 +211,7 @@ export function OrbitPlay(){
       <button className="play-immersive" onClick={()=>void toggleImmersive()}>{immersive?"Exit full screen":"Full screen"}</button>
     </div>
     <div className="gesture-readout"><small>{effect}</small><b>{gesture}</b><span>{message}</span></div>
-    <div className="play-hint">{escapeActive?<><span>A / D OR HAND TO STEER</span><i/><span>SPACE OR PINCH TO DASH</span></>:scene==="energy"?(effect==="GAUNTLET READY"?<><span>OPEN PALM TO FIRE</span><i/><span>HANDS TOGETHER FOR FIREBALL</span><i/><span>HOLD FIST 2S TO POWER DOWN</span></>:effect==="SUIT ENGAGED"||effect==="POWERING DOWN"?<><span>{effect}…</span></>:<><span>MOVE TOGETHER</span><i/><span>ROTATE</span><i/><span>PINCH + PULL</span><i/><span>CLAP TO BURST</span><i/><span>FIST + PUSH TO SUIT UP</span></>):<><span>ROTATE VIEW</span><i/><span>PINCH + PULL TO ZOOM</span><i/><span>QUICK PINCH TO ADVANCE</span></>}</div>
+    <div className="play-hint">{escapeActive?<><span>A / D OR HAND TO STEER</span><i/><span>SPACE OR PINCH TO DASH</span></>:scene==="energy"?(effect==="GAUNTLET READY"?<><span>OPEN PALM TO FIRE</span><i/><span>HANDS TOGETHER FOR FIREBALL</span><i/><span>HOLD FIST 2S TO POWER DOWN</span></>:effect==="SUIT ENGAGED"||effect==="POWERING DOWN"?<><span>{effect}…</span></>:<><span>MOVE TOGETHER</span><i/><span>ROTATE</span><i/><span>PINCH + PULL</span><i/><span>CLAP TO BURST</span><i/><span>FIST + PUSH TO SUIT UP</span></>):<><span>ROTATE VIEW</span><i/><span>PINCH + DRAG UP/DOWN TO ZOOM</span><i/><span>QUICK PINCH TO ADVANCE</span></>}</div>
     <aside className="play-safety"><b>LOCAL CAMERA</b><span>Only hand landmarks appear; the camera image stays hidden. Frames are never recorded or uploaded. Press Esc or hold both fists for 2 seconds to stop.</span></aside>
   </div>;
 }

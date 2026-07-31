@@ -1,6 +1,7 @@
 import { useMemo, useRef, type MutableRefObject } from "react";
 import { useFrame, useLoader } from "@react-three/fiber";
-import { Stars } from "@react-three/drei";
+import { Stars, useGLTF } from "@react-three/drei";
+import { EffectComposer, Bloom } from "@react-three/postprocessing";
 import * as THREE from "three";
 import { damp, damp3 } from "maath/easing";
 import { assetUrl } from "../../asset-url";
@@ -14,6 +15,13 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 function Ship({ game }: { game: MutableRefObject<EscapeState> }) {
   const group = useRef<THREE.Group>(null);
   const engineGlow = useRef<THREE.PointLight>(null);
+  const { scene } = useGLTF(assetUrl("models/ship.glb"));
+  const model = useMemo(() => {
+    const clone = scene.clone(true);
+    clone.traverse((child) => { if (child instanceof THREE.Mesh) { child.castShadow = false; child.receiveShadow = false } });
+    return clone;
+  }, [scene]);
+
   useFrame((_, delta) => {
     const g = group.current;
     if (!g) return;
@@ -25,23 +33,8 @@ function Ship({ game }: { game: MutableRefObject<EscapeState> }) {
   });
   return (
     <group ref={group} position={[0, 0, 0]}>
-      <group rotation-x={Math.PI / 2}>
-        <mesh position={[0, 0.55, 0]}>
-          <coneGeometry args={[0.32, 1.3, 10]} />
-          <meshStandardMaterial color="#c7d2d8" roughness={0.35} metalness={0.6} />
-        </mesh>
-        <mesh position={[0, -0.35, 0]}>
-          <cylinderGeometry args={[0.32, 0.4, 1.1, 10]} />
-          <meshStandardMaterial color="#9aa7b0" roughness={0.4} metalness={0.55} />
-        </mesh>
-        <mesh position={[0.55, -0.5, 0]} rotation-z={-0.35}>
-          <boxGeometry args={[0.85, 0.08, 0.4]} />
-          <meshStandardMaterial color="#7d8a93" roughness={0.5} metalness={0.5} />
-        </mesh>
-        <mesh position={[-0.55, -0.5, 0]} rotation-z={0.35}>
-          <boxGeometry args={[0.85, 0.08, 0.4]} />
-          <meshStandardMaterial color="#7d8a93" roughness={0.5} metalness={0.5} />
-        </mesh>
+      <group rotation-y={Math.PI} scale={0.55}>
+        <primitive object={model} />
       </group>
       {[[-0.2, 0, 0.62], [0.2, 0, 0.62], [0, 0.18, 0.68]].map(([x, y, z], i) => (
         <mesh key={i} position={[x, y, z]}>
@@ -53,6 +46,7 @@ function Ship({ game }: { game: MutableRefObject<EscapeState> }) {
     </group>
   );
 }
+useGLTF.preload(assetUrl("models/ship.glb"));
 
 type Exhaust = { x: number; y: number; z: number; vx: number; vy: number; vz: number; age: number; life: number };
 
@@ -111,9 +105,13 @@ function ExhaustTrail({ game }: { game: MutableRefObject<EscapeState> }) {
 
 function ObstacleSlot({ index, game }: { index: number; game: MutableRefObject<EscapeState> }) {
   const group = useRef<THREE.Group>(null);
-  const debrisRef = useRef<THREE.Mesh>(null);
-  const iceRef = useRef<THREE.Mesh>(null);
+  const debrisRef = useRef<THREE.Group>(null);
+  const iceRef = useRef<THREE.Group>(null);
   const riftGroup = useRef<THREE.Group>(null);
+  const debrisGltf = useGLTF(assetUrl("models/debris.glb"));
+  const iceGltf = useGLTF(assetUrl("models/ice-crystal.glb"));
+  const debrisModel = useMemo(() => debrisGltf.scene.clone(true), [debrisGltf.scene]);
+  const iceModel = useMemo(() => iceGltf.scene.clone(true), [iceGltf.scene]);
 
   useFrame((_, delta) => {
     const g = group.current;
@@ -129,14 +127,13 @@ function ObstacleSlot({ index, game }: { index: number; game: MutableRefObject<E
 
   return (
     <group ref={group}>
-      <mesh ref={debrisRef}>
-        <icosahedronGeometry args={[1.15, 0]} />
-        <meshStandardMaterial color="#3a3f47" roughness={0.9} metalness={0.15} />
-      </mesh>
-      <mesh ref={iceRef}>
-        <octahedronGeometry args={[1.1, 0]} />
-        <meshStandardMaterial color="#9fdcff" emissive="#3fa8e0" emissiveIntensity={0.65} roughness={0.2} transparent opacity={0.82} />
-      </mesh>
+      <group ref={debrisRef} scale={0.85}>
+        <primitive object={debrisModel} />
+      </group>
+      <group ref={iceRef} scale={0.9}>
+        <primitive object={iceModel} />
+        <pointLight color="#8fe4ff" intensity={1.2} distance={4} />
+      </group>
       <group ref={riftGroup}>
         <mesh rotation-x={Math.PI / 2}>
           <torusGeometry args={[1.1, 0.22, 10, 24]} />
@@ -147,6 +144,8 @@ function ObstacleSlot({ index, game }: { index: number; game: MutableRefObject<E
     </group>
   );
 }
+useGLTF.preload(assetUrl("models/debris.glb"));
+useGLTF.preload(assetUrl("models/ice-crystal.glb"));
 
 function AnomalyGlow() {
   const halo = useMemo(() => {
@@ -197,7 +196,9 @@ export function EscapeScene({ game, onEnded }: { game: MutableRefObject<EscapeSt
 
   return (
     <>
-      <ambientLight intensity={0.4} />
+      <ambientLight intensity={0.55} />
+      <directionalLight position={[6, 8, 4]} intensity={2.4} color="#fff3e0" />
+      <directionalLight position={[-5, -3, 6]} intensity={0.6} color="#8fb8ff" />
       <mesh scale={[-1, 1, 1]}>
         <sphereGeometry args={[300, 32, 24]} />
         <meshBasicMaterial map={milkyWay} side={THREE.BackSide} depthWrite={false} />
@@ -210,6 +211,9 @@ export function EscapeScene({ game, onEnded }: { game: MutableRefObject<EscapeSt
         <ObstacleSlot key={i} index={i} game={game} />
       ))}
       <ChaseCamera game={game} />
+      <EffectComposer>
+        <Bloom intensity={0.7} luminanceThreshold={0.35} luminanceSmoothing={0.2} mipmapBlur radius={0.6} />
+      </EffectComposer>
     </>
   );
 }

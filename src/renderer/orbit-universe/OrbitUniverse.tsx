@@ -1,5 +1,6 @@
 import { Suspense, useRef, type MutableRefObject } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
+import { EffectComposer, Bloom } from "@react-three/postprocessing";
 import { Starfield } from "./Starfield";
 import { Sun } from "./Sun";
 import { Planet } from "./Planet";
@@ -38,6 +39,9 @@ export function OrbitUniverse({ camera, onOrbitReadyChange }: { camera: MutableR
       </Suspense>
       <CameraController camera={camera} />
       <ArrivalWatcher camera={camera} onOrbitReadyChange={onOrbitReadyChange} />
+      <EffectComposer>
+        <Bloom intensity={0.55} luminanceThreshold={0.5} luminanceSmoothing={0.25} mipmapBlur radius={0.55} />
+      </EffectComposer>
     </Canvas>
   );
 }

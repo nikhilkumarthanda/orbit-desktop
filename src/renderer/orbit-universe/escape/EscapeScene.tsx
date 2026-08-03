@@ -6,6 +6,9 @@ import * as THREE from "three";
 import { damp, damp3 } from "maath/easing";
 import { assetUrl } from "../../asset-url";
 import { tickEscape, type EscapeState } from "./escapeState";
+import { IcePlanetGround } from "./IcePlanetGround";
+import { LaneGuides } from "./LaneGuides";
+import { Singularity, GravitationalLens, useGravitationalLens } from "./Singularity";
 
 const LANE_SPACING = 3.4;
 const FAR_Z = 46;
@@ -103,15 +106,40 @@ function ExhaustTrail({ game }: { game: MutableRefObject<EscapeState> }) {
   );
 }
 
+const ringLabelTextures = new Map<number, THREE.Texture>();
+function ringLabelTexture(value: number): THREE.Texture {
+  let tex = ringLabelTextures.get(value);
+  if (tex) return tex;
+  const canvas = document.createElement("canvas");
+  canvas.width = 128; canvas.height = 128;
+  const ctx = canvas.getContext("2d")!;
+  ctx.font = "700 60px Inter, sans-serif";
+  ctx.fillStyle = "#eaf9ff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.shadowColor = "#7fe0ff";
+  ctx.shadowBlur = 20;
+  ctx.fillText(`×${value}`, 64, 68);
+  tex = new THREE.CanvasTexture(canvas);
+  ringLabelTextures.set(value, tex);
+  return tex;
+}
+const RING_VALUES = [2, 3, 4, 5];
+
 function ObstacleSlot({ index, game }: { index: number; game: MutableRefObject<EscapeState> }) {
   const group = useRef<THREE.Group>(null);
-  const debrisRef = useRef<THREE.Group>(null);
-  const iceRef = useRef<THREE.Group>(null);
+  const wreckageRef = useRef<THREE.Group>(null);
+  const fragmentRef = useRef<THREE.Group>(null);
   const riftGroup = useRef<THREE.Group>(null);
+  const slabRef = useRef<THREE.Group>(null);
+  const collapsingRef = useRef<THREE.Group>(null);
+  const sweepRef = useRef<THREE.Group>(null);
+  const ringRef = useRef<THREE.Group>(null);
+  const ringLabelRefs = useRef<Record<number, THREE.Sprite | null>>({});
   const debrisGltf = useGLTF(assetUrl("models/debris.glb"));
   const iceGltf = useGLTF(assetUrl("models/ice-crystal.glb"));
-  const debrisModel = useMemo(() => debrisGltf.scene.clone(true), [debrisGltf.scene]);
-  const iceModel = useMemo(() => iceGltf.scene.clone(true), [iceGltf.scene]);
+  const wreckageModel = useMemo(() => debrisGltf.scene.clone(true), [debrisGltf.scene]);
+  const fragmentModel = useMemo(() => iceGltf.scene.clone(true), [iceGltf.scene]);
 
   useFrame((_, delta) => {
     const g = group.current;
@@ -120,18 +148,26 @@ function ObstacleSlot({ index, game }: { index: number; game: MutableRefObject<E
     if (!obstacle) { g.visible = false; return }
     g.visible = true;
     g.position.set(obstacle.lane * LANE_SPACING, 0, -FAR_Z * obstacle.z);
-    if (debrisRef.current) { debrisRef.current.visible = obstacle.kind === "debris"; debrisRef.current.rotation.y += delta * 1.4; debrisRef.current.rotation.x += delta * 0.7 }
-    if (iceRef.current) { iceRef.current.visible = obstacle.kind === "ice"; iceRef.current.rotation.y += delta * 0.5 }
+    if (wreckageRef.current) { wreckageRef.current.visible = obstacle.kind === "wreckage"; wreckageRef.current.rotation.y += delta * 1.4; wreckageRef.current.rotation.x += delta * 0.7 }
+    if (fragmentRef.current) { fragmentRef.current.visible = obstacle.kind === "fragment"; fragmentRef.current.rotation.y += delta * 0.5 }
     if (riftGroup.current) { riftGroup.current.visible = obstacle.kind === "rift"; riftGroup.current.rotation.z += delta * 0.9 }
+    if (slabRef.current) slabRef.current.visible = obstacle.kind === "slab";
+    if (collapsingRef.current) collapsingRef.current.visible = obstacle.kind === "collapsing";
+    if (sweepRef.current) sweepRef.current.visible = obstacle.kind === "sweep";
+    if (ringRef.current) {
+      ringRef.current.visible = obstacle.kind === "ring";
+      ringRef.current.rotation.z += delta * 0.4;
+      RING_VALUES.forEach((v) => { const sprite = ringLabelRefs.current[v]; if (sprite) sprite.visible = obstacle.kind === "ring" && obstacle.ringValue === v });
+    }
   });
 
   return (
     <group ref={group}>
-      <group ref={debrisRef} scale={0.85}>
-        <primitive object={debrisModel} />
+      <group ref={wreckageRef} scale={0.85}>
+        <primitive object={wreckageModel} />
       </group>
-      <group ref={iceRef} scale={0.9}>
-        <primitive object={iceModel} />
+      <group ref={fragmentRef} scale={0.9}>
+        <primitive object={fragmentModel} />
         <pointLight color="#8fe4ff" intensity={1.2} distance={4} />
       </group>
       <group ref={riftGroup}>
@@ -141,34 +177,41 @@ function ObstacleSlot({ index, game }: { index: number; game: MutableRefObject<E
         </mesh>
         <pointLight color="#4fb3ff" intensity={3.5} distance={6} />
       </group>
+      <group ref={slabRef}>
+        <mesh>
+          <boxGeometry args={[1.5, 1.6, 0.3]} />
+          <meshStandardMaterial color="#0c1116" emissive="#173241" emissiveIntensity={0.6} />
+        </mesh>
+      </group>
+      <group ref={collapsingRef}>
+        <mesh rotation-x={-Math.PI / 2} position={[0, -0.3, 0]}>
+          <circleGeometry args={[1.3, 24]} />
+          <meshStandardMaterial color="#1a0d0d" emissive="#ff5d3d" emissiveIntensity={0.9} side={THREE.DoubleSide} />
+        </mesh>
+        <pointLight color="#ff6a44" intensity={2.4} distance={5} />
+      </group>
+      <group ref={sweepRef}>
+        <mesh>
+          <boxGeometry args={[7.5, 0.4, 0.4]} />
+          <meshStandardMaterial color="#221407" emissive="#ff9d3d" emissiveIntensity={1.1} />
+        </mesh>
+      </group>
+      <group ref={ringRef}>
+        <mesh rotation-x={Math.PI / 2}>
+          <torusGeometry args={[1.35, 0.05, 12, 32]} />
+          <meshBasicMaterial color="#bdf3ff" toneMapped={false} transparent opacity={0.85} />
+        </mesh>
+        {RING_VALUES.map((v) => (
+          <sprite key={v} ref={(el) => { ringLabelRefs.current[v] = el }} position={[0, 1.9, 0]} scale={[1.1, 1.1, 1]}>
+            <spriteMaterial map={ringLabelTexture(v)} transparent depthWrite={false} />
+          </sprite>
+        ))}
+      </group>
     </group>
   );
 }
 useGLTF.preload(assetUrl("models/debris.glb"));
 useGLTF.preload(assetUrl("models/ice-crystal.glb"));
-
-function AnomalyGlow() {
-  const halo = useMemo(() => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 256; canvas.height = 256;
-    const ctx = canvas.getContext("2d")!;
-    const g = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
-    g.addColorStop(0, "rgba(200,230,255,0.95)"); g.addColorStop(0.35, "rgba(120,180,255,0.4)"); g.addColorStop(1, "rgba(20,40,90,0)");
-    ctx.fillStyle = g; ctx.fillRect(0, 0, 256, 256);
-    return new THREE.CanvasTexture(canvas);
-  }, []);
-  return (
-    <group position={[10, 6, -FAR_Z * 1.6]}>
-      <mesh>
-        <sphereGeometry args={[2.2, 24, 24]} />
-        <meshBasicMaterial color="#eaf6ff" toneMapped={false} />
-      </mesh>
-      <sprite scale={[26, 26, 1]}>
-        <spriteMaterial map={halo} transparent depthWrite={false} blending={THREE.AdditiveBlending} />
-      </sprite>
-    </group>
-  );
-}
 
 function ChaseCamera({ game }: { game: MutableRefObject<EscapeState> }) {
   const shake = useRef(0);
@@ -185,26 +228,30 @@ function ChaseCamera({ game }: { game: MutableRefObject<EscapeState> }) {
   return null;
 }
 
-export function EscapeScene({ game, onEnded }: { game: MutableRefObject<EscapeState>; onEnded: () => void }) {
+export function EscapeScene({ game, onEnded, pausedRef }: { game: MutableRefObject<EscapeState>; onEnded: () => void; pausedRef?: MutableRefObject<boolean> }) {
   const milkyWay = useLoader(THREE.TextureLoader, assetUrl("textures/skybox/milkyway.jpg"));
   milkyWay.colorSpace = THREE.SRGBColorSpace;
+  const lens = useGravitationalLens();
 
   useFrame(() => {
+    if (pausedRef?.current) return;
     const { justEnded } = tickEscape(game.current);
     if (justEnded) onEnded();
   });
 
   return (
     <>
-      <ambientLight intensity={0.55} />
-      <directionalLight position={[6, 8, 4]} intensity={2.4} color="#fff3e0" />
-      <directionalLight position={[-5, -3, 6]} intensity={0.6} color="#8fb8ff" />
+      <ambientLight intensity={0.32} color="#3a4a5c" />
+      <directionalLight position={[6, 8, 4]} intensity={1.6} color="#dce8ff" />
+      <directionalLight position={[-5, -3, 6]} intensity={0.5} color="#4f7fb8" />
       <mesh scale={[-1, 1, 1]}>
         <sphereGeometry args={[300, 32, 24]} />
         <meshBasicMaterial map={milkyWay} side={THREE.BackSide} depthWrite={false} />
       </mesh>
       <Stars radius={200} depth={50} count={3000} factor={2.5} saturation={0} fade speed={0.3} />
-      <AnomalyGlow />
+      <IcePlanetGround game={game} />
+      <LaneGuides game={game} />
+      <Singularity />
       <Ship game={game} />
       <ExhaustTrail game={game} />
       {Array.from({ length: MAX_OBSTACLES }, (_, i) => (
@@ -213,6 +260,8 @@ export function EscapeScene({ game, onEnded }: { game: MutableRefObject<EscapeSt
       <ChaseCamera game={game} />
       <EffectComposer>
         <Bloom intensity={0.7} luminanceThreshold={0.35} luminanceSmoothing={0.2} mipmapBlur radius={0.6} />
+        <primitive object={lens} />
+        <GravitationalLens effect={lens} />
       </EffectComposer>
     </>
   );

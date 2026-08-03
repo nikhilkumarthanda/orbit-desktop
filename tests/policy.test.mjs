@@ -255,6 +255,15 @@ test("Orbit Play is local, permission-visible, allowlisted, and has an emergency
   assert.doesNotMatch(renderer, /className="play-grain"/);
   assert.doesNotMatch(playStyles, /\.play-vignette|\.play-grain/);
   assert.doesNotMatch(playStyles, /\.orbit-play\.is-active:hover header p/);
+  // The only `.orbit-play:hover` rule allowed is the known-safe defensive reset (forces
+  // transform/filter/opacity back to their identity values) — exactly one occurrence, and it
+  // must be that exact reset, not some other hover rule that could newly darken the view.
+  assert.equal((playStyles.match(/\.orbit-play:hover/g) ?? []).length, 1);
+  assert.match(playStyles, /\.orbit-play:hover,\.orbit-play:focus-within\{transform:none;filter:none;opacity:1\}/);
+  assert.doesNotMatch(playStyles, /\.content(\.play-content)?:hover/);
+  assert.match(playStyles, /\.orbit-play::before,\.orbit-play::after\{display:none!important;content:none!important\}/);
+  assert.match(playStyles, /\.orbit-play header\{[^}]*pointer-events:none/);
+  assert.match(playStyles, /\.play-safety\{[^}]*pointer-events:none/);
   assert.match(main, /new Set\(\["move", "down", "up", "scroll", "media-toggle", "stop"\]\)/);
   assert.doesNotMatch(native, /keyDown|keyboardSetUnicodeString|deleteFile|sendEmail/);
   assert.match(contracts, /OrbitPlayGesture/);

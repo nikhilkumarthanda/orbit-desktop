@@ -7,6 +7,10 @@ import { createCameraState, nextNavStep, radiusRangeFor, stepsToOrbit, type Came
 import { ALL_BODIES, ORBIT_INDEX } from "./orbit-universe/planets";
 import { OrbitEscapeGame } from "./orbit-universe/escape/OrbitEscapeGame";
 import { createEscapeState, steerEscape as steerEscapeState, dashEscape as dashEscapeState, type EscapeState } from "./orbit-universe/escape/escapeState";
+import { nextHandLane, type Lane } from "./orbit-universe/escape/laneHysteresis";
+import { LocalScoreService } from "./orbit-universe/escape/localScoreService";
+import { SupabaseScoreService } from "./orbit-universe/escape/supabaseScoreService";
+import type { ScoreService } from "./orbit-universe/escape/scoreService";
 import { GestureStabilizer, HAND_CONNECTIONS, type HandState, type Point } from "./orbit-universe/gestures/gestureStateMachine";
 import { createGauntletState, updateGauntlet, type GauntletState } from "./energy-gauntlet/gauntletState";
 import { drawGauntlet } from "./energy-gauntlet/drawGauntlet";
@@ -26,11 +30,21 @@ export function OrbitPlay(){
   const root=useRef<HTMLDivElement>(null),video=useRef<HTMLVideoElement>(null),overlay=useRef<HTMLCanvasElement>(null),world=useRef<HTMLCanvasElement>(null);
   const stream=useRef<MediaStream|null>(null),tracker=useRef<HandsTracker|null>(null),raf=useRef(0),processing=useRef(false),handsNow=useRef<HandState[]>([]);
   const pinching=useRef(false),lastScrollY=useRef(.5),fistSince=useRef(0),lastClick=useRef(0),phase=useRef(0),lastGestureUpdate=useRef(0),lastGauntletTick=useRef(0);
+  const lastHandPinchForDash=useRef(false),lastHandSeenAt=useRef(0),gestureDebugOn=useRef(false);
+  const [gestureDebugEnabled,setGestureDebugEnabled]=useState(false),[gestureDebugText,setGestureDebugText]=useState("");
+  const toggleGestureDebug=()=>{gestureDebugOn.current=!gestureDebugOn.current;setGestureDebugEnabled(gestureDebugOn.current);if(!gestureDebugOn.current)setGestureDebugText("")};
   const gauntlet=useRef<GauntletState>(createGauntletState());
   const camera=useRef<CameraState>(createCameraState());
   const nav=useRef<NavGestureState>({lastAngle:0,lastMidpoint:null,trackedHands:0,pinchActive:false,pinchStartY:0,pinchStartTime:0,lastPinchY:0});
   const escape=useRef<EscapeState>(createEscapeState());
   const escapeNow=useRef(false);
+  // Lazy-initialized (not useRef(new SupabaseScoreService())): that form constructs a fresh
+  // instance on every render (React only keeps the first, but still evaluates and discards the
+  // rest), and this constructor has a real side effect -- it fires a network sign-in request --
+  // so a naive useRef would spawn a new anonymous-auth attempt on every re-render.
+  const scoreService=useRef<ScoreService>(null!);
+  if(scoreService.current===null)scoreService.current=new SupabaseScoreService();
+  const [postRunResult,setPostRunResult]=useState<{score:number;rank?:number}|null>(null);
   const stabilizers=useRef<[GestureStabilizer,GestureStabilizer]>([new GestureStabilizer(),new GestureStabilizer()]);
   const sceneNow=useRef<PlayScene>("system");
   const [active,setActive]=useState(false),[mode,setMode]=useState<OrbitPlayMode>("playground"),[gesture,setGesture]=useState("Waiting for hands"),[message,setMessage]=useState("Camera off · all tracking is local"),[immersive,setImmersive]=useState(false),[effect,setEffect]=useState("IDLE");
@@ -41,9 +55,29 @@ export function OrbitPlay(){
   const setEscapeActive=(value:boolean)=>{escapeNow.current=value;setEscapeActiveState(value)};
   const escapeInputActive=()=>escapeNow.current;
 
-  const handleEscapeEnd=()=>{setEffect("RUN ENDED");setMessage("Press Enter or click Restart · beat your best")};
-  const startEscape=()=>{
-    escape.current={...escape.current,running:true,over:false,lane:0,targetLane:0,distance:0,score:0,speed:.006,multiplier:1,dash:1,obstacles:[],lastSpawn:0};
+  const handleEscapeEnd=()=>{
+    setEffect("RUN ENDED");setMessage("Press Enter or click Play Again · beat your best");
+    const g=escape.current;
+    if(g.runId){
+      const runId=g.runId,finalScore=Math.floor(g.score),durationMs=Date.now()-g.startedAt;
+      void scoreService.current.finishRun(runId,finalScore,durationMs).then(result=>setPostRunResult({score:finalScore,rank:result.rank}));
+    }
+  };
+  const startEscape=async()=>{
+    setPostRunResult(null);
+    let result;
+    try{
+      result=await scoreService.current.startRun();
+    }catch(err){
+      console.warn("Online scoring unavailable, falling back to local:",err);
+      scoreService.current=new LocalScoreService();
+      result=await scoreService.current.startRun();
+    }
+    const {runId,seed}=result;
+    escape.current=createEscapeState(seed);
+    escape.current.running=true;
+    escape.current.runId=runId;
+    escape.current.startedAt=Date.now();
     setEffect("ORBIT ESCAPE");setGesture("Run started");setMessage("Steer with A/D or your hand · Space to phase dash");
   };
   const steerEscape=(direction:-1|1)=>steerEscapeState(escape.current,direction);
@@ -51,7 +85,9 @@ export function OrbitPlay(){
 
   const chooseScene=(next:PlayScene)=>{
     sceneNow.current=next;setScene(next);setEffect(next==="system"?"SOLAR SYSTEM":"ENERGY STABLE");
-    escape.current.running=false;
+    const g=escape.current;
+    if(g.running&&g.runId)void scoreService.current.abandonRun(g.runId);
+    g.running=false;
     setEscapeActive(false);
     setMessage(next==="system"?"Rotate with both hands · pinch and drag up/down to zoom · quick pinch to travel":"Pull with two pinches, then clap to burst");
   };
@@ -155,13 +191,32 @@ export function OrbitPlay(){
         return pool[slot].update(lm,timestamp);
       });
       handsNow.current=detected;
+      lastHandSeenAt.current=performance.now();
       if(escapeNow.current&&escape.current.running){
         const hand=detected[0];
-        if(hand){escape.current.targetLane=hand.palm.x<.38?-1:hand.palm.x>.62?1:0;if(hand.pinching)dashEscape()}
+        if(hand){
+          escape.current.targetLane=nextHandLane(escape.current.targetLane as Lane,hand.palm.x);
+          if(hand.pinching&&!lastHandPinchForDash.current)dashEscape();
+          lastHandPinchForDash.current=hand.pinching;
+        }
       }else if(sceneNow.current==="energy")updateGauntletScene(detected);
       else updateCamera(detected);
-      if(performance.now()-lastGestureUpdate.current>120){lastGestureUpdate.current=performance.now();setGesture(`${detected.length} hand${detected.length>1?"s":""} · ${detected.map(hand=>hand.gesture).join(" + ")}`)}
-    }else if(performance.now()-gauntlet.current.ball.lastSeen>260){handsNow.current=[];setGesture("Tracking hands…")}
+      if(performance.now()-lastGestureUpdate.current>120){
+        lastGestureUpdate.current=performance.now();
+        setGesture(`${detected.length} hand${detected.length>1?"s":""} · ${detected.map(hand=>hand.gesture).join(" + ")}`);
+        if(gestureDebugOn.current){
+          setGestureDebugText(detected.map((hand,i)=>`H${i} raw=${hand.gesture} x=${hand.palm.x.toFixed(2)} pinch=${hand.pinching}`).join("  ·  ")+(escapeNow.current?`  ·  lane=${escape.current.targetLane}`:""));
+        }
+      }
+    }else if(performance.now()-gauntlet.current.ball.lastSeen>260){
+      handsNow.current=[];setGesture("Tracking hands…");
+      // Short tracking-loss tolerance: a blip under ~250ms keeps the last commanded lane/dash
+      // state as-is (nothing here resets it). Beyond that, a genuinely lost hand shouldn't
+      // leave the ship committed to a stale lane forever, so it eases back to center.
+      if(escapeNow.current&&escape.current.running&&performance.now()-lastHandSeenAt.current>250){
+        escape.current.targetLane=0;
+      }
+    }
     handsNow.current.forEach((hand,handIndex)=>{
       ctx.strokeStyle=handIndex?"rgba(255,183,94,.64)":"rgba(99,235,255,.64)";ctx.lineWidth=1.7;
       HAND_CONNECTIONS.forEach(([a,b])=>{ctx.beginPath();ctx.moveTo(hand.landmarks[a].x*box.width,hand.landmarks[a].y*box.height);ctx.lineTo(hand.landmarks[b].x*box.width,hand.landmarks[b].y*box.height);ctx.stroke()});
@@ -192,12 +247,20 @@ export function OrbitPlay(){
       const loop=async()=>{drawWorld();if(video.current&&tracker.current&&!processing.current&&video.current.readyState>=2){processing.current=true;try{await tracker.current.send({image:video.current})}catch{processing.current=false}}raf.current=requestAnimationFrame(loop)};void loop();
     }catch(error){await stop();setMessage(error instanceof Error?error.message:"Camera permission was denied")}
   };
-  useEffect(()=>{const changed=()=>setImmersive(Boolean(document.fullscreenElement));const keydown=(event:KeyboardEvent)=>{if(event.key==="Escape"&&stream.current){void stop();return}if(escapeInputActive()){if(event.key==="ArrowLeft"||event.key.toLowerCase()==="a")steerEscape(-1);if(event.key==="ArrowRight"||event.key.toLowerCase()==="d")steerEscape(1);if(event.code==="Space"){event.preventDefault();dashEscape()}if(event.key==="Enter")startEscape()}};document.addEventListener("fullscreenchange",changed);document.addEventListener("keydown",keydown);drawWorld();return()=>{document.removeEventListener("fullscreenchange",changed);document.removeEventListener("keydown",keydown);void stop()}},[]);
+  useEffect(()=>{const changed=()=>setImmersive(Boolean(document.fullscreenElement));const keydown=(event:KeyboardEvent)=>{if(event.key==="Escape"&&stream.current){void stop();return}if(escapeInputActive()){if(event.key==="ArrowLeft"||event.key.toLowerCase()==="a")steerEscape(-1);if(event.key==="ArrowRight"||event.key.toLowerCase()==="d")steerEscape(1);if(event.code==="Space"){event.preventDefault();dashEscape()}if(event.key==="Enter")void startEscape()}};document.addEventListener("fullscreenchange",changed);document.addEventListener("keydown",keydown);drawWorld();return()=>{document.removeEventListener("fullscreenchange",changed);document.removeEventListener("keydown",keydown);void stop()}},[]);
+  useEffect(()=>{
+    if(!escapeActive)return;
+    const id=window.setInterval(()=>{
+      const g=escape.current;
+      if(g.running&&g.runId)void scoreService.current.submitCheckpoint(g.runId,Math.floor(g.score),g.distance);
+    },1200);
+    return()=>window.clearInterval(id);
+  },[escapeActive]);
 
   return <div ref={root} className={`orbit-play ${active?"is-active":""} ${effect==="SUPERNOVA"?"is-bursting":""}`}>
     <canvas className="energy-world" ref={world}/>
     {scene==="system"&&!escapeActive&&<OrbitUniverse camera={camera} onOrbitReadyChange={setOrbitReady}/>}
-    {escapeActive&&<OrbitEscapeGame game={escape} onEnded={handleEscapeEnd}/>}
+    {escapeActive&&<OrbitEscapeGame game={escape} onEnded={handleEscapeEnd} scoreService={scoreService.current} postRunResult={postRunResult} onRestart={startEscape}/>}
     <video ref={video} muted playsInline aria-hidden="true" className={cameraVisible&&scene==="energy"?"camera-visible":""}/>
     <canvas className="hand-overlay" ref={overlay}/>
     <header><div><small>ORBIT PLAY · REAL SOLAR SYSTEM</small><h1>{scene==="system"?"A real universe in your hands.":"Shape the impossible."}</h1><p>{scene==="system"?"Fly from the Milky Way down to every real planet, and find Orbit at the edge of the system.":"Move the field. Rotate both hands. Pinch and pull, then clap to release."}</p></div><span className={active?"camera-live":""}>● {active?"CAMERA ACTIVE · LOCAL ONLY":"CAMERA OFF"}</span></header>
@@ -205,12 +268,16 @@ export function OrbitPlay(){
       <div className="scene-switch"><button className={scene==="system"?"selected":""} onClick={()=>chooseScene("system")}>Solar system</button><button className={scene==="energy"?"selected":""} onClick={()=>chooseScene("energy")}>Energy lab</button></div>
       <div className="mode-switch"><button className={mode==="playground"?"selected":""} disabled={active} onClick={()=>setMode("playground")}>Play</button><button className={mode==="desktop"?"selected":""} disabled={active} onClick={()=>setMode("desktop")}>Desktop</button></div>
       {active?<button className="play-stop" onClick={()=>void stop()}>Stop</button>:<button className="play-start" onClick={()=>void start()}>Enter Orbit Play</button>}
-      {scene==="system"&&orbitReady&&!escapeActive&&<button className="escape-start" onClick={()=>{setEscapeActive(true);startEscape()}}>Play Orbit Escape</button>}
-      {escapeActive&&<button className="play-stop" onClick={()=>{escape.current.running=false;setEscapeActive(false)}}>Exit Escape</button>}
+      {scene==="system"&&orbitReady&&!escapeActive&&<button className="escape-start" onClick={()=>{setEscapeActive(true);void startEscape()}}>Play Orbit Escape</button>}
+      {escapeActive&&<button className="play-stop" onClick={()=>{const g=escape.current;if(g.running&&g.runId)void scoreService.current.abandonRun(g.runId);g.running=false;setEscapeActive(false)}}>Exit Escape</button>}
       {scene==="energy"&&<button className="play-immersive" onClick={()=>setCameraVisible(v=>!v)}>{cameraVisible?"Hide camera":"Show camera"}</button>}
       <button className="play-immersive" onClick={()=>void toggleImmersive()}>{immersive?"Exit full screen":"Full screen"}</button>
     </div>
-    <div className="gesture-readout"><small>{effect}</small><b>{gesture}</b><span>{message}</span></div>
+    <div className="gesture-readout">
+      <small>{effect}</small><b>{gesture}</b><span>{message}</span>
+      <button type="button" className="gesture-debug-toggle" onClick={toggleGestureDebug}>{gestureDebugEnabled?"Hide gesture debug":"Show gesture debug"}</button>
+      {gestureDebugEnabled&&<code className="gesture-debug">{gestureDebugText||"…"}</code>}
+    </div>
     <div className="play-hint">{escapeActive?<><span>A / D OR HAND TO STEER</span><i/><span>SPACE OR PINCH TO DASH</span></>:scene==="energy"?(effect==="GAUNTLET READY"?<><span>OPEN PALM TO FIRE</span><i/><span>HANDS TOGETHER FOR FIREBALL</span><i/><span>HOLD FIST 2S TO POWER DOWN</span></>:effect==="SUIT ENGAGED"||effect==="POWERING DOWN"?<><span>{effect}…</span></>:<><span>MOVE TOGETHER</span><i/><span>ROTATE</span><i/><span>PINCH + PULL</span><i/><span>CLAP TO BURST</span><i/><span>FIST + PUSH TO SUIT UP</span></>):<><span>ROTATE VIEW</span><i/><span>PINCH + DRAG UP/DOWN TO ZOOM</span><i/><span>QUICK PINCH TO ADVANCE</span></>}</div>
     <aside className="play-safety"><b>LOCAL CAMERA</b><span>Only hand landmarks appear; the camera image stays hidden. Frames are never recorded or uploaded. Press Esc or hold both fists for 2 seconds to stop.</span></aside>
   </div>;

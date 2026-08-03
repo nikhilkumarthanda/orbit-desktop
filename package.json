@@ -16,6 +16,7 @@
     "native:mac": "zsh scripts/build-macos-native.sh",
     "verify:mac": "node scripts/verify-mac-artifact.mjs",
     "test": "node --test tests/*.test.mjs && python3 -m unittest discover -s sidecar -p 'test_*.py'",
+    "test:overlay": "node tests/overlay.playwright.mjs",
     "check": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit && npm test && npm run build"
   },
   "build": {
@@ -79,6 +80,7 @@
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.6.1",
     "@react-three/postprocessing": "^3.0.4",
+    "@supabase/supabase-js": "^2.112.0",
     "electron-updater": "^6.8.9",
     "maath": "^0.10.8",
     "playwright-core": "^1.61.1",

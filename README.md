@@ -26,8 +26,8 @@ Most desktop agents optimize for broad autonomy. Orbit is designed around contro
 | **Safe Desktop Automation** | System diagnostics, recent-work recovery, repository context, app launch, browser actions, and recoverable cleanup | Implemented |
 | **Orbit Universe** | React Three Fiber solar-system navigation controlled by keyboard and locally processed hand gestures | Implemented |
 | **Orbit Escape** | Deterministic 3D endless runner with lane steering, phase dash, scoring, daily seeds, and keyboard/camera input | Implemented |
-| **Competitive Leaderboards** | Anonymous identity, server-validated run lifecycle, live/daily/global boards, and offline fallback | Implemented on `phase-11-development` |
-| **Energy Lab / Orbit Gauntlet** | Camera-based energy interaction and an original gesture-driven powered-gauntlet experience | Experimental; cinematic rebuild planned |
+| **Competitive Leaderboards** | Anonymous identity, server-validated run lifecycle, live/daily/global boards, and offline fallback | Implemented on `main` |
+| **Energy Lab / Orbit Gauntlet** | Camera-first energy interaction, deliberate fist activation, three-second retraction, and controlled palm blast | Phase 12 foundation on `main` |
 
 ## System architecture
 
@@ -187,8 +187,8 @@ scripts/                          Build, packaging, signing, and artifact verifi
 
 ## Roadmap
 
-- Rebuild Energy Lab as a mirrored-camera AR experience with a palm-following energy sphere
-- Add an original cinematic Orbit Gauntlet transformation, three-second retraction, charge, and palm-blast interaction
+- Upgrade the Phase 12 camera-first Energy Lab with a palm-following, depth-aware energy sphere
+- Replace the 2D gauntlet overlay with articulated 3D armor plates, stronger assembly animation, recoil, lighting, particles, and original mechanical audio
 - Strengthen competitive identity beyond disposable anonymous accounts
 - Add signed checkpoints or replay validation for stronger anti-cheat guarantees
 - Expand semantic retrieval and reranking beyond the SQLite FTS5 baseline

@@ -1,5 +1,5 @@
 import { HAND_CONNECTIONS, type HandState } from "../orbit-universe/gestures/gestureStateMachine";
-import { POWER_DOWN_MS, SUIT_UP_MS, type BallState, type Fireball, type GauntletState, type Projectile, type Spark } from "./gauntletState";
+import { POWER_DOWN_MS, SUIT_UP_MS, powerDownProgress, type BallState, type Fireball, type GauntletState, type Projectile, type Spark } from "./gauntletState";
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
@@ -117,6 +117,17 @@ const drawFireball = (ctx: CanvasRenderingContext2D, width: number, height: numb
   ctx.fillStyle = "#eafcff"; ctx.beginPath(); ctx.arc(x, y, r * 0.55, 0, Math.PI * 2); ctx.fill();
 };
 
+const drawPowerDownHold = (ctx: CanvasRenderingContext2D, width: number, height: number, gauntlet: GauntletState, hands: HandState[], now: number) => {
+  const progress = powerDownProgress(gauntlet, now), hand = hands[0];
+  if (!hand || progress <= 0) return;
+  const x = hand.palm.x * width, y = hand.palm.y * height, radius = Math.min(width, height) * .072;
+  ctx.save(); ctx.lineCap = "round"; ctx.shadowColor = "#86eaff"; ctx.shadowBlur = 16;
+  ctx.strokeStyle = "rgba(126,225,255,.2)"; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = "#d8f8ff"; ctx.beginPath(); ctx.arc(x, y, radius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * progress); ctx.stroke();
+  ctx.shadowBlur = 0; ctx.fillStyle = "rgba(230,250,255,.92)"; ctx.font = "600 13px Inter, sans-serif"; ctx.textAlign = "center";
+  ctx.fillText(`${Math.ceil((1 - progress) * 3)}s`, x, y + 5); ctx.restore();
+};
+
 export const drawGauntlet = (
   ctx: CanvasRenderingContext2D,
   width: number, height: number,
@@ -140,6 +151,7 @@ export const drawGauntlet = (
     drawPlates(ctx, width, height, hands, 1);
     drawProjectiles(ctx, width, height, gauntlet.projectiles);
     drawFireball(ctx, width, height, gauntlet.fireball);
+    drawPowerDownHold(ctx, width, height, gauntlet, hands, now);
   } else {
     const retract = clamp((now - gauntlet.phaseStartedAt) / POWER_DOWN_MS, 0, 1);
     drawBall(ctx, width, height, gauntlet.ball, gauntlet.sparks, hands, phase, retract);

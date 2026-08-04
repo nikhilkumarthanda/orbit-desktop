@@ -14,6 +14,7 @@ export type GauntletState = {
   fistStartScale: number;
   powerDownFistSince: number;
   lastProjectileAt: [number, number];
+  lastGestures: [string, string];
   projectiles: Projectile[];
   fireball: Fireball;
   ball: BallState;
@@ -27,6 +28,7 @@ export const createGauntletState = (): GauntletState => ({
   fistStartScale: 0,
   powerDownFistSince: 0,
   lastProjectileAt: [0, 0],
+  lastGestures: ["", ""],
   projectiles: [],
   fireball: { active: false, x: 0.5, y: 0.5, charge: 0 },
   ball: { center: { x: .5, y: .53 }, scale: 1, rotation: 0, rotationVelocity: 0, tension: 0, burst: 0, burstAt: 0, lastSeparation: .34, lastSeen: 0 },
@@ -34,11 +36,9 @@ export const createGauntletState = (): GauntletState => ({
 });
 
 export const SUIT_UP_MS = 1500;
-export const POWER_DOWN_HOLD_MS = 2000;
+export const POWER_DOWN_HOLD_MS = 3000;
 export const POWER_DOWN_MS = 900;
 
-const PUSH_WINDOW_MS = 260;
-const PUSH_SCALE_THRESHOLD = 0.045;
 const PROJECTILE_COOLDOWN_MS = 260;
 const PROJECTILE_SPEED = 0.85;
 const PROJECTILE_LIFE = 1.1;
@@ -51,6 +51,11 @@ const mix = (from: number, to: number, amount: number) => from + (to - from) * a
 const mixPoint = (from: Point, to: Point, amount: number) => ({ x: mix(from.x, to.x, amount), y: mix(from.y, to.y, amount) });
 
 export type GauntletEvent = "suiting-up" | "suited" | "powering-down" | "ball" | "burst" | "projectile" | null;
+
+export const powerDownProgress = (state: GauntletState, now: number) =>
+  state.phase === "suited" && state.powerDownFistSince
+    ? clamp((now - state.powerDownFistSince) / POWER_DOWN_HOLD_MS, 0, 1)
+    : 0;
 
 const tickBall = (state: GauntletState, hands: HandState[], now: number): GauntletEvent => {
   const ball = state.ball;
@@ -85,11 +90,9 @@ export const updateGauntlet = (state: GauntletState, hands: HandState[], now: nu
   if (state.phase === "ball") {
     if (primary && primary.gesture === "Fist") {
       if (!state.fistSince) { state.fistSince = now; state.fistStartScale = primary.scale }
-      else if (now - state.fistSince < PUSH_WINDOW_MS && primary.scale - state.fistStartScale > PUSH_SCALE_THRESHOLD) {
+      else if (now - state.fistSince >= 220) {
         state.phase = "suiting-up"; state.phaseStartedAt = now; state.fistSince = 0;
         return "suiting-up";
-      } else if (now - state.fistSince > PUSH_WINDOW_MS) {
-        state.fistSince = now; state.fistStartScale = primary.scale;
       }
     } else state.fistSince = 0;
     return tickBall(state, hands, now);
@@ -103,12 +106,15 @@ export const updateGauntlet = (state: GauntletState, hands: HandState[], now: nu
   if (state.phase === "suited") {
     let spawned = false;
     hands.forEach((hand, index) => {
-      if (hand.gesture === "Open palm" && now - state.lastProjectileAt[index] > PROJECTILE_COOLDOWN_MS) {
+      const opened = hand.gesture === "Open palm" && state.lastGestures[index] !== "Open palm";
+      if (opened && now - state.lastProjectileAt[index] > PROJECTILE_COOLDOWN_MS) {
         state.lastProjectileAt[index] = now; spawned = true;
         const dx = hand.point.x - hand.palm.x, dy = hand.point.y - hand.palm.y, len = Math.max(0.001, Math.hypot(dx, dy));
         state.projectiles.push({ x: hand.palm.x, y: hand.palm.y, vx: (dx / len) * PROJECTILE_SPEED, vy: (dy / len) * PROJECTILE_SPEED, age: 0, life: PROJECTILE_LIFE });
       }
+      state.lastGestures[index] = hand.gesture;
     });
+    for (let index = hands.length; index < 2; index++) state.lastGestures[index] = "";
     state.projectiles.forEach(p => { p.x += p.vx * (deltaMs / 1000); p.y += p.vy * (deltaMs / 1000); p.age += deltaMs / 1000 });
     state.projectiles = state.projectiles.filter(p => p.age < p.life);
 
@@ -135,7 +141,7 @@ export const updateGauntlet = (state: GauntletState, hands: HandState[], now: nu
   // powering-down
   if (now - state.phaseStartedAt > POWER_DOWN_MS) {
     state.phase = "ball"; state.phaseStartedAt = now;
-    state.projectiles = []; state.fireball = { active: false, x: 0.5, y: 0.5, charge: 0 };
+    state.projectiles = []; state.lastGestures = ["", ""]; state.fireball = { active: false, x: 0.5, y: 0.5, charge: 0 };
     return "ball";
   }
   return null;

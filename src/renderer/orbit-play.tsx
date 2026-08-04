@@ -95,6 +95,7 @@ export function OrbitPlay(){
 
   const chooseScene=(next:PlayScene)=>{
     sceneNow.current=next;setScene(next);setEffect(next==="system"?"SOLAR SYSTEM":"ENERGY STABLE");
+    if(next==="energy")setCameraVisible(true);
     const g=escape.current;
     if(g.running&&g.runId)void scoreService.current.abandonRun(g.runId);
     g.running=false;
@@ -118,7 +119,7 @@ export function OrbitPlay(){
     lastGauntletTick.current=now;
     const event=updateGauntlet(gauntlet.current,hands,now,deltaMs);
     if(event==="suiting-up"){playSuitUpSequence();setEffect("SUIT ENGAGED");setMessage("Plates assembling…")}
-    else if(event==="suited"){setEffect("GAUNTLET READY");setMessage("Open palm to fire · bring both hands together to charge a fireball · hold fist 2s to power down")}
+    else if(event==="suited"){setEffect("GAUNTLET READY");setMessage("Open your palm to fire · close and hold your fist 3s to release the gauntlet")}
     else if(event==="powering-down"){playPowerDownSequence();setEffect("POWERING DOWN");setMessage("Returning to energy field…")}
     else if(event==="ball"){setEffect("ENERGY STABLE");setMessage("Pull with two pinches, then clap to burst")}
     else if(event==="burst"){setEffect("SUPERNOVA");setMessage("Clap burst · energy field reforming");window.setTimeout(()=>setEffect("REFORMING"),650);window.setTimeout(()=>setEffect("ENERGY STABLE"),1900)}
@@ -288,7 +289,7 @@ export function OrbitPlay(){
       <button type="button" className="gesture-debug-toggle" onClick={toggleGestureDebug}>{gestureDebugEnabled?"Hide gesture debug":"Show gesture debug"}</button>
       {gestureDebugEnabled&&<code className="gesture-debug">{gestureDebugText||"…"}</code>}
     </div>
-    <div className="play-hint">{escapeActive?<><span>A / D OR HAND TO STEER</span><i/><span>SPACE OR PINCH TO DASH</span></>:scene==="energy"?(effect==="GAUNTLET READY"?<><span>OPEN PALM TO FIRE</span><i/><span>HANDS TOGETHER FOR FIREBALL</span><i/><span>HOLD FIST 2S TO POWER DOWN</span></>:effect==="SUIT ENGAGED"||effect==="POWERING DOWN"?<><span>{effect}…</span></>:<><span>MOVE TOGETHER</span><i/><span>ROTATE</span><i/><span>PINCH + PULL</span><i/><span>CLAP TO BURST</span><i/><span>FIST + PUSH TO SUIT UP</span></>):<><span>ROTATE VIEW</span><i/><span>PINCH + DRAG UP/DOWN TO ZOOM</span><i/><span>QUICK PINCH TO ADVANCE</span></>}</div>
-    <aside className="play-safety"><b>LOCAL CAMERA</b><span>Only hand landmarks appear; the camera image stays hidden. Frames are never recorded or uploaded. Press Esc or hold both fists for 2 seconds to stop.</span></aside>
+    <div className="play-hint">{escapeActive?<><span>A / D OR HAND TO STEER</span><i/><span>SPACE OR PINCH TO DASH</span></>:scene==="energy"?(effect==="GAUNTLET READY"?<><span>OPEN PALM TO FIRE</span><i/><span>HOLD FIST 3S TO RELEASE</span></>:effect==="SUIT ENGAGED"||effect==="POWERING DOWN"?<><span>{effect}…</span></>:<><span>OPEN PALM · ENERGY FOLLOWS</span><i/><span>CLOSE FIST TO SUIT UP</span><i/><span>PINCH + PULL TO SHAPE</span></>):<><span>ROTATE VIEW</span><i/><span>PINCH + DRAG UP/DOWN TO ZOOM</span><i/><span>QUICK PINCH TO ADVANCE</span></>}</div>
+    <aside className="play-safety"><b>LOCAL CAMERA</b><span>Energy Lab mirrors your live camera while hand landmarks are processed locally. Frames are never recorded or uploaded. Press Esc or hold both fists for 2 seconds to stop.</span></aside>
   </div>;
 }

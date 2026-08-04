@@ -228,7 +228,7 @@ export function OrbitPlay(){
         escape.current.targetLane=0;
       }
     }
-    handsNow.current.forEach((hand,handIndex)=>{
+    if(sceneNow.current!=="energy"||gestureDebugOn.current) handsNow.current.forEach((hand,handIndex)=>{
       ctx.strokeStyle=handIndex?"rgba(255,183,94,.64)":"rgba(99,235,255,.64)";ctx.lineWidth=1.7;
       HAND_CONNECTIONS.forEach(([a,b])=>{ctx.beginPath();ctx.moveTo(hand.landmarks[a].x*box.width,hand.landmarks[a].y*box.height);ctx.lineTo(hand.landmarks[b].x*box.width,hand.landmarks[b].y*box.height);ctx.stroke()});
       hand.landmarks.forEach((p,i)=>{ctx.beginPath();ctx.fillStyle=i===8?"#fff2ba":handIndex?"#ffad62":"#73efff";ctx.arc(p.x*box.width,p.y*box.height,i===8?4.5:2.2,0,Math.PI*2);ctx.fill()});
@@ -268,13 +268,14 @@ export function OrbitPlay(){
     return()=>window.clearInterval(id);
   },[escapeActive]);
 
-  return <div ref={root} className={`orbit-play ${active?"is-active":""} ${effect==="SUPERNOVA"?"is-bursting":""}`}>
+  const cameraActuallyVisible=active&&scene==="energy"&&cameraVisible;
+  return <div ref={root} className={`orbit-play scene-${scene} ${active?"is-active":""} ${effect==="SUPERNOVA"?"is-bursting":""}`}>
     <canvas className="energy-world" ref={world}/>
     {scene==="system"&&!escapeActive&&<OrbitUniverse camera={camera} onOrbitReadyChange={setOrbitReady}/>}
     {escapeActive&&<OrbitEscapeGame game={escape} onEnded={handleEscapeEnd} scoreService={scoreService.current} postRunResult={postRunResult} onRestart={startEscape}/>}
     <video ref={video} muted playsInline aria-hidden="true" className={cameraVisible&&scene==="energy"?"camera-visible":""}/>
     <canvas className="hand-overlay" ref={overlay}/>
-    <header><div><small>ORBIT PLAY · REAL SOLAR SYSTEM</small><h1>{scene==="system"?"A real universe in your hands.":"Shape the impossible."}</h1><p>{scene==="system"?"Fly from the Milky Way down to every real planet, and find Orbit at the edge of the system.":"Move the field. Rotate both hands. Pinch and pull, then clap to release."}</p></div><span className={active?"camera-live":""}>● {active?"CAMERA ACTIVE · LOCAL ONLY":"CAMERA OFF"}</span></header>
+    <header><div><small>ORBIT PLAY · {scene==="system"?"REAL SOLAR SYSTEM":"ENERGY LAB"}</small><h1>{scene==="system"?"A real universe in your hands.":"Become the armor."}</h1><p>{scene==="system"?"Fly from the Milky Way down to every real planet, and find Orbit at the edge of the system.":"Close your fist to assemble the gauntlet from fingertips to elbow. Open your palm to fire."}</p></div><span className={cameraActuallyVisible?"camera-live":""}>● {cameraActuallyVisible?"CAMERA ACTIVE · VISIBLE · LOCAL ONLY":active?"CAMERA ACTIVE · TRACKING ONLY":"CAMERA OFF"}</span></header>
     <div className="play-controls">
       <div className="scene-switch"><button className={scene==="system"?"selected":""} onClick={()=>chooseScene("system")}>Solar system</button><button className={scene==="energy"?"selected":""} onClick={()=>chooseScene("energy")}>Energy lab</button></div>
       <div className="mode-switch"><button className={mode==="playground"?"selected":""} disabled={active} onClick={()=>setMode("playground")}>Play</button><button className={mode==="desktop"?"selected":""} disabled={active} onClick={()=>setMode("desktop")}>Desktop</button></div>

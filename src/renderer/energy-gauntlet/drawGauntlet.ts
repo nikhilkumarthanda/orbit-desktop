@@ -1,4 +1,4 @@
-import { HAND_CONNECTIONS, type HandState } from "../orbit-universe/gestures/gestureStateMachine";
+import type { HandState } from "../orbit-universe/gestures/gestureStateMachine";
 import { POWER_DOWN_MS, SUIT_UP_MS, powerDownProgress, type BallState, type Fireball, type GauntletState, type Projectile, type Spark } from "./gauntletState";
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -71,27 +71,68 @@ const drawBall = (ctx: CanvasRenderingContext2D, width: number, height: number, 
   ctx.restore();
 };
 
+type ScreenPoint = { x: number; y: number };
+const polygon = (ctx: CanvasRenderingContext2D, points: ScreenPoint[]) => {
+  ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y); points.slice(1).forEach(point => ctx.lineTo(point.x, point.y)); ctx.closePath();
+};
+
+const drawArmorPolygon = (ctx: CanvasRenderingContext2D, points: ScreenPoint[], reveal: number, hot = false) => {
+  if (reveal <= 0) return;
+  const center = points.reduce((sum, point) => ({ x: sum.x + point.x / points.length, y: sum.y + point.y / points.length }), { x: 0, y: 0 });
+  const collapsed = points.map(point => ({ x: center.x + (point.x - center.x) * reveal, y: center.y + (point.y - center.y) * reveal }));
+  const bounds = collapsed.reduce((box, point) => ({ minX: Math.min(box.minX, point.x), maxX: Math.max(box.maxX, point.x), minY: Math.min(box.minY, point.y), maxY: Math.max(box.maxY, point.y) }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
+  const metal = ctx.createLinearGradient(bounds.minX, bounds.minY, bounds.maxX, bounds.maxY);
+  if (hot) { metal.addColorStop(0, "#ffe39b"); metal.addColorStop(.18, "#d88a24"); metal.addColorStop(.5, "#542018"); metal.addColorStop(.76, "#b93c21"); metal.addColorStop(1, "#250b0d") }
+  else { metal.addColorStop(0, "#ff6a38"); metal.addColorStop(.2, "#a82420"); metal.addColorStop(.52, "#3b0a11"); metal.addColorStop(.78, "#871c1d"); metal.addColorStop(1, "#16050a") }
+  ctx.save(); ctx.globalAlpha = reveal; ctx.fillStyle = metal; ctx.strokeStyle = hot ? "rgba(255,220,125,.9)" : "rgba(255,111,60,.7)"; ctx.lineWidth = 1.4;
+  ctx.shadowColor = hot ? "#ffb84f" : "#ff3d24"; ctx.shadowBlur = 7 * reveal; polygon(ctx, collapsed); ctx.fill(); ctx.stroke();
+  ctx.globalAlpha = reveal * .65; ctx.strokeStyle = "rgba(255,230,190,.52)"; ctx.lineWidth = .8; ctx.beginPath(); ctx.moveTo(collapsed[0].x, collapsed[0].y); ctx.lineTo(collapsed[1].x, collapsed[1].y); ctx.stroke(); ctx.restore();
+};
+
 const drawPlates = (ctx: CanvasRenderingContext2D, width: number, height: number, hands: HandState[], reveal: number) => {
-  const unit = Math.hypot(width, height);
   hands.forEach(hand => {
-    const lm = hand.landmarks;
-    HAND_CONNECTIONS.forEach(([a, b], segIndex) => {
-      const segmentReveal = clamp(reveal * HAND_CONNECTIONS.length - segIndex, 0, 1);
-      if (segmentReveal <= 0) return;
-      const ax = lm[a].x * width, ay = lm[a].y * height, bx = lm[b].x * width, by = lm[b].y * height;
-      const angle = Math.atan2(by - ay, bx - ax), len = Math.hypot(bx - ax, by - ay) * segmentReveal;
-      const thickness = Math.max(6, unit * 0.014);
-      ctx.save(); ctx.translate((ax + bx) / 2, (ay + by) / 2); ctx.rotate(angle);
-      const grad = ctx.createLinearGradient(0, -thickness / 2, 0, thickness / 2);
-      grad.addColorStop(0, "#eef3f7"); grad.addColorStop(.5, "#8b98a4"); grad.addColorStop(1, "#2c3540");
-      ctx.fillStyle = grad; ctx.shadowColor = "#7fe0ff"; ctx.shadowBlur = 7 * segmentReveal; ctx.strokeStyle = "rgba(20,30,40,.7)"; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.roundRect(-len / 2, -thickness / 2, len, thickness, thickness * .4); ctx.fill(); ctx.stroke();
-      ctx.restore();
-    });
-    const palmX = hand.palm.x * width, palmY = hand.palm.y * height, coreR = unit * 0.026 * reveal;
-    const core = ctx.createRadialGradient(palmX, palmY, 0, palmX, palmY, coreR * 2.6);
-    core.addColorStop(0, "rgba(215,247,255,.95)"); core.addColorStop(.4, "rgba(90,210,255,.55)"); core.addColorStop(1, "rgba(20,60,90,0)");
-    ctx.fillStyle = core; ctx.beginPath(); ctx.arc(palmX, palmY, coreR * 2.6, 0, Math.PI * 2); ctx.fill();
+    const lm = hand.landmarks.map(point => ({ x: point.x * width, y: point.y * height }));
+    const wrist = lm[0], palm = { x: hand.palm.x * width, y: hand.palm.y * height };
+    const palmWidth = Math.max(32, Math.hypot(lm[5].x - lm[17].x, lm[5].y - lm[17].y));
+    let forearmX = wrist.x - palm.x, forearmY = wrist.y - palm.y;
+    const forearmMagnitude = Math.max(1, Math.hypot(forearmX, forearmY)); forearmX /= forearmMagnitude; forearmY /= forearmMagnitude;
+    const normal = { x: -forearmY, y: forearmX }, elbow = { x: wrist.x + forearmX * palmWidth * 3.15, y: wrist.y + forearmY * palmWidth * 3.15 };
+    const wristHalf = palmWidth * .54, elbowHalf = palmWidth * .78;
+
+    // The suit begins as an elbow cuff, then telescopes toward the hand.
+    const forearmReveal = clamp(reveal * 2.1, 0, 1);
+    drawArmorPolygon(ctx, [
+      { x: elbow.x + normal.x * elbowHalf, y: elbow.y + normal.y * elbowHalf },
+      { x: wrist.x + normal.x * wristHalf, y: wrist.y + normal.y * wristHalf },
+      { x: wrist.x - normal.x * wristHalf, y: wrist.y - normal.y * wristHalf },
+      { x: elbow.x - normal.x * elbowHalf, y: elbow.y - normal.y * elbowHalf },
+    ], forearmReveal);
+    const bandCount = 5;
+    for (let band = 0; band < bandCount; band++) {
+      const t0 = band / bandCount, t1 = (band + .82) / bandCount;
+      const center0 = { x: elbow.x + (wrist.x - elbow.x) * t0, y: elbow.y + (wrist.y - elbow.y) * t0 };
+      const center1 = { x: elbow.x + (wrist.x - elbow.x) * t1, y: elbow.y + (wrist.y - elbow.y) * t1 };
+      const half0 = elbowHalf + (wristHalf - elbowHalf) * t0, half1 = elbowHalf + (wristHalf - elbowHalf) * t1;
+      drawArmorPolygon(ctx, [{ x: center0.x + normal.x * half0, y: center0.y + normal.y * half0 }, { x: center1.x + normal.x * half1, y: center1.y + normal.y * half1 }, { x: center1.x - normal.x * half1, y: center1.y - normal.y * half1 }, { x: center0.x - normal.x * half0, y: center0.y - normal.y * half0 }], clamp(reveal * 2.5 - band * .15, 0, 1), band === 0 || band === 3);
+    }
+
+    const handReveal = clamp(reveal * 2 - .42, 0, 1);
+    drawArmorPolygon(ctx, [lm[0], lm[5], lm[9], lm[13], lm[17]], handReveal);
+    drawArmorPolygon(ctx, [lm[5], lm[9], palm], handReveal, true);
+    drawArmorPolygon(ctx, [lm[9], lm[13], palm], handReveal);
+    drawArmorPolygon(ctx, [lm[13], lm[17], palm], handReveal, true);
+
+    const fingers = [[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16],[17,18,19,20]];
+    fingers.forEach((finger, fingerIndex) => finger.slice(0, -1).forEach((joint, segment) => {
+      const a = lm[joint], b = lm[finger[segment + 1]], dx = b.x - a.x, dy = b.y - a.y, len = Math.max(1, Math.hypot(dx, dy));
+      const n = { x: -dy / len, y: dx / len }, thickness = palmWidth * (fingerIndex === 0 ? .19 : .16) * (1 - segment * .08);
+      const fingerReveal = clamp(reveal * 2.5 - .78 - fingerIndex * .035 - segment * .08, 0, 1);
+      drawArmorPolygon(ctx, [{ x: a.x + n.x * thickness, y: a.y + n.y * thickness }, { x: b.x + n.x * thickness * .78, y: b.y + n.y * thickness * .78 }, { x: b.x - n.x * thickness * .78, y: b.y - n.y * thickness * .78 }, { x: a.x - n.x * thickness, y: a.y - n.y * thickness }], fingerReveal, segment === 1);
+    }));
+
+    const coreR = palmWidth * .31 * handReveal, core = ctx.createRadialGradient(palm.x, palm.y, 0, palm.x, palm.y, coreR * 2.8);
+    core.addColorStop(0, "rgba(255,255,255,1)"); core.addColorStop(.2, "rgba(152,239,255,.98)"); core.addColorStop(.52, "rgba(43,185,255,.58)"); core.addColorStop(1, "rgba(20,60,90,0)");
+    ctx.save(); ctx.globalCompositeOperation = "screen"; ctx.fillStyle = core; ctx.beginPath(); ctx.arc(palm.x, palm.y, coreR * 2.8, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = "rgba(229,252,255,.95)"; ctx.lineWidth = Math.max(1.5, palmWidth * .025); ctx.beginPath(); ctx.arc(palm.x, palm.y, coreR, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
   });
 };
 

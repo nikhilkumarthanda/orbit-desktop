@@ -15,15 +15,48 @@ const FAR_Z = 46;
 const MAX_OBSTACLES = 24;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
+const HULL_MATERIAL = new THREE.MeshStandardMaterial({ color: "#1b1f26", metalness: 0.75, roughness: 0.32, emissive: "#0a2530", emissiveIntensity: 0.25 });
+const DARK_MATERIAL = new THREE.MeshStandardMaterial({ color: "#0d0f13", metalness: 0.8, roughness: 0.28 });
+const CANOPY_MATERIAL = new THREE.MeshStandardMaterial({ color: "#bdf3ff", emissive: "#4fd6ff", emissiveIntensity: 1.1, metalness: 0.1, roughness: 0.15, transparent: true, opacity: 0.88 });
+const TRIM_MATERIAL = new THREE.MeshBasicMaterial({ color: "#7fe0ff", toneMapped: false });
+
+/** Procedural, not a loaded asset -- a sleek dark hull with cyan trim reads correctly against
+ *  this scene's cinematic ice/singularity palette, where the earlier CC0 low-poly kit ship
+ *  (bright yellow/tan blocks) read as a mismatched toy. */
+function ShipHull() {
+  return (
+    <group scale={0.62}>
+      <mesh rotation-x={Math.PI / 2} position={[0, 0, 0.05]} material={HULL_MATERIAL}>
+        <cylinderGeometry args={[0.12, 0.32, 1.5, 8]} />
+      </mesh>
+      <mesh position={[0, 0, -0.73]} rotation-x={-Math.PI / 2} material={DARK_MATERIAL}>
+        <coneGeometry args={[0.12, 0.32, 8]} />
+      </mesh>
+      <mesh position={[0, 0.13, -0.1]} scale={[1, 0.7, 1.3]} material={CANOPY_MATERIAL}>
+        <sphereGeometry args={[0.13, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2]} />
+      </mesh>
+      {[-1, 1].map((side) => (
+        <group key={side}>
+          <mesh position={[side * 0.32, -0.02, 0.28]} rotation-z={side * 0.12} rotation-y={side * 0.16} material={DARK_MATERIAL}>
+            <boxGeometry args={[0.46, 0.03, 0.5]} />
+          </mesh>
+          <mesh position={[side * 0.55, -0.02, 0.5]} material={TRIM_MATERIAL}>
+            <boxGeometry args={[0.04, 0.035, 0.36]} />
+          </mesh>
+        </group>
+      ))}
+      {[-0.16, 0.16].map((x) => (
+        <mesh key={x} position={[x, 0, 0.6]} rotation-x={Math.PI / 2} material={DARK_MATERIAL}>
+          <cylinderGeometry args={[0.11, 0.09, 0.22, 10]} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
 function Ship({ game }: { game: MutableRefObject<EscapeState> }) {
   const group = useRef<THREE.Group>(null);
   const engineGlow = useRef<THREE.PointLight>(null);
-  const { scene } = useGLTF(assetUrl("models/ship.glb"));
-  const model = useMemo(() => {
-    const clone = scene.clone(true);
-    clone.traverse((child) => { if (child instanceof THREE.Mesh) { child.castShadow = false; child.receiveShadow = false } });
-    return clone;
-  }, [scene]);
 
   useFrame((_, delta) => {
     const g = group.current;
@@ -36,9 +69,7 @@ function Ship({ game }: { game: MutableRefObject<EscapeState> }) {
   });
   return (
     <group ref={group} position={[0, 0, 0]}>
-      <group rotation-y={Math.PI} scale={0.55}>
-        <primitive object={model} />
-      </group>
+      <ShipHull />
       {[[-0.2, 0, 0.62], [0.2, 0, 0.62], [0, 0.18, 0.68]].map(([x, y, z], i) => (
         <mesh key={i} position={[x, y, z]}>
           <sphereGeometry args={[0.09, 10, 10]} />
@@ -49,7 +80,6 @@ function Ship({ game }: { game: MutableRefObject<EscapeState> }) {
     </group>
   );
 }
-useGLTF.preload(assetUrl("models/ship.glb"));
 
 type Exhaust = { x: number; y: number; z: number; vx: number; vy: number; vz: number; age: number; life: number };
 

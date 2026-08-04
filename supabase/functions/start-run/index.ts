@@ -45,7 +45,7 @@ Deno.serve(async (req) => {
   // silently discarded.
   const { data: existing } = await supabase
     .from("active_runs")
-    .select("run_id, last_checkpoint_at")
+    .select("run_id, seed, seed_date, rules_version, last_checkpoint_at")
     .eq("user_id", userId)
     .eq("status", "active")
     .maybeSingle();
@@ -53,7 +53,10 @@ Deno.serve(async (req) => {
   if (existing) {
     const ageMs = Date.now() - new Date(existing.last_checkpoint_at).getTime();
     if (ageMs < START_RUN_GRACE_MS) {
-      return jsonResponse({ error: "a run is already active for this account" }, 409);
+      // Idempotent: a duplicate/near-simultaneous start-run call (e.g. a client-side double
+      // fire) for an already-active run hands back that same run instead of erroring, so a
+      // race between two "start" triggers resolves cleanly rather than 409ing on the loser.
+      return jsonResponse({ runId: existing.run_id, seed: existing.seed, rulesVersion: existing.rules_version, serverDate: existing.seed_date });
     }
     await supabase.from("active_runs").update({ status: "abandoned" }).eq("run_id", existing.run_id);
   }
@@ -67,6 +70,19 @@ Deno.serve(async (req) => {
     .insert({ user_id: userId, seed, seed_date: serverDate, rules_version: rulesVersion })
     .select("run_id")
     .single();
+
+  if (error?.code === "23505") {
+    // Lost a race against a concurrent start-run for the same user -- the one-active-run-per-
+    // user unique index caught it. Fetch what the winner just created and hand that back
+    // instead of erroring, keeping this endpoint idempotent under real duplicate-fire clients.
+    const { data: winner } = await supabase
+      .from("active_runs")
+      .select("run_id, seed, seed_date, rules_version")
+      .eq("user_id", userId)
+      .eq("status", "active")
+      .maybeSingle();
+    if (winner) return jsonResponse({ runId: winner.run_id, seed: winner.seed, rulesVersion: winner.rules_version, serverDate: winner.seed_date });
+  }
 
   if (error || !inserted) return jsonResponse({ error: "could not start run" }, 500);
 

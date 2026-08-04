@@ -45,6 +45,7 @@ export function OrbitPlay(){
   const scoreService=useRef<ScoreService>(null!);
   if(scoreService.current===null)scoreService.current=new SupabaseScoreService();
   const [postRunResult,setPostRunResult]=useState<{score:number;rank?:number}|null>(null);
+  const startingEscape=useRef(false);
   const stabilizers=useRef<[GestureStabilizer,GestureStabilizer]>([new GestureStabilizer(),new GestureStabilizer()]);
   const sceneNow=useRef<PlayScene>("system");
   const [active,setActive]=useState(false),[mode,setMode]=useState<OrbitPlayMode>("playground"),[gesture,setGesture]=useState("Waiting for hands"),[message,setMessage]=useState("Camera off · all tracking is local"),[immersive,setImmersive]=useState(false),[effect,setEffect]=useState("IDLE");
@@ -64,21 +65,30 @@ export function OrbitPlay(){
     }
   };
   const startEscape=async()=>{
-    setPostRunResult(null);
-    let result;
+    // Re-entrancy guard: a keyboard Enter and a button click can both fire startEscape for the
+    // same user action (e.g. Enter-activating a still-focused button), which previously raced
+    // two simultaneous start-run calls against each other.
+    if(startingEscape.current)return;
+    startingEscape.current=true;
     try{
-      result=await scoreService.current.startRun();
-    }catch(err){
-      console.warn("Online scoring unavailable, falling back to local:",err);
-      scoreService.current=new LocalScoreService();
-      result=await scoreService.current.startRun();
+      setPostRunResult(null);
+      let result;
+      try{
+        result=await scoreService.current.startRun();
+      }catch(err){
+        console.warn("Online scoring unavailable, falling back to local:",err);
+        scoreService.current=new LocalScoreService();
+        result=await scoreService.current.startRun();
+      }
+      const {runId,seed}=result;
+      escape.current=createEscapeState(seed);
+      escape.current.running=true;
+      escape.current.runId=runId;
+      escape.current.startedAt=Date.now();
+      setEffect("ORBIT ESCAPE");setGesture("Run started");setMessage("Steer with A/D or your hand · Space to phase dash");
+    } finally {
+      startingEscape.current=false;
     }
-    const {runId,seed}=result;
-    escape.current=createEscapeState(seed);
-    escape.current.running=true;
-    escape.current.runId=runId;
-    escape.current.startedAt=Date.now();
-    setEffect("ORBIT ESCAPE");setGesture("Run started");setMessage("Steer with A/D or your hand · Space to phase dash");
   };
   const steerEscape=(direction:-1|1)=>steerEscapeState(escape.current,direction);
   const dashEscape=()=>{if(dashEscapeState(escape.current))setEffect("PHASE DASH")};

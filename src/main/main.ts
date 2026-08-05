@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AuditStore } from "./audit.js";
 import { policies, policy } from "./policy.js";
-import { cleanupPlan, gitContexts, recentWork, systemSnapshot } from "./tools.js";
+import { cleanupPlan, findFiles, gitContexts, recentWork, systemSnapshot } from "./tools.js";
 import { answerWithOllama, ollamaStatus, OLLAMA_MODEL, planWithOllama } from "./ollama.js";
 import { answerWithGemini, geminiKey, geminiStatus, saveGeminiKey, setGeminiBudget } from "./gemini.js";
 import { amazonSearchWithPriceFilter, youtubePlayFirst } from "./browser-workflows.js";
@@ -326,6 +326,10 @@ function planLocal(value: string): CommandPlan {
     const folder = ({ document: "Documents", documents: "Documents", download: "Downloads", downloads: "Downloads", desktop: "Desktop", project: "Projects", projects: "Projects", developer: "Developer" } as Record<string, string>)[folderMatch[1]];
     return { intent: "folder", confidence: 1, explanation: "Local folder request matched before browser routing", folder, reply: `Opening ${folder}.`, query: value, source: "local" };
   }
+  const fileMatch = command.match(/\b(?:open|find|locate|show|get)\s+(?:me\s+)?(.+?)(?:\s+file)?[.!?]*$/);
+  if (fileMatch && /\b(file|document|pdf|excel|spreadsheet|word|powerpoint|presentation|resume|tracker|sheet|report|download|yesterday|recent|latest)\b/.test(command)) {
+    return { intent: "file", confidence: .96, explanation: "Natural-language local file request matched", query: fileMatch[1].trim(), source: "local" };
+  }
   if (/^(?:please )?(?:open|launch|select)\s+(?:the\s+)?(?:first|1st)\s+file[.!]*$/.test(command)) {
     return { intent: "folder", confidence: 1, explanation: "Active Finder folder action matched", folder: "__first__", reply: "Opening the first file.", query: value, source: "local" };
   }
@@ -426,7 +430,7 @@ async function planCommand(value: string) {
   }
   const local = planLocal(value);
   if (local.reply) local.reply = personalize(local.reply);
-  if (["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "email_draft", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"].includes(local.intent)) return local;
+  if (["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "file", "email_draft", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"].includes(local.intent)) return local;
   const status = await ollamaStatus();
   if (!status.available) return local;
   try {
@@ -793,6 +797,7 @@ function registerIPC() {
   ipcMain.handle("orbit:policies", () => policies);
   ipcMain.handle("orbit:system", () => traced("system.snapshot", systemSnapshot));
   ipcMain.handle("orbit:recent", () => traced("work.recent", recentWork));
+  ipcMain.handle("orbit:files:find", (_event, query: string) => traced("files.find", () => findFiles(String(query).slice(0, 300))));
   ipcMain.handle("orbit:git", () => traced("git.context", gitContexts));
   ipcMain.handle("orbit:cleanup", () => traced("cleanup.plan", cleanupPlan));
   ipcMain.handle("orbit:audit", () => audit.list());

@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld("orbit", Object.freeze({
   policies: () => ipcRenderer.invoke("orbit:policies"),
   systemSnapshot: () => ipcRenderer.invoke("orbit:system"),
   recentWork: () => ipcRenderer.invoke("orbit:recent"),
+  findFiles: query => ipcRenderer.invoke("orbit:files:find", query),
   gitContext: () => ipcRenderer.invoke("orbit:git"),
   cleanupPlan: () => ipcRenderer.invoke("orbit:cleanup"),
   trash: paths => ipcRenderer.invoke("orbit:trash", paths),

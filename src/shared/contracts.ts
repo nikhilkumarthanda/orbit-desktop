@@ -20,11 +20,12 @@ export interface SystemSnapshot {
 }
 
 export interface RecentItem { path: string; name: string; modifiedAt: string; sizeBytes: number; kind: string }
+export interface FileMatch extends RecentItem { score: number; reason: string }
 export interface GitContext { path: string; branch: string; status: string[]; lastCommit: string; lastCommitAt: string }
 export interface CleanupCandidate extends RecentItem { reason: string; recoverable: true }
 export interface AuditEvent { id: string; at: string; tool: string; risk: Risk; status: string; summary: string }
 export interface SearchHit { path: string; title: string; excerpt: string; score: number; modified_at: number }
-export type Intent = "battery" | "screen" | "screenshot" | "system" | "recent" | "knowledge" | "git" | "github" | "browser" | "cleanup" | "audit" | "launch" | "folder" | "email_draft" | "weather" | "news" | "cricket" | "soccer" | "finance" | "daily_brief" | "youtube_play" | "amazon_search" | "page_describe" | "page_summarize" | "page_find" | "notifications" | "memory" | "research" | "answer" | "clarify" | "unknown";
+export type Intent = "battery" | "screen" | "screenshot" | "system" | "recent" | "knowledge" | "git" | "github" | "browser" | "cleanup" | "audit" | "launch" | "folder" | "file" | "email_draft" | "weather" | "news" | "cricket" | "soccer" | "finance" | "daily_brief" | "youtube_play" | "amazon_search" | "page_describe" | "page_summarize" | "page_find" | "notifications" | "memory" | "research" | "answer" | "clarify" | "unknown";
 export interface ConversationTurn { role: "user" | "assistant"; content: string }
 export interface ConversationEntry extends ConversationTurn { id: string; at: string }
 export interface CommandPlan { intent: Intent; confidence: number; explanation: string; query?: string; application?: string; folder?: string; repository?: string; url?: string; reply?: string; recipient?: string; subject?: string; body?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up"|"select_result"|"selection_next"|"selection_previous"|"selection_open"; resultIndex?: number; maxPrice?: number; minPrice?: number; liveServices?: string[]; requiresConfirmation?: boolean; source?: "local"|"ollama"; model?: string }
@@ -46,6 +47,7 @@ export interface OrbitAPI {
   policies(): Promise<ToolPolicy[]>;
   systemSnapshot(): Promise<SystemSnapshot>;
   recentWork(): Promise<RecentItem[]>;
+  findFiles(query: string): Promise<{ matches: FileMatch[] }>;
   gitContext(): Promise<GitContext[]>;
   cleanupPlan(): Promise<CleanupCandidate[]>;
   trash(paths: string[]): Promise<{ moved: string[]; failed: string[] }>;

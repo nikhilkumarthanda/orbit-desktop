@@ -3,6 +3,7 @@ import type { Risk, ToolPolicy } from "../shared/contracts.js";
 export const policies: ToolPolicy[] = [
   { name: "system.snapshot", risk: "read", approvalRequired: false, description: "Inspect CPU, memory, storage and processes" },
   { name: "work.recent", risk: "sensitive", approvalRequired: false, description: "Read metadata from recent local files" },
+  { name: "files.find", risk: "sensitive", approvalRequired: false, description: "Rank file metadata in approved Mac folders against a natural-language request" },
   { name: "git.context", risk: "read", approvalRequired: false, description: "Inspect local Git repository metadata" },
   { name: "cleanup.plan", risk: "read", approvalRequired: false, description: "Identify cleanup candidates without modifying them" },
   { name: "knowledge.index", risk: "sensitive", approvalRequired: true, description: "Index text from a user-selected folder into the local database" },

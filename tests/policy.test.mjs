@@ -105,12 +105,45 @@ test("Orbit Space keeps voice controls in sidebar flow", async () => {
   const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
   const wake = await fs.readFile(new URL("../src/renderer/wake.css", import.meta.url), "utf8");
   const deck = await fs.readFile(new URL("../src/renderer/command-deck.css", import.meta.url), "utf8");
-  assert.match(renderer, /<nav>.*<VoiceConsole\/>/s);
+  assert.match(renderer, /<nav>.*<VoiceConsole busy=\{busy\}\/>/s);
   assert.match(renderer, /className="orbit-space-page"/);
   assert.doesNotMatch(renderer, /className="orbit-trail/);
   assert.match(deck, /core-orb/);
   assert.doesNotMatch(wake, /\.voice-console\{position:fixed/);
   assert.match(deck, /deck-spin/);
+});
+
+test("command lifecycle always clears working state even when speech hangs", async () => {
+  const renderer = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8"));
+  assert.match(renderer, /await withTimeout\(action\(\),30_000/);
+  assert.match(renderer, /finally\{if\(run===undefined\|\|run===runRef\.current\)\{setBusy\(false\)/);
+  assert.match(renderer, /void withTimeout\(window\.orbit\.speak\([^)]*\),5_000/);
+  assert.match(renderer, /if\(!busy&&status==="Working on it…"\)setStatus/);
+});
+
+test("natural-language file requests use a typed approved-folder search", async () => {
+  const fs = await import("node:fs/promises");
+  const [main, tools, contracts, preload, renderer, policy] = await Promise.all([
+    fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8"), fs.readFile(new URL("../src/main/tools.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/shared/contracts.ts", import.meta.url), "utf8"), fs.readFile(new URL("../src/preload/preload.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8"), fs.readFile(new URL("../src/main/policy.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(main, /intent: "file"/);
+  assert.match(main, /orbit:files:find/);
+  assert.match(tools, /Library\/Mobile Documents\/com~apple~CloudDocs/);
+  assert.match(tools, /export async function findFiles/);
+  assert.match(contracts, /findFiles\(query: string\)/);
+  assert.match(preload, /findFiles: query/);
+  assert.match(renderer, /plan\.intent==="file"/);
+  assert.match(policy, /name: "files\.find"/);
+});
+
+test("home navigation separates assistant tools from experimental experiences", async () => {
+  const renderer = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8"));
+  assert.match(renderer, /label:"ASSISTANT"/);
+  assert.match(renderer, /label:"EXPERIENCES"/);
+  assert.match(renderer, /Orbit Play · Experimental/);
+  assert.match(renderer, /What can I do for you\?/);
 });
 
 test("browser follow-ups use active site context with safe URL adapters", async () => {
@@ -126,7 +159,7 @@ test("browser follow-ups use active site context with safe URL adapters", async 
   assert.match(source, /sameTab/);
   assert.match(source, /input\[type=/);
   assert.match(source, /parsed\.protocol !== "https:"/);
-  assert.match(source, /\["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "email_draft", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"\]\.includes\(local\.intent\)/);
+  assert.match(source, /\["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "file", "email_draft", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"\]\.includes\(local\.intent\)/);
 });
 
 test("browser actions, explicit GitHub routing, weather fallback, and preferred names are reliable", async () => {
@@ -310,14 +343,14 @@ test("reliability follow-ups preserve Finder context and recover from stalled ac
   assert.match(main, /lead\|leet/);
   assert.match(main, /setTimeout\(\(\) => \{ child\.kill\(\); resolve\(false\); \}, 4_000\)/);
   assert.match(renderer, /That action took too long and was cancelled/);
-  assert.match(renderer, /setNotice\(""\);setSources\(\[\]\);setCommand\(""\)/);
+  assert.match(renderer, /setNotice\(""\);setSources\(\[\]\);setFileMatches\(\[\]\);setCommand\(""\)/);
   assert.match(speech, /followup \? 0\.12 : 0\.65/);
 });
 
 test("Orbit Space is the startup home and diagnostics are a separate view", async () => {
   const renderer = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8"));
   assert.match(renderer, /useState<View>\("space"\)/);
-  assert.match(renderer, /\["space","Orbit Space"\]/);
+  assert.match(renderer, /\["space","Home"\]/);
   assert.match(renderer, /\["diagnostics","Diagnostics"\]/);
   assert.match(renderer, /<OrbitSpace data=/);
   assert.match(renderer, /view==="diagnostics"&&<Diagnostics/);

@@ -63,6 +63,19 @@ async function walk(root: string, depth = 0, budget = { value: 1200 }): Promise<
   } catch { return []; }
 }
 
+async function fileItems(paths: string[]): Promise<RecentItem[]> {
+  const unique = [...new Set(paths.map(value => value.trim()).filter(Boolean))];
+  const items = await Promise.all(unique.slice(0, 250).map(async full => {
+    try {
+      const info = await stat(full);
+      if (!info.isFile()) return null;
+      const name = path.basename(full);
+      return { path: full, name, modifiedAt: info.mtime.toISOString(), sizeBytes: info.size, kind: path.extname(name).slice(1) || "file" };
+    } catch { return null; }
+  }));
+  return items.filter((item): item is RecentItem => item !== null);
+}
+
 export async function recentWork() {
   const home = os.homedir();
   const roots = ["Documents", "Desktop", "Downloads", "Projects", "Developer"].map(folder => path.join(home, folder));
@@ -82,23 +95,58 @@ function fileQuery(value: string) {
   return normalized.split(/\s+/).filter(token => token.length > 1 && !ignored.has(token));
 }
 
+function normalizedName(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function requestedFilename(value: string) {
+  const quoted = value.match(/["'“”]([^"'“”]+)["'“”]/)?.[1];
+  const withoutCommand = value.replace(/^\s*(?:please\s+)?(?:open|find|show|get|locate)\s+/i, "").trim();
+  const candidate = (quoted || withoutCommand).replace(/\s+(?:from|in)\s+.+$/i, "").trim();
+  return /\.[a-z0-9]{1,8}$/i.test(candidate) ? candidate : "";
+}
+
+async function spotlightFiles(query: string, tokens: string[]) {
+  if (process.platform !== "darwin") return [];
+  const exact = requestedFilename(query);
+  const meaningful = tokens.filter(token => !fileAliases[token] && !new Set(["today", "yesterday", "recent", "latest", "last"]).has(token));
+  const exactTerms = exact ? [...normalizedName(path.parse(exact).name).split(/\s+/), path.extname(exact).slice(1)] : [];
+  const clauses = (exactTerms.length ? exactTerms : meaningful)
+    .map(token => token.replace(/[\\'"*?]/g, " ").trim()).filter(Boolean).slice(0, 5)
+    .map(token => `kMDItemFSName == '*${token}*'cd`);
+  if (!clauses.length) return [];
+  const output = await command("/usr/bin/mdfind", ["-onlyin", os.homedir(), clauses.join(" && ")]);
+  return fileItems(output.split("\n"));
+}
+
 export async function findFiles(query: string): Promise<{ matches: FileMatch[] }> {
   const tokens = fileQuery(query);
   if (!tokens.length) return { matches: [] };
   const home = os.homedir();
   const roots = ["Documents", "Desktop", "Downloads", "Projects", "Developer", "Library/Mobile Documents/com~apple~CloudDocs"]
     .map(folder => path.join(home, folder));
-  const items = (await Promise.all(roots.map(root => walk(root, 0, { value: 3000 })))).flat();
+  const approvedItems = (await Promise.all(roots.map(root => walk(root, 0, { value: 3000 })))).flat();
+  const spotlightItems = await spotlightFiles(query, tokens);
+  const items = [...new Map([...approvedItems, ...spotlightItems].map(item => [item.path, item])).values()];
   const now = Date.now();
   const requestedExtensions = new Set(tokens.flatMap(token => fileAliases[token] || []));
   const nameTokens = tokens.filter(token => !fileAliases[token]);
   const relativeWords = new Set(["today", "yesterday", "recent", "latest", "last"]);
+  const exactRequest = requestedFilename(query);
+  const exactNormalized = normalizedName(exactRequest);
+  const exactStem = normalizedName(path.parse(exactRequest).name);
+  const exactStemTokens = exactStem.split(/\s+/).filter(Boolean);
   const scored = items.map(item => {
-    const name = item.name.toLowerCase().replace(/[^a-z0-9]+/g, " ");
+    const name = normalizedName(item.name);
+    const stem = normalizedName(path.parse(item.name).name);
     const extension = item.kind.toLowerCase();
     const ageDays = Math.max(0, (now - new Date(item.modifiedAt).getTime()) / 86_400_000);
     let score = 0;
     const reasons: string[] = [];
+    if (exactNormalized && name === exactNormalized) { score += 160; reasons.push("exact filename match"); }
+    else if (exactStem && stem === exactStem) { score += 130; reasons.push("exact name match"); }
+    else if (exactStem && (stem.includes(exactStem) || exactStem.includes(stem))) { score += 55; reasons.push("close filename match"); }
+    else if (exactStemTokens.length && exactStemTokens.every(token => stem.split(/\s+/).includes(token))) { score += 70; reasons.push("all requested name words match"); }
     for (const token of nameTokens) {
       if (relativeWords.has(token)) continue;
       if (name.includes(token)) { score += name.split(/\s+/).includes(token) ? 30 : 18; reasons.push(`name matches “${token}”`); }

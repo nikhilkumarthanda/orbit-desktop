@@ -131,6 +131,9 @@ test("natural-language file requests use a typed approved-folder search", async 
   assert.match(main, /intent: "file"/);
   assert.match(main, /orbit:files:find/);
   assert.match(tools, /Library\/Mobile Documents\/com~apple~CloudDocs/);
+  assert.match(tools, /\/usr\/bin\/mdfind/);
+  assert.match(tools, /exact filename match/);
+  assert.match(tools, /requestedFilename/);
   assert.match(tools, /export async function findFiles/);
   assert.match(contracts, /findFiles\(query: string\)/);
   assert.match(preload, /findFiles: query/);

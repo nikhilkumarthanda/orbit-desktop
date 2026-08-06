@@ -25,10 +25,15 @@ export interface GitContext { path: string; branch: string; status: string[]; la
 export interface CleanupCandidate extends RecentItem { reason: string; recoverable: true }
 export interface AuditEvent { id: string; at: string; tool: string; risk: Risk; status: string; summary: string }
 export interface SearchHit { path: string; title: string; excerpt: string; score: number; modified_at: number }
-export type Intent = "battery" | "screen" | "screenshot" | "system" | "recent" | "knowledge" | "git" | "github" | "browser" | "cleanup" | "audit" | "launch" | "folder" | "file" | "email_draft" | "weather" | "news" | "cricket" | "soccer" | "finance" | "daily_brief" | "youtube_play" | "amazon_search" | "page_describe" | "page_summarize" | "page_find" | "notifications" | "memory" | "research" | "answer" | "clarify" | "unknown";
+export type Intent = "battery" | "screen" | "screenshot" | "system" | "recent" | "knowledge" | "git" | "github" | "browser" | "cleanup" | "audit" | "launch" | "mac_control" | "folder" | "file" | "email_draft" | "weather" | "news" | "cricket" | "soccer" | "finance" | "daily_brief" | "youtube_play" | "amazon_search" | "page_describe" | "page_summarize" | "page_find" | "notifications" | "memory" | "research" | "answer" | "clarify" | "unknown";
 export interface ConversationTurn { role: "user" | "assistant"; content: string }
 export interface ConversationEntry extends ConversationTurn { id: string; at: string }
-export interface CommandPlan { intent: Intent; confidence: number; explanation: string; query?: string; application?: string; folder?: string; repository?: string; url?: string; reply?: string; recipient?: string; subject?: string; body?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up"|"select_result"|"selection_next"|"selection_previous"|"selection_open"; resultIndex?: number; maxPrice?: number; minPrice?: number; liveServices?: string[]; requiresConfirmation?: boolean; source?: "local"|"ollama"; model?: string }
+export type MacControlAction = "open_app" | "focus_app" | "hide_app" | "quit_app" | "list_windows" | "focus_window" | "open_file_with" | "reveal_file" | "create_folder" | "move_path" | "rename_path";
+export interface MacControlRequest { action: MacControlAction; application?: string; windowTitle?: string; sourcePath?: string; destinationPath?: string }
+export interface MacWindow { application: string; title: string }
+export interface MacControlResult { action: MacControlAction; completed: boolean; verified: boolean; summary: string; windows?: MacWindow[] }
+export interface MacPermissionStatus { platform: "macOS" | "unsupported"; accessibility: "granted" | "denied" | "unavailable"; automation: "unknown" | "unavailable"; guidance: string }
+export interface CommandPlan { intent: Intent; confidence: number; explanation: string; query?: string; application?: string; macAction?: MacControlRequest; folder?: string; repository?: string; url?: string; reply?: string; recipient?: string; subject?: string; body?: string; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up"|"select_result"|"selection_next"|"selection_previous"|"selection_open"; resultIndex?: number; maxPrice?: number; minPrice?: number; liveServices?: string[]; requiresConfirmation?: boolean; source?: "local"|"ollama"; model?: string }
 export interface GitHubWorkflowStatus { repository: string; state: "success"|"failure"|"pending"|"unknown"; workflow?: string; url: string; summary: string }
 export interface LiveBrief { summary: string; source: string; updatedAt: string }
 export interface ResearchSource { title: string; url: string; excerpt: string }
@@ -58,6 +63,8 @@ export interface OrbitAPI {
   openPath(path: string): Promise<boolean>;
   openFolder(folder: string): Promise<{ opened: boolean; folder: string }>;
   launchApplication(application: string): Promise<{ launched: boolean; application: string }>;
+  macPermissions(): Promise<MacPermissionStatus>;
+  macControl(request: MacControlRequest): Promise<MacControlResult>;
   draftEmail(request: { recipient?: string; subject: string; body: string }): Promise<{ drafted: boolean; summary: string }>;
   conversationHistory(): Promise<ConversationEntry[]>;
   appendConversation(turn: ConversationTurn): Promise<ConversationEntry[]>;

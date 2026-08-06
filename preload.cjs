@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld("orbit", Object.freeze({
   openPath: target => ipcRenderer.invoke("orbit:path:open", target),
   openFolder: folder => ipcRenderer.invoke("orbit:folder:open", folder),
   launchApplication: application => ipcRenderer.invoke("orbit:app:launch", application),
+  macPermissions: () => ipcRenderer.invoke("orbit:mac:permissions"),
+  macControl: request => ipcRenderer.invoke("orbit:mac:control", request),
   draftEmail: request => ipcRenderer.invoke("orbit:email:draft", request),
   conversationHistory: () => ipcRenderer.invoke("orbit:conversation:list"),
   appendConversation: turn => ipcRenderer.invoke("orbit:conversation:append", turn),

@@ -21,6 +21,7 @@ import { createFinanceService } from "./live-info/finance-service.js";
 import { createCalendarService } from "./live-info/calendar-service.js";
 import { createEmailService } from "./live-info/email-service.js";
 import { forget, recall, remember } from "./memory.js";
+import { executeMacControl, macPermissionStatus } from "./macos-control.js";
 import type { CommandPlan, ConversationEntry, ConversationTurn, GitHubWorkflowStatus, OrbitPlayGesture, OrbitPlayMode, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -290,6 +291,21 @@ function planLocal(value: string): CommandPlan {
   if (/^(hi|hello|hey|good (morning|afternoon|evening))( orbit)?[!.?]*$/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local greeting matched", reply: "Yes, boss? At your service.", query: value, source: "local" };
   if (/\b(notifications?|notification center|alerts?)\b/.test(command)) return { intent: "notifications", confidence: 1, explanation: "Mac notification request matched", reply: "I can’t read Notification Center yet, boss. I won’t substitute news headlines for your notifications.", query: value, source: "local" };
   if (/\b(?:what(?:'s| is)?|check|tell me|show me)?\s*(?:my|the)?\s*battery(?:\s+(?:level|percentage|status))?\b/.test(command)) return { intent: "battery", confidence: 1, explanation: "Native battery request matched", query: value, source: "local" };
+  const appNames: Array<[RegExp, string]> = [[/\b(?:chrome|google chrome)\b/, "Google Chrome"], [/\bsafari\b/, "Safari"], [/\b(?:vs code|visual studio code|code)\b/, "Visual Studio Code"], [/\bfinder\b/, "Finder"], [/\bterminal\b/, "Terminal"], [/\bpreview\b/, "Preview"], [/\b(?:outlook|microsoft outlook)\b/, "Microsoft Outlook"]];
+  const namedApplication = appNames.find(([pattern]) => pattern.test(command))?.[1];
+  if (/\b(?:list|show|what|which)\b.*\b(?:open )?windows\b/.test(command)) return { intent: "mac_control", confidence: 1, explanation: "Native window inventory matched", macAction: { action: "list_windows" }, query: value, source: "local" };
+  const windowRequest = command.match(/\b(?:bring|focus|show|switch to)\b(?:\s+my|\s+the)?\s+(.+?)\s+window(?:\s+forward)?\b/);
+  if (windowRequest && namedApplication) return { intent: "mac_control", confidence: 1, explanation: "Native window focus matched", macAction: { action: "focus_window", application: namedApplication, windowTitle: windowRequest[1].replace(/\b(?:chrome|google chrome|safari|finder|terminal|vs code|visual studio code)\b/g, "").trim() || windowRequest[1] }, query: value, source: "local" };
+  if (namedApplication && /\b(?:switch(?:\s+back)? to|focus|bring forward)\b/.test(command)) return { intent: "mac_control", confidence: 1, explanation: "Native application focus matched", macAction: { action: "focus_app", application: namedApplication }, query: value, source: "local" };
+  if (namedApplication && /\bhide\b/.test(command)) return { intent: "mac_control", confidence: 1, explanation: "Native application hide matched", macAction: { action: "hide_app", application: namedApplication }, query: value, source: "local" };
+  if (namedApplication && /\b(?:close|quit)\b/.test(command)) return { intent: "mac_control", confidence: 1, explanation: "Native application quit matched", macAction: { action: "quit_app", application: namedApplication }, requiresConfirmation: true, query: value, source: "local" };
+  const quotedPaths = [...value.matchAll(/["“]([^"”]+)["”]/g)].map(match => match[1]);
+  if (/\b(?:move)\b/i.test(value) && quotedPaths.length >= 2) return { intent: "mac_control", confidence: 1, explanation: "Confirmed Finder move workflow matched", macAction: { action: "move_path", sourcePath: quotedPaths[0], destinationPath: quotedPaths[1] }, requiresConfirmation: true, query: value, source: "local" };
+  if (/\brename\b/i.test(value) && quotedPaths.length >= 2) return { intent: "mac_control", confidence: 1, explanation: "Confirmed Finder rename workflow matched", macAction: { action: "rename_path", sourcePath: quotedPaths[0], destinationPath: quotedPaths[1] }, requiresConfirmation: true, query: value, source: "local" };
+  if (/\b(?:create|make)\b.*\bfolder\b/i.test(value) && quotedPaths[0]) return { intent: "mac_control", confidence: 1, explanation: "Confirmed Finder folder creation matched", macAction: { action: "create_folder", destinationPath: quotedPaths[0] }, requiresConfirmation: true, query: value, source: "local" };
+  if (/\breveal\b/i.test(value) && quotedPaths[0]) return { intent: "mac_control", confidence: 1, explanation: "Finder reveal matched", macAction: { action: "reveal_file", sourcePath: quotedPaths[0] }, query: value, source: "local" };
+  const openWith = value.match(/\bopen\s+(.+?)\s+in\s+(preview|visual studio code|vs code|chrome|safari|outlook)\b/i);
+  if (openWith) return { intent: "mac_control", confidence: 1, explanation: "Open file in requested application matched", macAction: { action: "open_file_with", application: appNames.find(([pattern]) => pattern.test(openWith[2].toLowerCase()))?.[1] || openWith[2] }, query: openWith[1].trim(), source: "local" };
   if (/\b(?:take|capture|save|make|grab)\b(?:\s+(?:a|the|my|this|current|full))?\s*(?:screen\s*shot|screenshot)\b|\b(?:screen\s*shot|screenshot)\s+(?:this|that|now|please)\b/.test(command)) return { intent: "screenshot", confidence: 1, explanation: "Native screenshot request matched", query: value, source: "local" };
   if (/\b(?:what(?:'s| is) on|describe|read|analy[sz]e|look at|see)\s+(?:my|the|this|current)?\s*screen\b|\bscreen\s*(?:right now|now)\b/.test(command)) return { intent: "screen", confidence: 1, explanation: "Native screen request matched", query: value, source: "local" };
   if (/^(?:what(?:'s| is| are)?|any|give me|tell me)(?: the)? (?:new )?updates?[?.!]*$/.test(command)) return { intent: "clarify", confidence: 1, explanation: "Update topic is ambiguous", reply: "Which updates do you mean, boss—your notifications, news, weather, cricket, GitHub, or something else?", query: value, source: "local" };
@@ -430,7 +446,7 @@ async function planCommand(value: string) {
   }
   const local = planLocal(value);
   if (local.reply) local.reply = personalize(local.reply);
-  if (["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "file", "email_draft", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"].includes(local.intent)) return local;
+  if (["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "file", "mac_control", "email_draft", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"].includes(local.intent)) return local;
   const status = await ollamaStatus();
   if (!status.available) return local;
   try {
@@ -833,6 +849,11 @@ function registerIPC() {
     return { opened, folder };
   }));
   ipcMain.handle("orbit:app:launch", (_event, application: string) => traced("app.launch", () => launchApplication(String(application))));
+  ipcMain.handle("orbit:mac:permissions", () => traced("mac.permissions", macPermissionStatus));
+  ipcMain.handle("orbit:mac:control", (_event, request) => {
+    const mutation = ["create_folder", "move_path", "rename_path"].includes(String(request?.action));
+    return traced(mutation ? "mac.files.change" : "mac.control", () => executeMacControl(request));
+  });
   ipcMain.handle("orbit:email:draft", (_event, request: { recipient?: string; subject: string; body: string }) => traced("email.draft", () => draftEmail(request || { subject: "", body: "" })));
   ipcMain.handle("orbit:conversation:list", () => conversationEntries);
   ipcMain.handle("orbit:conversation:append", (_event, turn: ConversationTurn) => appendConversation({ role: turn?.role === "assistant" ? "assistant" : "user", content: String(turn?.content || "") }));

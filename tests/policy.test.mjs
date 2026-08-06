@@ -141,6 +141,29 @@ test("natural-language file requests use a typed approved-folder search", async 
   assert.match(policy, /name: "files\.find"/);
 });
 
+test("phase 13.2 uses typed verified macOS control with permissions and confirmations", async () => {
+  const fs = await import("node:fs/promises");
+  const [main, native, contracts, preload, renderer, policy] = await Promise.all([
+    fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8"), fs.readFile(new URL("../src/main/macos-control.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/shared/contracts.ts", import.meta.url), "utf8"), fs.readFile(new URL("../src/preload/preload.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8"), fs.readFile(new URL("../src/main/policy.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(main, /intent: "mac_control"/);
+  assert.match(main, /orbit:mac:permissions/);
+  assert.match(main, /orbit:mac:control/);
+  assert.match(native, /isTrustedAccessibilityClient\(false\)/);
+  assert.match(native, /verifyRunning/);
+  assert.match(native, /AXRaise/);
+  assert.match(native, /showItemInFolder/);
+  assert.match(native, /await rename\(source, destination\)/);
+  assert.match(contracts, /MacControlRequest/);
+  assert.match(preload, /macPermissions/);
+  assert.match(preload, /macControl/);
+  assert.match(renderer, /Approve this Orbit action/);
+  assert.match(renderer, /result\.verified/);
+  assert.match(policy, /mac\.files\.change/);
+});
+
 test("home navigation separates assistant tools from experimental experiences", async () => {
   const renderer = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8"));
   assert.match(renderer, /label:"ASSISTANT"/);
@@ -162,7 +185,7 @@ test("browser follow-ups use active site context with safe URL adapters", async 
   assert.match(source, /sameTab/);
   assert.match(source, /input\[type=/);
   assert.match(source, /parsed\.protocol !== "https:"/);
-  assert.match(source, /\["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "file", "email_draft", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"\]\.includes\(local\.intent\)/);
+  assert.match(source, /\["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "file", "mac_control", "email_draft", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"\]\.includes\(local\.intent\)/);
 });
 
 test("browser actions, explicit GitHub routing, weather fallback, and preferred names are reliable", async () => {

@@ -22,6 +22,7 @@ import { createCalendarService } from "./live-info/calendar-service.js";
 import { createEmailService } from "./live-info/email-service.js";
 import { forget, recall, remember } from "./memory.js";
 import { executeMacControl, macPermissionStatus } from "./macos-control.js";
+import { researchPublicWeb, shouldReadTheWeb } from "./web-research.js";
 import type { CommandPlan, ConversationEntry, ConversationTurn, GitHubWorkflowStatus, OrbitPlayGesture, OrbitPlayMode, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -713,38 +714,12 @@ const liveInfo = createLiveInformationEngine([
   createEmailService(),
 ]);
 
-function decodeHtml(value: string) {
-  return value.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, "\"").replace(/&#x27;|&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ").trim();
-}
-
-async function searchPublicWeb(query: string): Promise<ResearchSource[]> {
-  const endpoint = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const response = await fetch(endpoint, { headers: { "User-Agent": "Mozilla/5.0 Orbit-Desktop/0.8" }, signal: AbortSignal.timeout(10_000) });
-  if (!response.ok) throw new Error("Web search is temporarily unavailable");
-  const html = await response.text();
-  const blocks = [...html.matchAll(/<div[^>]+class="[^"]*result[^"]*"[\s\S]*?<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?:class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>|class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/div>)/gi)];
-  const sources: ResearchSource[] = [];
-  for (const match of blocks) {
-    let url = decodeHtml(match[1]);
-    try {
-      const parsed = new URL(url, "https://duckduckgo.com");
-      url = parsed.searchParams.get("uddg") || parsed.toString();
-      const safe = new URL(url);
-      if (!/^https?:$/.test(safe.protocol)) continue;
-    } catch { continue; }
-    const source = { title: decodeHtml(match[2]), url, excerpt: decodeHtml(match[3] || match[4] || "") };
-    if (source.title && source.excerpt && !sources.some(item => item.url === source.url)) sources.push(source);
-    if (sources.length === 5) break;
-  }
-  if (!sources.length) throw new Error("I couldn't retrieve reliable web results for that question");
-  return sources;
-}
-
-async function research(query: string): Promise<ResearchAnswer> {
+async function research(query: string, progress?: (event: import("../shared/contracts.js").ResearchProgress) => void): Promise<ResearchAnswer> {
   const clean = query.trim().slice(0, 500);
   if (!clean) throw new Error("Orbit needs a question to research");
-  const needsLiveWeb = /\b(today|tonight|now|current|currently|latest|recent|news|price|stock|score|weather|forecast|election|president|ceo|release|version|202[5-9]|who won|winner|champion|world cup|fifa|ipl|nba|nfl|mlb|nhl)\b/i.test(clean);
-  const sources = needsLiveWeb ? await searchPublicWeb(clean) : [];
+  progress?.({ stage: "thinking", message: "Understanding your question and planning the research" });
+  const sources = shouldReadTheWeb(clean) ? await researchPublicWeb(clean, fetch, progress) : [];
+  progress?.({ stage: "writing", message: sources.length ? "Preparing a cited answer" : "Preparing the answer" });
   let answer: string;
   if (geminiStatus().available) answer = await answerWithGemini({ query: clean, sources, history: conversation });
   else {
@@ -871,7 +846,7 @@ function registerIPC() {
   ipcMain.handle("orbit:browser:describe", () => traced("browser.agent.describe", async () => ({ summary: await describeCurrentPage() })));
   ipcMain.handle("orbit:browser:summarize", () => traced("browser.agent.summarize", async () => ({ summary: await summarizeCurrentPage() })));
   ipcMain.handle("orbit:browser:find", (_event, query: string) => traced("browser.agent.find", async () => ({ summary: await findOnPage(String(query || "")) })));
-  ipcMain.handle("orbit:web:research", (_event, query: string) => traced("web.research", () => research(String(query))));
+  ipcMain.handle("orbit:web:research", (event, query: string) => traced("web.research", () => research(String(query), progress => event.sender.send("orbit:web:progress", progress))));
   ipcMain.handle("orbit:system:battery", () => traced("system.battery", async () => batteryStatus()));
   ipcMain.handle("orbit:screen:describe", (_event, query: string) => traced("screen.describe", () => describeScreen(String(query).slice(0, 500))));
   ipcMain.handle("orbit:screen:capture", () => traced("screen.capture", takeScreenshot));

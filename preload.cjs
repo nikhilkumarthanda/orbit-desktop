@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld("orbit", Object.freeze({
   summarizePage: () => ipcRenderer.invoke("orbit:browser:summarize"),
   findOnPage: query => ipcRenderer.invoke("orbit:browser:find", query),
   research: query => ipcRenderer.invoke("orbit:web:research", query),
+  onResearchProgress: callback => { const listener = (_event, progress) => callback(progress); ipcRenderer.on("orbit:web:progress", listener); return () => ipcRenderer.removeListener("orbit:web:progress", listener); },
   batteryStatus: () => ipcRenderer.invoke("orbit:system:battery"),
   describeScreen: query => ipcRenderer.invoke("orbit:screen:describe", query),
   takeScreenshot: () => ipcRenderer.invoke("orbit:screen:capture"),

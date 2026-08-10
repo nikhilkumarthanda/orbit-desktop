@@ -37,6 +37,8 @@ export interface CommandPlan { intent: Intent; confidence: number; explanation: 
 export interface GitHubWorkflowStatus { repository: string; state: "success"|"failure"|"pending"|"unknown"; workflow?: string; url: string; summary: string }
 export interface LiveBrief { summary: string; source: string; updatedAt: string }
 export interface ResearchSource { title: string; url: string; excerpt: string }
+export type ResearchStage = "thinking" | "searching" | "reading" | "comparing" | "writing";
+export interface ResearchProgress { stage: ResearchStage; message: string; current?: number; total?: number; source?: string }
 export interface ResearchAnswer { answer: string; spokenAnswer: string; sources: ResearchSource[]; updatedAt: string }
 export interface AIStatus { provider: "ollama"; configured: boolean; available: boolean; running: boolean; model: string; cost: "$0"; installCommand: string }
 export interface GeminiUsageStatus { month: string; requests: number; inputTokens: number; outputTokens: number; estimatedCostUsd: number; monthlyBudgetUsd: number; remainingUsd: number; blocked: boolean }
@@ -78,6 +80,7 @@ export interface OrbitAPI {
   summarizePage(): Promise<{ summary: string }>;
   findOnPage(query: string): Promise<{ summary: string }>;
   research(query: string): Promise<ResearchAnswer>;
+  onResearchProgress(callback: (progress: ResearchProgress) => void): () => void;
   batteryStatus(): Promise<BatteryStatus>;
   describeScreen(query: string): Promise<ResearchAnswer>;
   takeScreenshot(): Promise<{ saved: boolean; path: string; summary: string }>;

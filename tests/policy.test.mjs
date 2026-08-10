@@ -206,16 +206,17 @@ test("browser actions, explicit GitHub routing, weather fallback, and preferred 
 
 test("Mac context routes before web research and Gemini keys stay in Keychain", async () => {
   const read = path => import("node:fs/promises").then(fs => fs.readFile(new URL(`../${path}`, import.meta.url), "utf8"));
-  const [main, gemini, contracts, preload, renderer, policy] = await Promise.all([
+  const [main, gemini, contracts, preload, renderer, policy, webResearch] = await Promise.all([
     read("src/main/main.ts"), read("src/main/gemini.ts"), read("src/shared/contracts.ts"),
-    read("preload.cjs"), read("src/renderer/src.tsx"), read("src/main/policy.ts"),
+    read("preload.cjs"), read("src/renderer/src.tsx"), read("src/main/policy.ts"), read("src/main/web-research.ts"),
   ]);
   assert.match(main, /intent: "battery"/);
   assert.match(main, /intent: "screen"/);
   assert.ok(main.indexOf('intent: "battery"') < main.indexOf('intent: "research"'));
   assert.match(main, /pmset/);
   assert.match(main, /desktopCapturer\.getSources/);
-  assert.match(main, /needsLiveWeb/);
+  assert.match(main, /shouldReadTheWeb/);
+  assert.match(webResearch, /today\|tonight\|now\|current/);
   assert.match(gemini, /find-generic-password/);
   assert.match(gemini, /add-generic-password/);
   assert.match(gemini, /x-goog-api-key/);
@@ -389,10 +390,11 @@ test("phase two live answers stay relevant and speech is less repetitive", async
   const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
   const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
   const newsService = await fs.readFile(new URL("../src/main/live-info/news-service.ts", import.meta.url), "utf8");
+  const webResearch = await fs.readFile(new URL("../src/main/web-research.ts", import.meta.url), "utf8");
   assert.match(newsService, /function newsTopic/);
   assert.match(newsService, /news\.google\.com\/rss\/search\?q=/);
   assert.match(renderer, /liveInfo\(\{query:plan\.query\|\|input/);
-  assert.match(main, /who won\|winner\|champion\|world cup\|fifa/);
+  assert.match(webResearch, /who won\|winner\|champion\|world cup\|fifa/);
   assert.match(main, /speak\(nextWakeAcknowledgement\(\), false\)/);
   assert.doesNotMatch(main, /const spoken = named\.toLowerCase\(\)\.includes/);
   assert.match(main, /"-r", "172"/);
@@ -451,9 +453,25 @@ test("questions use cited research while notifications never route to news", asy
   assert.match(main, /I won’t substitute news headlines/);
   assert.match(main, /Which updates do you mean, boss/);
   assert.match(main, /\["answer", "clarify", "notifications"/);
-  assert.match(main, /html\.duckduckgo\.com\/html/);
+  assert.match(main, /researchPublicWeb/);
   assert.match(main, /answerWithOllama/);
   assert.match(renderer, /research-sources/);
+});
+
+test("explicit web research reads public result pages and keeps citations safe", async () => {
+  const fs = await import("node:fs/promises");
+  const source = await fs.readFile(new URL("../src/main/web-research.ts", import.meta.url), "utf8");
+  assert.match(source, /html\.duckduckgo\.com\/html/);
+  assert.match(source, /for \(const \[index, candidate\] of candidates\.entries\(\)\)/);
+  assert.match(source, /stage: "searching"/);
+  assert.match(source, /stage: "reading"/);
+  assert.match(source, /stage: "comparing"/);
+  assert.match(source, /content-type/);
+  assert.match(source, /MAX_PAGE_BYTES/);
+  assert.match(source, /localhost/);
+  assert.match(source, /192\\\.168/);
+  assert.match(source, /shouldReadTheWeb/);
+  assert.match(source, /websites\?/);
 });
 
 test("research responses suppress model reasoning and expose only the final answer", async () => {

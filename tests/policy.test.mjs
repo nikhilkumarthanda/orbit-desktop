@@ -254,14 +254,18 @@ test("explicit Outlook drafts override stale browser and GitHub context", async 
   const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
   const contracts = await fs.readFile(new URL("../src/shared/contracts.ts", import.meta.url), "utf8");
   const preload = await fs.readFile(new URL("../preload.cjs", import.meta.url), "utf8");
-  assert.match(main, /Explicit Outlook draft overrides stale browser context/);
-  assert.ok(main.indexOf("Explicit Outlook draft overrides stale browser context") < main.indexOf("Browser navigation request matched"));
+  assert.match(main, /Email draft action, destination, and recipient parsed independently/);
+  assert.ok(main.indexOf("Email draft action, destination, and recipient parsed independently") < main.indexOf("Browser navigation request matched"));
   assert.match(main, /It has not been sent/);
   assert.match(main, /It has not been sent/);
   assert.match(main, /contactsForName/);
-  assert.match(main, /providers: \["gmail", "outlook", "mail"\]/);
+  assert.match(main, /destinationsFor\("email"\)/);
+  assert.match(main, /adapter\.resolution === "system-contacts"/);
+  assert.match(main, /openWebEmailDraft/);
   assert.match(contracts, /"email_draft"/);
   assert.match(preload, /orbit:email:draft/);
+  assert.match(main, /cleanRecipientName/);
+  assert.match(main, /right\\s\+now\|now\|please\|for\\s\+me/);
 });
 
 test("conversation history is local, bounded, restorable, and user-clearable", async () => {

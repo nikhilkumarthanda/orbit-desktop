@@ -262,6 +262,8 @@ test("explicit Outlook drafts override stale browser and GitHub context", async 
   assert.match(main, /destinationsFor\("email"\)/);
   assert.match(main, /adapter\.resolution === "system-contacts"/);
   assert.match(main, /openWebEmailDraft/);
+  assert.match(main, /Chrome disables JavaScript from Apple Events by default/);
+  assert.match(main, /keystroke \(item 1 of argv\)/);
   assert.match(contracts, /"email_draft"/);
   assert.match(preload, /orbit:email:draft/);
   assert.match(main, /cleanRecipientName/);

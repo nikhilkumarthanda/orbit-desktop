@@ -730,7 +730,28 @@ async function openWebEmailDraft(provider: "gmail"|"outlook", recipient: string,
   await new Promise(resolve => setTimeout(resolve, 2_800));
   const value = JSON.stringify(recipient);
   const typeScript = `(()=>{const value=${value};const visible=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&!e.disabled};const selectors=${JSON.stringify(provider === "gmail" ? ["input[peoplekit-id]","input[aria-label*='To' i]","textarea[name='to']"] : ["input[aria-label*='To' i]","input[placeholder*='To' i]","input[role='combobox']"])};const input=selectors.flatMap(s=>[...document.querySelectorAll(s)]).find(visible);if(!input)return 'NO_TO';input.focus();const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set||Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')?.set;setter?setter.call(input,value):input.value=value;input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));input.dispatchEvent(new Event('change',{bubbles:true}));return 'TYPED'})()`;
-  const typed = await executeActiveChromeJavaScript(typeScript);
+  let typed = "";
+  try { typed = await executeActiveChromeJavaScript(typeScript); }
+  catch {
+    // Chrome disables JavaScript from Apple Events by default. The compose page
+    // focuses To when no recipient is supplied, so use normal accessibility
+    // keystrokes and let the destination show its own autocomplete results.
+    const script = `on run argv
+tell application "Google Chrome" to activate
+delay 0.2
+tell application "System Events"
+keystroke (item 1 of argv)
+delay 0.9
+end tell
+end run`;
+    const fallback = spawnSync("/usr/bin/osascript", ["-e", script, recipient], { encoding: "utf8", timeout: 5_000 });
+    if (fallback.status === 0) return false;
+    // Last-resort deep link keeps the draft usable and avoids exposing a raw
+    // AppleScript error. Gmail/Outlook can validate the value in their own UI.
+    url.searchParams.set("to", recipient);
+    navigateActiveChromeTab(url.toString());
+    return false;
+  }
   if (!typed.includes("TYPED")) throw new Error(`${adapter.label} opened, but Orbit could not find its recipient field. Confirm you are signed in and try again.`);
   await new Promise(resolve => setTimeout(resolve, 900));
   const chooseScript = `(()=>{const wanted=${value}.toLowerCase().replace(/\\s+/g,' ').trim();const visible=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0};const candidates=[...document.querySelectorAll('[role="option"],[role="listbox"] [role="button"],li[role="presentation"]')].filter(visible);const exact=candidates.find(e=>(e.innerText||e.textContent||'').toLowerCase().replace(/\\s+/g,' ').trim().startsWith(wanted));if(!exact)return 'SUGGESTIONS_OPEN';exact.click();return 'RESOLVED'})()`;

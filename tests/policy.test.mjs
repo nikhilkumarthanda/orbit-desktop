@@ -185,7 +185,7 @@ test("browser follow-ups use active site context with safe URL adapters", async 
   assert.match(source, /sameTab/);
   assert.match(source, /input\[type=/);
   assert.match(source, /parsed\.protocol !== "https:"/);
-  assert.match(source, /\["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "file", "mac_control", "email_draft", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"\]\.includes\(local\.intent\)/);
+  assert.match(source, /\["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "file", "mac_control", "email_draft", "contact_call", "social_draft", "social_publish", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"\]\.includes\(local\.intent\)/);
 });
 
 test("browser actions, explicit GitHub routing, weather fallback, and preferred names are reliable", async () => {
@@ -257,7 +257,9 @@ test("explicit Outlook drafts override stale browser and GitHub context", async 
   assert.match(main, /Explicit Outlook draft overrides stale browser context/);
   assert.ok(main.indexOf("Explicit Outlook draft overrides stale browser context") < main.indexOf("Browser navigation request matched"));
   assert.match(main, /It has not been sent/);
-  assert.match(main, /never send it without your approval/);
+  assert.match(main, /It has not been sent/);
+  assert.match(main, /contactsForName/);
+  assert.match(main, /providers: \["gmail", "outlook", "mail"\]/);
   assert.match(contracts, /"email_draft"/);
   assert.match(preload, /orbit:email:draft/);
 });

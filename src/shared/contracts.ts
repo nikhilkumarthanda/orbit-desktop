@@ -25,7 +25,7 @@ export interface GitContext { path: string; branch: string; status: string[]; la
 export interface CleanupCandidate extends RecentItem { reason: string; recoverable: true }
 export interface AuditEvent { id: string; at: string; tool: string; risk: Risk; status: string; summary: string }
 export interface SearchHit { path: string; title: string; excerpt: string; score: number; modified_at: number }
-export type Intent = "battery" | "screen" | "screenshot" | "system" | "recent" | "knowledge" | "git" | "github" | "browser" | "cleanup" | "audit" | "launch" | "mac_control" | "folder" | "file" | "email_draft" | "contact_call" | "social_draft" | "social_publish" | "weather" | "news" | "cricket" | "soccer" | "finance" | "daily_brief" | "youtube_play" | "amazon_search" | "page_describe" | "page_summarize" | "page_find" | "notifications" | "memory" | "research" | "answer" | "clarify" | "unknown";
+export type Intent = "battery" | "screen" | "screenshot" | "system" | "recent" | "knowledge" | "git" | "github" | "browser" | "cleanup" | "audit" | "launch" | "mac_control" | "folder" | "file" | "email_draft" | "email_rewrite" | "contact_call" | "social_draft" | "social_publish" | "weather" | "news" | "cricket" | "soccer" | "finance" | "daily_brief" | "youtube_play" | "amazon_search" | "page_describe" | "page_summarize" | "page_find" | "notifications" | "memory" | "research" | "answer" | "clarify" | "unknown";
 export interface ConversationTurn { role: "user" | "assistant"; content: string }
 export interface ConversationEntry extends ConversationTurn { id: string; at: string }
 export type MacControlAction = "open_app" | "focus_app" | "hide_app" | "quit_app" | "list_windows" | "focus_window" | "open_file_with" | "reveal_file" | "create_folder" | "move_path" | "rename_path";
@@ -34,8 +34,9 @@ export interface MacWindow { application: string; title: string }
 export interface MacControlResult { action: MacControlAction; completed: boolean; verified: boolean; summary: string; windows?: MacWindow[] }
 export interface MacPermissionStatus { platform: "macOS" | "unsupported"; accessibility: "granted" | "denied" | "unavailable"; automation: "unknown" | "unavailable"; guidance: string }
 export type DraftProvider = "gmail" | "outlook" | "mail";
+export interface WritingPreferences { tone: "professional"|"friendly"|"casual"|"formal"; length: "concise"|"balanced"|"detailed"; greeting: string; signature: string; natural: boolean }
 export interface RecipientChoice { id: string; name: string; emails: string[]; phones: string[]; score: number }
-export interface DraftResult { drafted: boolean; summary: string; subject?: string; body?: string; recipient?: string; providers?: DraftProvider[]; recipients?: RecipientChoice[] }
+export interface DraftResult { drafted: boolean; summary: string; subject?: string; body?: string; recipient?: string; displayName?: string; providers?: DraftProvider[]; recipients?: RecipientChoice[]; verifiedFields?: Array<"recipient"|"subject"|"body"> }
 export type SocialProvider = "linkedin" | "facebook";
 export interface SocialDraftResult { drafted: boolean; summary: string; content: string; provider?: SocialProvider; providers?: SocialProvider[] }
 export interface CommandPlan { intent: Intent; confidence: number; explanation: string; query?: string; application?: string; macAction?: MacControlRequest; folder?: string; repository?: string; url?: string; reply?: string; recipient?: string; subject?: string; body?: string; provider?: DraftProvider; sameTab?: boolean; browserAction?: "play_first"|"scroll_down"|"scroll_up"|"select_result"|"selection_next"|"selection_previous"|"selection_open"; resultIndex?: number; maxPrice?: number; minPrice?: number; liveServices?: string[]; requiresConfirmation?: boolean; source?: "local"|"ollama"; model?: string }
@@ -73,8 +74,13 @@ export interface OrbitAPI {
   macPermissions(): Promise<MacPermissionStatus>;
   macControl(request: MacControlRequest): Promise<MacControlResult>;
   draftEmail(request: { recipient?: string; subject: string; body: string; instruction?: string; provider?: DraftProvider }): Promise<DraftResult>;
+  rewriteEmail(request: { recipient?: string; subject?: string; body?: string; instruction: string }): Promise<DraftResult>;
+  writingPreferences(): Promise<WritingPreferences>;
+  saveWritingPreferences(preferences: WritingPreferences): Promise<WritingPreferences>;
   callContact(request: { recipient: string; value?: string }): Promise<DraftResult>;
   showMainWindow(): Promise<{ shown: boolean }>;
+  setAssistantState(state: "ready"|"listening"|"working"|"attention"|"muted"): Promise<{ updated: boolean }>;
+  onAssistantState(callback: (state: "ready"|"listening"|"working"|"attention"|"muted") => void): () => void;
   socialDraft(request: { instruction?: string; content?: string; provider?: SocialProvider }): Promise<SocialDraftResult>;
   socialPublish(provider: SocialProvider): Promise<{ published: boolean; summary: string }>;
   conversationHistory(): Promise<ConversationEntry[]>;

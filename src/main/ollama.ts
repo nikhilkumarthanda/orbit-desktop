@@ -63,11 +63,12 @@ export async function planWithOllama(args: { command: string; history: Conversat
 export async function answerWithOllama(args: { query: string; sources: ResearchSource[]; history: ConversationTurn[]; fetcher?: typeof fetch }): Promise<string> {
   const fetcher = args.fetcher ?? fetch;
   const evidence = args.sources.map((source, index) => `[${index + 1}] ${source.title}\n${source.excerpt}`).join("\n\n");
+  const grounded = args.sources.length > 0;
   const response = await fetcher(`${OLLAMA_URL}/api/chat`, {
     method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60_000),
     body: JSON.stringify({ model: OLLAMA_MODEL, stream: false, think: false, keep_alive: "30s", options: { temperature: 0.15, num_predict: 500 }, messages: [
-      { role: "system", content: "Answer only from the supplied web evidence. Be concise, clear, and honest about uncertainty. Cite factual sentences with [1], [2], etc. Never invent a source or claim. Do not include URLs." },
-      ...args.history.slice(-6), { role: "user", content: `Question: ${args.query}\n\nWeb evidence:\n${evidence}` },
+      { role: "system", content: grounded ? "Answer only from the supplied web evidence. Be concise, clear, and honest about uncertainty. Cite factual sentences with [1], [2], etc. Never invent a source or claim. Do not include URLs." : "Follow the user's writing instruction precisely. Preserve supplied facts, do not invent details, and return only the requested final content without commentary or markdown." },
+      ...args.history.slice(-6), { role: "user", content: grounded ? `Question: ${args.query}\n\nWeb evidence:\n${evidence}` : args.query },
     ] }),
   });
   if (!response.ok) throw new Error(`Local synthesis returned ${response.status}`);

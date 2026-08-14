@@ -185,7 +185,7 @@ test("browser follow-ups use active site context with safe URL adapters", async 
   assert.match(source, /sameTab/);
   assert.match(source, /input\[type=/);
   assert.match(source, /parsed\.protocol !== "https:"/);
-  assert.match(source, /\["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "file", "mac_control", "email_draft", "contact_call", "social_draft", "social_publish", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"\]\.includes\(local\.intent\)/);
+  assert.match(source, /\["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "file", "mac_control", "email_draft", "email_rewrite", "contact_call", "social_draft", "social_publish", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"\]\.includes\(local\.intent\)/);
 });
 
 test("browser actions, explicit GitHub routing, weather fallback, and preferred names are reliable", async () => {
@@ -254,6 +254,7 @@ test("explicit Outlook drafts override stale browser and GitHub context", async 
   const main = await fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
   const contracts = await fs.readFile(new URL("../src/shared/contracts.ts", import.meta.url), "utf8");
   const preload = await fs.readFile(new URL("../preload.cjs", import.meta.url), "utf8");
+  const renderer = await fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8");
   assert.match(main, /Email draft action, destination, and recipient parsed independently/);
   assert.ok(main.indexOf("Email draft action, destination, and recipient parsed independently") < main.indexOf("Browser navigation request matched"));
   assert.match(main, /It has not been sent/);
@@ -268,6 +269,45 @@ test("explicit Outlook drafts override stale browser and GitHub context", async 
   assert.match(preload, /orbit:email:draft/);
   assert.match(main, /cleanRecipientName/);
   assert.match(main, /right\\s\+now\|now\|please\|for\\s\+me/);
+  assert.match(main, /inferEmailSubject/);
+  assert.match(main, /fallbackEmailBody/);
+  assert.match(main, /natural and not robotic/);
+  assert.match(main, /Preserve every material fact and requested outcome/);
+  assert.doesNotMatch(main, /Rescheduling the Task Manager Meeting/);
+  assert.match(main, /url\.searchParams\.set\("to", recipient\)/);
+  assert.doesNotMatch(main, /I’m reaching out regarding this request\.\\n\\nBest/);
+  assert.match(renderer, /EMAIL DRAFT · REVIEW BEFORE OPENING/);
+  assert.match(renderer, /Rewrite it naturally in my saved style/);
+  assert.match(renderer, /CHOOSE THE CORRECT CONTACT/);
+  assert.match(renderer, /Opening \$\{provider\} and verifying every field/);
+  assert.match(contracts, /WritingPreferences/);
+  assert.match(preload, /orbit:email:rewrite/);
+  assert.match(preload, /orbit:writing-preferences:save/);
+  assert.match(main, /activeEmailDraft/);
+  assert.match(main, /Active email revision matched/);
+  assert.match(contracts, /"email_rewrite"/);
+});
+
+test("floating Orbit is a real always-on-top state-aware window", async () => {
+  const fs = await import("node:fs/promises");
+  const [main, renderer, contracts, preload, styles] = await Promise.all([
+    fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/shared/contracts.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../preload.cjs", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/renderer/orbit-space.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(main, /function createOverlayWindow/);
+  assert.match(main, /alwaysOnTop: true/);
+  assert.match(main, /setVisibleOnAllWorkspaces\(true/);
+  assert.match(main, /CommandOrControl\+Shift\+Space/);
+  assert.match(renderer, /function FloatingOrbit/);
+  assert.match(renderer, /onAssistantState/);
+  assert.match(renderer, /showMainWindow/);
+  assert.match(contracts, /setAssistantState/);
+  assert.match(preload, /orbit:overlay:state/);
+  assert.match(styles, /\.floating-orbit\.listening/);
+  assert.match(styles, /-webkit-app-region:no-drag/);
 });
 
 test("conversation history is local, bounded, restorable, and user-clearable", async () => {

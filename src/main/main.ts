@@ -25,11 +25,13 @@ import { executeMacControl, macPermissionStatus } from "./macos-control.js";
 import { researchPublicWeb, shouldReadTheWeb } from "./web-research.js";
 import { contactsForName } from "./recipients.js";
 import { destinationAdapter, destinationsFor } from "./destination-adapters.js";
+import { fallbackEmailBody, inferEmailSubject } from "./email-drafting.js";
 import type { CommandPlan, ConversationEntry, ConversationTurn, GitHubWorkflowStatus, OrbitPlayGesture, OrbitPlayMode, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let audit: AuditStore;
 let mainWindow: BrowserWindow | null = null;
+let overlayWindow: BrowserWindow | null = null;
 let speechProcess: ChildProcessWithoutNullStreams | null = null;
 let gestureProcess: ChildProcessWithoutNullStreams | null = null;
 let orbitPlayMode: OrbitPlayMode = "playground";
@@ -66,12 +68,15 @@ let selectedVoice: string | null = null;
 let wakeAcknowledgementIndex = 0;
 let activeBrowserSite: { name: string; hostname: string; query?: string } | null = null;
 let activeSocialDraft: { provider: "linkedin"|"facebook"; content: string } | null = null;
+let activeEmailDraft: { recipient: string; displayName: string; subject: string; body: string } | null = null;
 let selectedYouTubeResult: number | null = null;
 let quitting = false;
 let pendingMemoryDeletion: string[] = [];
 let activeFolderPath: string | null = null;
 let preferredName = "Boss";
 let profilePath = "";
+const defaultWritingPreferences = { tone: "professional", length: "concise", greeting: "Hi", signature: "Nikhil", natural: true } as const;
+let writingPreferences: { tone: "professional"|"friendly"|"casual"|"formal"; length: "concise"|"balanced"|"detailed"; greeting: string; signature: string; natural: boolean } = { ...defaultWritingPreferences };
 let locationRequest: { resolve: (value: { latitude: number; longitude: number }) => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null;
 
 function orbitVoice() {
@@ -105,15 +110,28 @@ function personalize(text: string) { return text.replace(/\bboss\b/gi, address()
 
 async function savePreferredName(name: string) {
   preferredName = name;
-  if (profilePath) await writeFile(profilePath, JSON.stringify({ preferredName }, null, 2), "utf8");
+  if (profilePath) await writeFile(profilePath, JSON.stringify({ preferredName, writingPreferences }, null, 2), "utf8");
 }
 
 async function loadProfile() {
   profilePath = path.join(app.getPath("userData"), "profile.json");
   try {
-    const stored = JSON.parse(await readFile(profilePath, "utf8")) as { preferredName?: string };
+    const stored = JSON.parse(await readFile(profilePath, "utf8")) as { preferredName?: string; writingPreferences?: typeof writingPreferences };
     if (/^[\p{L}][\p{L} .'-]{0,39}$/u.test(stored.preferredName || "")) preferredName = stored.preferredName!.trim();
+    if (stored.writingPreferences) writingPreferences = { ...defaultWritingPreferences, ...stored.writingPreferences };
   } catch {}
+}
+
+async function saveEmailPreferences(value: typeof writingPreferences) {
+  writingPreferences = {
+    tone: ["professional","friendly","casual","formal"].includes(value.tone) ? value.tone : "professional",
+    length: ["concise","balanced","detailed"].includes(value.length) ? value.length : "concise",
+    greeting: String(value.greeting || "Hi").trim().slice(0, 30),
+    signature: String(value.signature || "Nikhil").trim().slice(0, 80),
+    natural: value.natural !== false,
+  };
+  if (profilePath) await writeFile(profilePath, JSON.stringify({ preferredName, writingPreferences }, null, 2), "utf8");
+  return writingPreferences;
 }
 
 async function installedApplications() {
@@ -156,6 +174,7 @@ function stopSpeaking(resumeListener = true) {
 
 function sendVoice(type: string, payload: Record<string, unknown> = {}) {
   mainWindow?.webContents.send("orbit:voice:event", { type, ...payload });
+  overlayWindow?.webContents.send("orbit:voice:event", { type, ...payload });
 }
 
 function showListening() {
@@ -327,12 +346,13 @@ function planLocal(value: string): CommandPlan {
     const leaveTomorrow = /\bleave\b/.test(command) && /\b(?:tomorrow|tomo)\b/.test(command);
     const sender = command.match(/,\s*([a-z][a-z .'-]+)[.!]*$/i)?.[1]?.trim() || "Nikhil";
     const displayName = recipient?.replace(/\b\w/g, letter => letter.toUpperCase()) || "";
-    const subject = leaveTomorrow ? "Leave Request" : "Draft Email";
+    const subject = leaveTomorrow ? "Leave Request" : inferEmailSubject(value);
     const body = leaveTomorrow
       ? `Hi ${displayName || "there"},\n\nI would like to request leave for tomorrow.\n\nThank you,\n${sender}`
       : "";
     return { intent: "email_draft", confidence: 1, explanation: "Email draft action, destination, and recipient parsed independently", recipient, subject, body, provider, query: value, requiresConfirmation: true, source: "local" };
   }
+  if (activeEmailDraft && /^(?:please\s+)?(?:make|rewrite|change|update|add|remove|shorten|expand)\b|^(?:more|less)\s+(?:formal|professional|friendly|casual|detailed)/.test(command)) return { intent: "email_rewrite", confidence: 1, explanation: "Active email revision matched", query: value, source: "local" };
   const callMatch = command.match(/\b(?:call|facetime)\s+(.+?)(?:\s+(?:on|using)\s+(?:facetime|phone))?[.!?]*$/);
   if (callMatch) return { intent: "contact_call", confidence: 1, explanation: "Contact call request matched", recipient: cleanRecipientName(callMatch[1]) || callMatch[1].trim(), requiresConfirmation: true, query: value, source: "local" };
   if (/\b(?:post|draft|write|create)\b.*\b(?:linkedin|facebook)\b|\b(?:linkedin|facebook)\b.*\b(?:post|update)\b/.test(command)) return { intent: "social_draft", confidence: 1, explanation: "Social post drafting request matched", query: value, source: "local" };
@@ -455,7 +475,7 @@ async function planCommand(value: string) {
   }
   const local = planLocal(value);
   if (local.reply) local.reply = personalize(local.reply);
-  if (["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "file", "mac_control", "email_draft", "contact_call", "social_draft", "social_publish", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"].includes(local.intent)) return local;
+  if (["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "file", "mac_control", "email_draft", "email_rewrite", "contact_call", "social_draft", "social_publish", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"].includes(local.intent)) return local;
   const status = await ollamaStatus();
   if (!status.available) return local;
   try {
@@ -687,10 +707,15 @@ async function draftEmail(request: { recipient?: string; subject: string; body: 
   let displayName = requested;
   const providers = destinationsFor("email").map(adapter => adapter.id) as ("gmail"|"outlook"|"mail")[];
   if (!request.provider) {
-    let subject = String(request.subject || "Draft Email").slice(0, 200);
+    const contacts = !requested.includes("@") ? contactsForName(requested).filter(match => match.emails.length) : [];
+    if (contacts.length > 1 && contacts[0].score - contacts[1].score < 12) return { drafted: false, summary: `I found more than one ${requested}. Choose the correct recipient before I open the draft.`, recipient: requested, recipients: contacts };
+    const contact = contacts[0];
+    if (contact) { recipient = contact.emails[0]; displayName = contact.name; }
+    let subject = String(request.subject && request.subject !== "Draft Email" ? request.subject : inferEmailSubject(request.instruction || "")).slice(0, 200);
     let body = String(request.body || "").slice(0, 5_000);
     if (!body && request.instruction) body = await generateEmailBody(displayName, request.instruction);
-    return { drafted: false, summary: `Your draft for ${displayName} is ready. Where should I open it?`, recipient, subject, body, providers };
+    activeEmailDraft = { recipient, displayName, subject, body };
+    return { drafted: false, summary: `Review the draft for ${displayName}, then choose where to open it.`, recipient, displayName, subject, body, providers };
   }
   const adapter = destinationAdapter(request.provider);
   if (!requested.includes("@") && adapter.resolution === "system-contacts") {
@@ -700,22 +725,34 @@ async function draftEmail(request: { recipient?: string; subject: string; body: 
     if (usable.length > 1 && usable[0].score - usable[1].score < 12) return { drafted: false, summary: `I found more than one ${requested}. Choose the correct contact.`, recipients: usable };
     if (usable.length) { recipient = usable[0].emails[0]; displayName = usable[0].name; }
   }
-  let subject = String(request.subject || "Draft Email").slice(0, 200);
+  let subject = String(request.subject && request.subject !== "Draft Email" ? request.subject : inferEmailSubject(request.instruction || "")).slice(0, 200);
   let body = String(request.body || "").slice(0, 5_000);
   if (!body && request.instruction) body = await generateEmailBody(displayName, request.instruction);
   const mailto = new URL(`mailto:${recipient}`); mailto.searchParams.set("subject", subject); mailto.searchParams.set("body", body);
   if (request.provider === "gmail" || request.provider === "outlook") {
     const resolved = await openWebEmailDraft(request.provider, recipient, subject, body);
-    return { drafted: true, summary: resolved ? `I opened an editable ${adapter.label} draft for ${displayName}. It has not been sent.` : `I opened ${adapter.label} and entered ${displayName} in To. Its own matching suggestions are visible for you to verify; nothing has been sent.`, recipient, subject, body };
+    return { drafted: true, summary: resolved ? `I opened the complete editable ${adapter.label} draft for ${displayName}. Recipient, subject, and body were inserted; it has not been sent.` : `I opened ${adapter.label} with the subject and body. Verify ${displayName} in the To suggestions before sending.`, recipient, displayName, subject, body, verifiedFields: resolved ? ["recipient","subject","body"] : ["subject","body"] };
   }
   else await shell.openExternal(mailto.toString());
-  return { drafted: true, summary: `I opened the editable ${adapter.label} draft for ${displayName}. It has not been sent.`, recipient, subject, body };
+  return { drafted: true, summary: `I opened the complete editable ${adapter.label} draft for ${displayName}. It has not been sent.`, recipient, displayName, subject, body, verifiedFields: ["recipient","subject","body"] };
 }
 
 async function generateEmailBody(displayName: string, instruction: string) {
-  const prompt = `Write a polished email for ${displayName}. Request: ${instruction}. Return only the email body, no commentary or markdown.`;
-  try { return geminiStatus().available ? await answerWithGemini({ query: prompt, sources: [], history: conversation }) : (await ollamaStatus()).available ? await answerWithOllama({ query: prompt, sources: [], history: conversation }) : "Hi,\n\nI’m reaching out regarding this request.\n\nBest,\nNikhil"; }
-  catch { return "Hi,\n\nI’m reaching out regarding this request.\n\nBest,\nNikhil"; }
+  const saved = (await recall("")).map(item => item.content).filter(value => /\b(?:writing|email|message|tone|style|signature|professional|formal|casual|concise|direct)\b/i.test(value));
+  const configured = `${writingPreferences.length}, ${writingPreferences.tone}, ${writingPreferences.natural ? "natural and not robotic" : "neutral"}; greeting ${writingPreferences.greeting}; sign as ${writingPreferences.signature}`;
+  const preferences = [configured, ...saved];
+  const prompt = `Write a complete polished email to ${displayName} from Nikhil. Preserve every material fact and requested outcome from the user's instruction, but rewrite it naturally rather than copying it verbatim. Follow these writing preferences: ${preferences.join("; ")}. User instruction: ${instruction}. Return only the email body with greeting, message, and sign-off. Do not add invented dates, reasons, promises, or details.`;
+  try { return geminiStatus().available ? await answerWithGemini({ query: prompt, sources: [], history: conversation }) : (await ollamaStatus()).available ? await answerWithOllama({ query: prompt, sources: [], history: conversation }) : fallbackEmailBody(displayName, instruction, writingPreferences); }
+  catch { return fallbackEmailBody(displayName, instruction, writingPreferences); }
+}
+
+async function rewriteEmail(request: { recipient?: string; subject?: string; body?: string; instruction: string }) {
+  const current = request.body ? { recipient: request.recipient || "", displayName: request.recipient || "the recipient", subject: request.subject || "Email Draft", body: request.body } : activeEmailDraft;
+  if (!current) return { drafted: false, summary: "There is no active email draft to revise. Ask me to draft one first." };
+  const prompt = `Rewrite this email according to the instruction while preserving all facts. Instruction: ${request.instruction}. Current email:\n${current.body}`;
+  const body = await generateEmailBody(current.displayName, prompt);
+  activeEmailDraft = { ...current, body };
+  return { drafted: false, summary: "I updated the active draft. Review it before opening an email app.", recipient: current.recipient, displayName: current.displayName, subject: current.subject, body, providers: destinationsFor("email").map(adapter => adapter.id) as ("gmail"|"outlook"|"mail")[] };
 }
 
 async function openWebEmailDraft(provider: "gmail"|"outlook", recipient: string, subject: string, body: string) {
@@ -724,10 +761,18 @@ async function openWebEmailDraft(provider: "gmail"|"outlook", recipient: string,
   const url = new URL(adapter.composeUrl);
   url.searchParams.set(provider === "gmail" ? "su" : "subject", subject);
   url.searchParams.set("body", body);
-  if (emailAddress) url.searchParams.set("to", recipient);
+  // Preserve the requested identity in the compose URL even when it is a
+  // contact name. Gmail and Outlook can then expose their native suggestions,
+  // and the To field is never silently left blank if Apple Events is blocked.
+  url.searchParams.set("to", recipient);
   openChromeTab(url.toString());
-  if (emailAddress) return true;
   await new Promise(resolve => setTimeout(resolve, 2_800));
+  if (emailAddress) {
+    const expectedSubject = JSON.stringify(subject);
+    const expectedBody = JSON.stringify(body.slice(0, 80));
+    const verification = `(()=>{const subject=${expectedSubject},body=${expectedBody};const values=[...document.querySelectorAll('input,textarea,[contenteditable="true"]')].map(e=>String(e.value||e.innerText||e.textContent||''));const page=document.body.innerText||'';return values.some(v=>v.includes(subject))&&(values.some(v=>v.includes(body))||page.includes(body))?'VERIFIED':'UNVERIFIED'})()`;
+    try { return (await executeActiveChromeJavaScript(verification)).includes("VERIFIED"); } catch { return false; }
+  }
   const value = JSON.stringify(recipient);
   const typeScript = `(()=>{const value=${value};const visible=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&!e.disabled};const selectors=${JSON.stringify(provider === "gmail" ? ["input[peoplekit-id]","input[aria-label*='To' i]","textarea[name='to']"] : ["input[aria-label*='To' i]","input[placeholder*='To' i]","input[role='combobox']"])};const input=selectors.flatMap(s=>[...document.querySelectorAll(s)]).find(visible);if(!input)return 'NO_TO';input.focus();const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set||Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')?.set;setter?setter.call(input,value):input.value=value;input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));input.dispatchEvent(new Event('change',{bubbles:true}));return 'TYPED'})()`;
   let typed = "";
@@ -782,9 +827,13 @@ async function socialDraft(request: { instruction?: string; content?: string; pr
   openChromeTab(destinationAdapter(provider).composeUrl);
   await new Promise(resolve => setTimeout(resolve, 2_800));
   const encoded = JSON.stringify(content);
-  const javascript = provider === "linkedin" ? `(()=>{const start=[...document.querySelectorAll('button')].find(b=>/start a post/i.test(b.innerText||b.getAttribute('aria-label')||''));if(start)start.click();setTimeout(()=>{const box=document.querySelector('[contenteditable="true"][role="textbox"],.ql-editor[contenteditable="true"]');if(!box)return;box.focus();document.execCommand('insertText',false,${encoded});box.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:${encoded}}));},700);return start?'OPENED':'NO_COMPOSER'})()` : `(()=>{const start=[...document.querySelectorAll('[role="button"]')].find(b=>/what.*mind|create post/i.test((b.innerText||b.getAttribute('aria-label')||'').toLowerCase()));if(start)start.click();setTimeout(()=>{const boxes=[...document.querySelectorAll('[contenteditable="true"][role="textbox"]')];const box=boxes.at(-1);if(!box)return;box.focus();document.execCommand('insertText',false,${encoded});box.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:${encoded}}));},700);return start?'OPENED':'NO_COMPOSER'})()`;
-  let result = ""; try { result = await executeActiveChromeJavaScript(javascript); } catch { throw new Error("Orbit opened the site but Chrome blocked composer control. Enable View → Developer → Allow JavaScript from Apple Events, then try again."); }
-  if (result.includes("NO_COMPOSER")) throw new Error(`Orbit opened ${provider}, but could not find the post composer. Confirm you are signed in, then try again.`);
+  const openComposer = provider === "linkedin" ? `(()=>{const start=[...document.querySelectorAll('button')].find(b=>/start a post/i.test(b.innerText||b.getAttribute('aria-label')||''));if(!start)return 'NO_COMPOSER';start.click();return 'OPENED'})()` : `(()=>{const start=[...document.querySelectorAll('[role="button"]')].find(b=>/what.*mind|create post/i.test((b.innerText||b.getAttribute('aria-label')||'').toLowerCase()));if(!start)return 'NO_COMPOSER';start.click();return 'OPENED'})()`;
+  let result = ""; try { result = await executeActiveChromeJavaScript(openComposer); } catch { throw new Error("Orbit opened the site but Chrome blocked composer control. Enable View → Developer → Allow JavaScript from Apple Events, then try again."); }
+  if (!result.includes("OPENED")) throw new Error(`Orbit opened ${provider}, but could not find the post composer. Confirm you are signed in, then try again.`);
+  await new Promise(resolve => setTimeout(resolve, 900));
+  const insert = `(()=>{const boxes=[...document.querySelectorAll('[contenteditable="true"][role="textbox"],.ql-editor[contenteditable="true"]')].filter(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0});const box=boxes.at(-1);if(!box)return 'NO_EDITOR';box.focus();document.execCommand('selectAll',false);document.execCommand('insertText',false,${encoded});box.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:${encoded}}));const actual=(box.innerText||box.textContent||'').replace(/\\s+/g,' ').trim();const wanted=${encoded}.replace(/\\s+/g,' ').trim();return actual.includes(wanted.slice(0,Math.min(80,wanted.length)))?'VERIFIED':'UNVERIFIED'})()`;
+  try { result = await executeActiveChromeJavaScript(insert); } catch { result = "UNVERIFIED"; }
+  if (!result.includes("VERIFIED")) throw new Error(`Orbit opened ${provider}, but could not verify that the post text was inserted. Your draft remains available in Orbit.`);
   activeSocialDraft = { provider, content };
   return { drafted: true, summary: `I inserted an editable ${provider === "linkedin" ? "LinkedIn" : "Facebook"} draft. Review it or ask me to revise it. It has not been published.`, content, provider };
 }
@@ -944,8 +993,12 @@ function registerIPC() {
     return traced(mutation ? "mac.files.change" : "mac.control", () => executeMacControl(request));
   });
   ipcMain.handle("orbit:email:draft", (_event, request) => traced("email.draft", () => draftEmail(request || { subject: "", body: "" })));
+  ipcMain.handle("orbit:email:rewrite", (_event, request) => traced("email.draft", () => rewriteEmail(request)));
+  ipcMain.handle("orbit:writing-preferences:get", () => writingPreferences);
+  ipcMain.handle("orbit:writing-preferences:save", (_event, preferences) => saveEmailPreferences(preferences));
   ipcMain.handle("orbit:contact:call", (_event, request) => traced("contact.call", () => callContact(request || { recipient: "" })));
-  ipcMain.handle("orbit:window:show-main", () => { mainWindow?.show(); mainWindow?.focus(); return { shown: Boolean(mainWindow) }; });
+  ipcMain.handle("orbit:window:show-main", () => { if (!mainWindow) createWindow(); mainWindow?.show(); mainWindow?.focus(); return { shown: Boolean(mainWindow) }; });
+  ipcMain.handle("orbit:overlay:state", (_event, state) => { overlayWindow?.webContents.send("orbit:overlay:state", state); return { updated: Boolean(overlayWindow) }; });
   ipcMain.handle("orbit:social:draft", (_event, request) => traced("social.draft", () => socialDraft(request || {})));
   ipcMain.handle("orbit:social:publish", (_event, provider) => traced("social.publish", () => socialPublish(provider)));
   ipcMain.handle("orbit:conversation:list", () => conversationEntries);
@@ -1040,15 +1093,34 @@ function createWindow() {
   window.on("closed", () => { mainWindow = null; });
 }
 
+function createOverlayWindow() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) return overlayWindow;
+  const display = screen.getPrimaryDisplay().workArea;
+  const window = new BrowserWindow({
+    width: 104, height: 104, x: display.x + display.width - 128, y: display.y + Math.round(display.height * .44),
+    frame: false, transparent: true, backgroundColor: "#00000000", resizable: false, movable: true,
+    alwaysOnTop: true, skipTaskbar: true, hasShadow: false, focusable: true,
+    webPreferences: { preload: path.join(app.getAppPath(), "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  window.setAlwaysOnTop(true, "floating");
+  window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  const dev = process.env.VITE_DEV_SERVER_URL;
+  if (dev) { const url = new URL(dev); url.searchParams.set("overlay", "1"); void window.loadURL(url.toString()); }
+  else void window.loadFile(path.join(here, "../../dist-renderer/index.html"), { query: { overlay: "1" } });
+  overlayWindow = window;
+  window.on("closed", () => { overlayWindow = null; });
+  return window;
+}
+
 app.whenReady().then(async () => {
   audit = new AuditStore(path.join(app.getPath("userData"), "orbit-audit.jsonl"));
   loadConversation();
   await loadProfile();
-  registerIPC(); createWindow();
-  globalShortcut.register("CommandOrControl+Shift+Space", armVoice);
+  registerIPC(); createWindow(); createOverlayWindow();
+  globalShortcut.register("CommandOrControl+Shift+Space", () => { createOverlayWindow(); armVoice(); });
   startSpeech();
   if (app.isPackaged) setTimeout(() => void autoUpdater.checkForUpdatesAndNotify(), 8_000);
-  app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  app.on("activate", () => { if (!mainWindow) createWindow(); createOverlayWindow(); });
 });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
-app.on("will-quit", () => { quitting = true; globalShortcut.unregisterAll(); spokenReply?.kill(); speechProcess?.kill(); gestureProcess?.kill(); });
+app.on("will-quit", () => { quitting = true; globalShortcut.unregisterAll(); overlayWindow?.destroy(); spokenReply?.kill(); speechProcess?.kill(); gestureProcess?.kill(); });

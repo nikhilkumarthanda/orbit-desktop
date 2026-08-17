@@ -43,3 +43,32 @@ test("destination acceptance: supported compose targets are HTTPS and explicit",
     assert.equal(adapter.id, id);
   }
 });
+
+test("autonomous browser acceptance: tasks are bounded, observable, and confirmation gated", async () => {
+  const fs = await import("node:fs/promises");
+  const [engine, agent, main, contracts, preload, policy] = await Promise.all([
+    fs.readFile(new URL("../src/main/browser-task-engine.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/main/browser-agent.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/shared/contracts.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../preload.cjs", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/main/policy.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(engine, /round < 20/);
+  assert.match(engine, /waiting_for_confirmation/);
+  assert.match(engine, /passwords, payment data, government IDs/);
+  assert.match(engine, /private network addresses/);
+  assert.match(agent, /launchPersistentContext/);
+  assert.match(agent, /actionSnapshot/);
+  assert.match(main, /Autonomous browser goal matched/);
+  assert.match(main, /orbit:browser:task:start/);
+  assert.match(contracts, /BrowserTaskAction/);
+  assert.match(preload, /onBrowserTask/);
+  assert.match(policy, /browser\.agent\.task/);
+});
+
+test("email language no longer routes ordinary sharing requests to finance", async () => {
+  const main = await (await import("node:fs/promises")).readFile(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(main, /stock\|shares\?\|ticker/);
+  assert.match(main, /company shares\?/);
+});

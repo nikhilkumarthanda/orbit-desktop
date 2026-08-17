@@ -54,6 +54,10 @@ export async function pageTitle() {
   return (await ensurePage()).title();
 }
 
+export async function currentUrl() {
+  return (await ensurePage()).url();
+}
+
 export async function visibleText(selector = "body") {
   const p = await ensurePage();
   return (await p.locator(selector).first().innerText()).trim();
@@ -139,6 +143,40 @@ export async function screenshot(): Promise<string> {
   const p = await ensurePage();
   const buffer = await p.screenshot({ type: "png" });
   return buffer.toString("base64");
+}
+
+export interface ActionSnapshot { title: string; url: string; text: string; controls: Array<{ kind: string; label: string }> }
+
+export async function actionSnapshot(): Promise<ActionSnapshot> {
+  const p = await ensurePage();
+  return p.evaluate(() => {
+    const clean = (value: string | null | undefined) => (value || "").replace(/\s+/g, " ").trim();
+    const visible = (element: Element) => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none"; };
+    const controls = Array.from(document.querySelectorAll("button,a[href],input,textarea,select,[role=button],[role=link]"))
+      .filter(visible).slice(0, 80).map(element => { const input = element as HTMLInputElement; const label = clean(element.getAttribute("aria-label") || element.getAttribute("placeholder") || element.textContent || input.name || input.value); return { kind: input.tagName.toLowerCase() === "input" ? (input.type || "input") : input.tagName.toLowerCase(), label: label.slice(0, 120) }; }).filter(item => item.label);
+    return { title: document.title, url: location.href, text: clean(document.body?.innerText).slice(0, 10_000), controls };
+  });
+}
+
+export async function clickByLabel(label: string) {
+  const p = await ensurePage();
+  const exact = p.getByRole("button", { name: label, exact: false }).or(p.getByRole("link", { name: label, exact: false })).first();
+  if (await exact.count()) { await exact.click(); return; }
+  await p.getByText(label, { exact: false }).first().click();
+}
+
+export async function fillByLabel(label: string, value: string) {
+  const p = await ensurePage();
+  const candidates = p.getByLabel(label, { exact: false }).or(p.getByPlaceholder(label, { exact: false })).first();
+  if (!await candidates.count()) throw new Error(`Orbit could not find the field “${label}”`);
+  await candidates.fill(value);
+}
+
+export async function selectByLabel(label: string, value: string) {
+  const p = await ensurePage();
+  const target = p.getByLabel(label, { exact: false }).first();
+  if (!await target.count()) throw new Error(`Orbit could not find the menu “${label}”`);
+  await target.selectOption({ label: value }).catch(() => target.selectOption(value));
 }
 
 // ---- Interaction primitives ----

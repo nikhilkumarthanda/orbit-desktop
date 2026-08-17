@@ -13,6 +13,7 @@ import { answerWithOllama, ollamaStatus, OLLAMA_MODEL, planWithOllama } from "./
 import { answerWithGemini, geminiKey, geminiStatus, saveGeminiKey, setGeminiBudget } from "./gemini.js";
 import { amazonSearchWithPriceFilter, youtubePlayFirst } from "./browser-workflows.js";
 import { describeCurrentPage, findOnPage, summarizeCurrentPage } from "./browser-intelligence.js";
+import { browserTaskStatus, cancelBrowserTask, resumeBrowserTask, startBrowserTask } from "./browser-task-engine.js";
 import { createLiveInformationEngine } from "./live-info/engine.js";
 import { createWeatherService } from "./live-info/weather-service.js";
 import { createNewsService } from "./live-info/news-service.js";
@@ -310,6 +311,9 @@ function planLocal(value: string): CommandPlan {
     .replace(/\bgethub\b/g, "github")
     .replace(/\b(?:lead|leet)\s+code\b/g, "leetcode");
   const cleanRecipientName = (name?: string) => name?.replace(/\s+\b(?:right\s+now|now|please|for\s+me)\b\s*$/i, "").trim();
+  const autonomousBrowser = value.match(/^(?:please\s+)?(?:use\s+)?(?:orbit(?:'s)?\s+)?(?:autonomous\s+|cloud\s+)?browser(?:\s+agent)?\s+(?:to\s+)?(.+)/i)
+    || value.match(/^(?:please\s+)?(?:browse|work online)\s+(?:for me\s+)?(?:and\s+)?(.+)/i);
+  if (autonomousBrowser) return { intent: "browser_task", confidence: 1, explanation: "Autonomous browser goal matched", query: autonomousBrowser[1].trim(), source: "local" };
   if (/\b(brief|explain|tell me more|what happened)\b/.test(command) && lastFailureDetail) return { intent: "answer", confidence: 1, explanation: "Previous error briefing", reply: `Boss, the previous operation failed because ${lastFailureDetail}. I can retry when you're ready.`, query: value, source: "local" };
   if (/^(hi|hello|hey|good (morning|afternoon|evening))( orbit)?[!.?]*$/.test(command)) return { intent: "answer", confidence: 1, explanation: "Local greeting matched", reply: "Yes, boss? At your service.", query: value, source: "local" };
   if (/\b(notifications?|notification center|alerts?)\b/.test(command)) return { intent: "notifications", confidence: 1, explanation: "Mac notification request matched", reply: "I can’t read Notification Center yet, boss. I won’t substitute news headlines for your notifications.", query: value, source: "local" };
@@ -338,7 +342,7 @@ function planLocal(value: string): CommandPlan {
   if (/\b(cricket|ipl|test match)\b.*\b(score|scores|result|match|update|live)\b|\b(score|scores)\b.*\b(cricket|ipl)\b/.test(command)) return { intent: "cricket", confidence: 1, explanation: "Live cricket request matched", query: value, liveServices: ["sports"], source: "local" };
   if (/\b(fifa|world cup|premier league|champions league|soccer)\b.*\b(score|scores|result|match|final|winner|won|update|live)\b|\b(score|scores|result|winner)\b.*\b(fifa|world cup|soccer)\b/.test(command)) return { intent: "soccer", confidence: 1, explanation: "Live soccer/FIFA request matched", query: value, liveServices: ["sports"], source: "local" };
   if (/\b(news|headlines|top stories|world update)\b/.test(command)) return { intent: "news", confidence: 1, explanation: "Live news request matched", query: value, liveServices: ["news"], source: "local" };
-  if (/\b(stock|shares?|ticker|market cap|share price|trading at)\b/.test(command)) return { intent: "finance", confidence: 1, explanation: "Live finance request matched", query: value, liveServices: ["finance"], source: "local" };
+  if (/\b(stock|ticker|market cap|share price|stock market|trading at|company shares?)\b/.test(command)) return { intent: "finance", confidence: 1, explanation: "Live finance request matched", query: value, liveServices: ["finance"], source: "local" };
   if (/\bgithub\b/.test(command) && /\b(workflow|actions?|deployment|ci|build (?:status|run)|check (?:the )?(?:workflow|actions?|deployment|ci|build))\b/.test(command)) return { intent: "github", confidence: .99, explanation: "Explicit GitHub workflow request matched", repository: "nikhilkumarthanda/orbit-desktop", query: value, source: "local" };
   if (/\b(?:outlook|gmail|apple mail|mail|email|e-mail)\b/.test(command) && /\b(?:draft|write|compose)\b/.test(command)) {
     const provider = /\bgmail\b/.test(command) ? "gmail" : /\boutlook\b/.test(command) ? "outlook" : /\b(?:apple mail|mail app)\b/.test(command) ? "mail" : undefined;
@@ -475,6 +479,7 @@ async function planCommand(value: string) {
   }
   const local = planLocal(value);
   if (local.reply) local.reply = personalize(local.reply);
+  if (local.intent === "browser_task") return local;
   if (["answer", "clarify", "notifications", "memory", "battery", "screen", "screenshot", "research", "browser", "github", "folder", "file", "mac_control", "email_draft", "email_rewrite", "contact_call", "social_draft", "social_publish", "weather", "news", "cricket", "soccer", "finance", "daily_brief", "youtube_play", "amazon_search", "page_describe", "page_summarize", "page_find"].includes(local.intent)) return local;
   const status = await ollamaStatus();
   if (!status.available) return local;
@@ -1017,6 +1022,10 @@ function registerIPC() {
   ipcMain.handle("orbit:browser:describe", () => traced("browser.agent.describe", async () => ({ summary: await describeCurrentPage() })));
   ipcMain.handle("orbit:browser:summarize", () => traced("browser.agent.summarize", async () => ({ summary: await summarizeCurrentPage() })));
   ipcMain.handle("orbit:browser:find", (_event, query: string) => traced("browser.agent.find", async () => ({ summary: await findOnPage(String(query || "")) })));
+  ipcMain.handle("orbit:browser:task:start", (event, goal: string) => traced("browser.agent.task", () => startBrowserTask(String(goal || "").slice(0, 1_500), payload => event.sender.send("orbit:browser:task:event", payload))));
+  ipcMain.handle("orbit:browser:task:resume", (event, confirmed: boolean) => traced("browser.agent.task", () => resumeBrowserTask(Boolean(confirmed), payload => event.sender.send("orbit:browser:task:event", payload))));
+  ipcMain.handle("orbit:browser:task:cancel", () => cancelBrowserTask());
+  ipcMain.handle("orbit:browser:task:status", () => browserTaskStatus());
   ipcMain.handle("orbit:web:research", (event, query: string) => traced("web.research", () => research(String(query), progress => event.sender.send("orbit:web:progress", progress))));
   ipcMain.handle("orbit:system:battery", () => traced("system.battery", async () => batteryStatus()));
   ipcMain.handle("orbit:screen:describe", (_event, query: string) => traced("screen.describe", () => describeScreen(String(query).slice(0, 500))));

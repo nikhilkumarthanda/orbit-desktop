@@ -33,6 +33,7 @@ export const policies: ToolPolicy[] = [
   { name: "browser.agent.describe", risk: "read", approvalRequired: false, description: "Read-only inspection of the current automation browser page" },
   { name: "browser.agent.summarize", risk: "external", approvalRequired: false, description: "Summarize the current automation browser page's article text using the configured AI model" },
   { name: "browser.agent.find", risk: "read", approvalRequired: false, description: "Locate a button or link on the current automation browser page matching a description" },
+  { name: "browser.agent.task", risk: "external", approvalRequired: false, description: "Run a bounded autonomous task in Orbit's isolated browser; consequential actions pause for explicit confirmation" },
 ];
 
 export function policy(name: string): ToolPolicy {

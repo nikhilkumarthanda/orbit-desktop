@@ -25,7 +25,7 @@ export interface GitContext { path: string; branch: string; status: string[]; la
 export interface CleanupCandidate extends RecentItem { reason: string; recoverable: true }
 export interface AuditEvent { id: string; at: string; tool: string; risk: Risk; status: string; summary: string }
 export interface SearchHit { path: string; title: string; excerpt: string; score: number; modified_at: number }
-export type Intent = "battery" | "screen" | "screenshot" | "system" | "recent" | "knowledge" | "git" | "github" | "browser" | "cleanup" | "audit" | "launch" | "mac_control" | "folder" | "file" | "email_draft" | "email_rewrite" | "contact_call" | "social_draft" | "social_publish" | "weather" | "news" | "cricket" | "soccer" | "finance" | "daily_brief" | "youtube_play" | "amazon_search" | "page_describe" | "page_summarize" | "page_find" | "notifications" | "memory" | "research" | "answer" | "clarify" | "unknown";
+export type Intent = "browser_task" | "battery" | "screen" | "screenshot" | "system" | "recent" | "knowledge" | "git" | "github" | "browser" | "cleanup" | "audit" | "launch" | "mac_control" | "folder" | "file" | "email_draft" | "email_rewrite" | "contact_call" | "social_draft" | "social_publish" | "weather" | "news" | "cricket" | "soccer" | "finance" | "daily_brief" | "youtube_play" | "amazon_search" | "page_describe" | "page_summarize" | "page_find" | "notifications" | "memory" | "research" | "answer" | "clarify" | "unknown";
 export interface ConversationTurn { role: "user" | "assistant"; content: string }
 export interface ConversationEntry extends ConversationTurn { id: string; at: string }
 export type MacControlAction = "open_app" | "focus_app" | "hide_app" | "quit_app" | "list_windows" | "focus_window" | "open_file_with" | "reveal_file" | "create_folder" | "move_path" | "rename_path";
@@ -46,6 +46,11 @@ export interface ResearchSource { title: string; url: string; excerpt: string }
 export type ResearchStage = "thinking" | "searching" | "reading" | "comparing" | "writing";
 export interface ResearchProgress { stage: ResearchStage; message: string; current?: number; total?: number; source?: string }
 export interface ResearchAnswer { answer: string; spokenAnswer: string; sources: ResearchSource[]; updatedAt: string }
+export type BrowserTaskStatus = "running"|"waiting_for_confirmation"|"paused"|"completed"|"cancelled"|"failed";
+export interface BrowserTaskAction { type: "navigate"|"click"|"fill"|"select"|"scroll"|"wait"|"complete"|"ask_user"; url?: string; label?: string; value?: string; direction?: "up"|"down"; reason?: string }
+export interface BrowserTaskStep { at: string; action: BrowserTaskAction; outcome: string }
+export interface BrowserTask { id: string; goal: string; status: BrowserTaskStatus; steps: BrowserTaskStep[]; summary: string; url: string; title: string; pendingAction?: BrowserTaskAction }
+export interface BrowserTaskEvent { type: "status"|"step"; task: BrowserTask; message?: string }
 export interface AIStatus { provider: "ollama"; configured: boolean; available: boolean; running: boolean; model: string; cost: "$0"; installCommand: string }
 export interface GeminiUsageStatus { month: string; requests: number; inputTokens: number; outputTokens: number; estimatedCostUsd: number; monthlyBudgetUsd: number; remainingUsd: number; blocked: boolean }
 export interface GeminiStatus { provider: "gemini"; configured: boolean; available: boolean; model: string; cost: "$0 on Google free tier"; usage: GeminiUsageStatus }
@@ -94,6 +99,11 @@ export interface OrbitAPI {
   describePage(): Promise<{ summary: string }>;
   summarizePage(): Promise<{ summary: string }>;
   findOnPage(query: string): Promise<{ summary: string }>;
+  startBrowserTask(goal: string): Promise<BrowserTask>;
+  resumeBrowserTask(confirmed: boolean): Promise<BrowserTask>;
+  cancelBrowserTask(): Promise<BrowserTask|null>;
+  browserTaskStatus(): Promise<BrowserTask|null>;
+  onBrowserTask(callback: (event: BrowserTaskEvent) => void): () => void;
   research(query: string): Promise<ResearchAnswer>;
   onResearchProgress(callback: (progress: ResearchProgress) => void): () => void;
   batteryStatus(): Promise<BatteryStatus>;

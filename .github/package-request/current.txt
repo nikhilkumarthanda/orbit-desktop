@@ -1,2 +1,3 @@
 Build current Orbit main source into a macOS artifact for local testing.
 Requested 2026-08-19.
+Rerun after direct-build packaging workflow update.

@@ -1,9 +1,60 @@
 import { BrowserWindow, WebContentsView } from "electron";
 
 const PARTITION = "persist:orbit-agent";
+const SIDEBAR_WIDTH = 276;
+const PANE_GAP = 12;
+const BROWSER_TOP = 42;
+const HOST_LAYOUT_CSS = `
+html.orbit-browser-open main {
+  grid-template-columns: ${SIDEBAR_WIDTH}px var(--orbit-agent-pane-width, 460px) minmax(0, 1fr) !important;
+}
+html.orbit-browser-open .content {
+  grid-column: 2 !important;
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 32px 22px !important;
+  overflow-x: hidden !important;
+}
+html.orbit-browser-open .content.space-content {
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+html.orbit-browser-open .assistant-shell {
+  width: calc(100% - 30px) !important;
+  padding: 42px 0 84px !important;
+}
+html.orbit-browser-open .assistant-heading {
+  max-width: 430px !important;
+}
+html.orbit-browser-open .assistant-heading h1 {
+  font-size: clamp(30px, 3.2vw, 43px) !important;
+}
+html.orbit-browser-open .assistant-heading p {
+  font-size: 11px !important;
+}
+html.orbit-browser-open .assistant-core {
+  width: 168px !important;
+  margin: 12px 0 9px !important;
+}
+html.orbit-browser-open .assistant-shell .space-interaction,
+html.orbit-browser-open .activity-strip {
+  width: 100% !important;
+}
+html.orbit-browser-open .quick-prompts,
+html.orbit-browser-open .space-stats {
+  display: none !important;
+}
+html.orbit-browser-open .conversation-history {
+  max-height: 190px !important;
+}
+`;
+
 let view: WebContentsView | null = null;
 let host: BrowserWindow | null = null;
 let resizeListener: (() => void) | null = null;
+let layoutCssKey: string | null = null;
 let visible = false;
 
 function publicUrl(value: string) {
@@ -23,18 +74,40 @@ function findHostWindow() {
   })[0];
 }
 
+function paneGeometry(width: number) {
+  const available = Math.max(0, width - SIDEBAR_WIDTH);
+  let agentWidth = Math.min(560, Math.max(390, Math.round(available * 0.4)));
+  const minimumBrowserWidth = 420;
+  if (available - agentWidth - PANE_GAP * 2 < minimumBrowserWidth) {
+    agentWidth = Math.max(340, available - minimumBrowserWidth - PANE_GAP * 2);
+  }
+  const browserX = SIDEBAR_WIDTH + agentWidth + PANE_GAP;
+  return {
+    agentWidth,
+    browserX,
+    browserWidth: Math.max(320, width - browserX - PANE_GAP),
+  };
+}
+
+function syncHostLayout(open = visible) {
+  if (!host || host.isDestroyed()) return;
+  const { agentWidth } = paneGeometry(host.getContentBounds().width);
+  const script = open
+    ? `document.documentElement.classList.add('orbit-browser-open'); document.documentElement.style.setProperty('--orbit-agent-pane-width', '${agentWidth}px');`
+    : `document.documentElement.classList.remove('orbit-browser-open'); document.documentElement.style.removeProperty('--orbit-agent-pane-width');`;
+  void host.webContents.executeJavaScript(script).catch(() => {});
+}
+
 function layout() {
   if (!host || host.isDestroyed() || !view) return;
   const bounds = host.getContentBounds();
-  // Keep Orbit's conversation/command surface on the left and the live web on the right.
-  const left = Math.max(460, Math.round(bounds.width * 0.5));
-  const top = 88;
-  const margin = 12;
+  const geometry = paneGeometry(bounds.width);
+  syncHostLayout();
   view.setBounds({
-    x: left,
-    y: top,
-    width: Math.max(320, bounds.width - left - margin),
-    height: Math.max(320, bounds.height - top - margin),
+    x: geometry.browserX,
+    y: BROWSER_TOP,
+    width: geometry.browserWidth,
+    height: Math.max(320, bounds.height - BROWSER_TOP - PANE_GAP),
   });
 }
 
@@ -59,6 +132,7 @@ async function ensureView() {
   if (resizeListener && host && !host.isDestroyed()) host.removeListener("resize", resizeListener);
 
   host = nextHost;
+  layoutCssKey = await host.webContents.insertCSS(HOST_LAYOUT_CSS).catch(() => null);
   view = new WebContentsView({
     webPreferences: {
       partition: PARTITION,
@@ -85,6 +159,7 @@ async function ensureView() {
     if (view === attachedView) view = null;
     if (host === attachedHost) host = null;
     resizeListener = null;
+    layoutCssKey = null;
     visible = false;
   });
 
@@ -102,6 +177,7 @@ async function ensureView() {
   }
   contents.on("render-process-gone", () => {
     visible = false;
+    syncHostLayout(false);
     emitState();
   });
 
@@ -112,6 +188,7 @@ async function ensureView() {
 export async function showEmbeddedBrowser() {
   const browserView = await ensureView();
   visible = true;
+  syncHostLayout(true);
   browserView.setVisible(true);
   layout();
   emitState();
@@ -121,6 +198,7 @@ export async function showEmbeddedBrowser() {
 export function hideEmbeddedBrowser() {
   visible = false;
   view?.setVisible(false);
+  syncHostLayout(false);
   emitState();
   return embeddedBrowserState();
 }

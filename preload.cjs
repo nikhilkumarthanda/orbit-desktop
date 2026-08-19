@@ -7,6 +7,49 @@ function normalizeOrbitCommand(command) {
   return browserAgent ? `browser agent to ${browserAgent[1].trim()}` : value;
 }
 
+function installLongCommandPreview() {
+  const syncInput = input => {
+    if (!(input instanceof HTMLInputElement)) return;
+    const command = input.closest(".command:not(.knowledge-search)");
+    if (!command) return;
+
+    let preview = command.querySelector(":scope > .orbit-command-preview");
+    if (!preview) {
+      preview = document.createElement("div");
+      preview.className = "orbit-command-preview";
+      preview.setAttribute("aria-live", "polite");
+      preview.innerHTML = "<small>CURRENT REQUEST</small><p></p>";
+      command.prepend(preview);
+    }
+
+    const value = String(input.value || "").trim();
+    const show = value.length > 58;
+    preview.hidden = !show;
+    command.classList.toggle("has-prompt-preview", show);
+    const text = preview.querySelector("p");
+    if (text && text.textContent !== value) text.textContent = value;
+  };
+
+  const syncAll = () => {
+    document.querySelectorAll(".command:not(.knowledge-search) input").forEach(syncInput);
+  };
+
+  const start = () => {
+    syncAll();
+    document.addEventListener("input", event => {
+      if (event.target instanceof HTMLInputElement) syncInput(event.target);
+    }, true);
+    // React can update the controlled command value from voice events without a
+    // native input event, so keep the preview synchronized with those updates too.
+    window.setInterval(syncAll, 180);
+  };
+
+  if (document.readyState === "loading") window.addEventListener("DOMContentLoaded", start, { once: true });
+  else start();
+}
+
+installLongCommandPreview();
+
 contextBridge.exposeInMainWorld("orbit", Object.freeze({
   policies: () => ipcRenderer.invoke("orbit:policies"),
   systemSnapshot: () => ipcRenderer.invoke("orbit:system"),

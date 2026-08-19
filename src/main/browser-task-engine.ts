@@ -97,9 +97,9 @@ function normalizePlannedAction(action: BrowserTaskAction, currentUrl: string): 
   };
 }
 
-function quotaOrRateLimit(error: unknown) {
+function transientGeminiFailure(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || "");
-  return /quota|rate.?limit|resource.?exhausted|429|too many requests/i.test(message);
+  return /quota|rate.?limit|resource.?exhausted|429|too many requests|high demand|try again later|temporar(?:y|ily)|overload(?:ed)?|service unavailable|\b503\b/i.test(message);
 }
 
 function retryDelayMs(error: unknown) {
@@ -123,12 +123,12 @@ async function planBrowserStep(prompt: string, listener: (event: BrowserTaskEven
     try {
       return parseBrowserAction(await answerWithGemini({ query: prompt, history: [] }));
     } catch (error) {
-      if (!quotaOrRateLimit(error)) throw error;
+      if (!transientGeminiFailure(error)) throw error;
 
       const local = await ollamaStatus();
       if (local.available) {
         if (active) {
-          active.summary = "Gemini quota reached — continuing locally";
+          active.summary = "Gemini temporarily unavailable — continuing locally";
           emit(listener, "status", active.summary);
         }
         return planBrowserActionWithOllama({ prompt });
@@ -136,7 +136,7 @@ async function planBrowserStep(prompt: string, listener: (event: BrowserTaskEven
 
       const delay = retryDelayMs(error);
       if (active) {
-        active.summary = `Gemini rate limit reached — retrying in ${Math.ceil(delay / 1000)}s`;
+        active.summary = `Gemini temporarily unavailable — retrying in ${Math.ceil(delay / 1000)}s`;
         emit(listener, "status", active.summary);
       }
       await new Promise(resolve => setTimeout(resolve, delay));

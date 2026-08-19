@@ -54,10 +54,13 @@ test("autonomous browser acceptance: tasks are bounded, observable, and confirma
     fs.readFile(new URL("../preload.cjs", import.meta.url), "utf8"),
     fs.readFile(new URL("../src/main/policy.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(engine, /round < 20/);
+  assert.match(engine, /const MAX_STEPS = 20/);
+  assert.match(engine, /round < MAX_STEPS/);
+  assert.match(engine, /WORKFLOW_TIMEOUT_MS/);
   assert.match(engine, /waiting_for_confirmation/);
   assert.match(engine, /passwords, payment data, government IDs/);
   assert.match(engine, /private network addresses/);
+  assert.match(engine, /cancelBrowserTask/);
   assert.match(agent, /launchPersistentContext/);
   assert.match(agent, /actionSnapshot/);
   assert.match(main, /Autonomous browser goal matched/);

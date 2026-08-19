@@ -1,4 +1,4 @@
-import type { AIStatus, CommandPlan, ConversationTurn, ResearchSource } from "../shared/contracts.js";
+import type { AIStatus, BrowserTaskAction, CommandPlan, ConversationTurn, ResearchSource } from "../shared/contracts.js";
 
 export const OLLAMA_MODEL = "qwen3:4b";
 const OLLAMA_URL = "http://127.0.0.1:11434";
@@ -12,6 +12,20 @@ const PLAN_SCHEMA = {
     query: { type: "string", maxLength: 200 }, application: { type: "string", maxLength: 100 }, repository: { type: "string", maxLength: 120 }, url: { type: "string", maxLength: 300 }, requiresConfirmation: { type: "boolean" },
   },
   required: ["intent", "confidence", "explanation", "reply", "query", "application", "repository", "url", "requiresConfirmation"],
+} as const;
+
+const BROWSER_ACTION_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    type: { type: "string", enum: ["navigate", "click", "fill", "select", "scroll", "wait", "complete", "ask_user"] },
+    url: { type: "string", maxLength: 500 },
+    label: { type: "string", maxLength: 180 },
+    value: { type: "string", maxLength: 500 },
+    direction: { type: "string", enum: ["up", "down"] },
+    reason: { type: "string", maxLength: 220 },
+  },
+  required: ["type", "reason"],
 } as const;
 
 export function finalAnswerOnly(value: string): string {
@@ -58,6 +72,45 @@ export async function planWithOllama(args: { command: string; history: Conversat
   if (first < 0 || last <= first) throw new Error(`Ollama returned invalid structured output: ${content.slice(0, 120)}`);
   try { return { ...(JSON.parse(content.slice(first, last + 1)) as CommandPlan), source: "ollama", model: OLLAMA_MODEL }; }
   catch { throw new Error(`Ollama returned invalid JSON: ${content.slice(0, 120)}`); }
+}
+
+export async function planBrowserActionWithOllama(args: { prompt: string; fetcher?: typeof fetch }): Promise<BrowserTaskAction> {
+  const fetcher = args.fetcher ?? fetch;
+  const response = await fetcher(`${OLLAMA_URL}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(60_000),
+    body: JSON.stringify({
+      model: OLLAMA_MODEL,
+      stream: false,
+      think: false,
+      keep_alive: "30s",
+      format: BROWSER_ACTION_SCHEMA,
+      options: { temperature: 0, num_predict: 260 },
+      messages: [
+        { role: "system", content: "You are Orbit's local browser action planner. Return exactly one browser action matching the supplied JSON schema. Do not explain your reasoning outside the reason field. Use only controls and page text supplied in the prompt. Never claim success unless the loaded page visibly satisfies the goal." },
+        { role: "user", content: args.prompt.slice(0, 14_000) },
+      ],
+    }),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Local browser planner returned ${response.status}: ${detail.slice(0, 180)}`);
+  }
+  const data = await response.json() as { message?: { content?: string } };
+  const content = data.message?.content?.trim();
+  if (!content) throw new Error("Local browser planner returned no action");
+  const first = content.indexOf("{");
+  const last = content.lastIndexOf("}");
+  if (first < 0 || last <= first) throw new Error(`Local browser planner returned invalid structured output: ${content.slice(0, 120)}`);
+  try {
+    const action = JSON.parse(content.slice(first, last + 1)) as BrowserTaskAction;
+    if (!["navigate", "click", "fill", "select", "scroll", "wait", "complete", "ask_user"].includes(action.type)) throw new Error("unsupported browser action");
+    return action;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "invalid JSON";
+    throw new Error(`Local browser planner returned invalid JSON (${detail}): ${content.slice(0, 120)}`);
+  }
 }
 
 export async function answerWithOllama(args: { query: string; sources: ResearchSource[]; history: ConversationTurn[]; fetcher?: typeof fetch }): Promise<string> {

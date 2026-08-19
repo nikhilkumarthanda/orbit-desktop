@@ -1,10 +1,25 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
+let embeddedBrowserVisible = false;
+let browserTaskRunning = false;
+ipcRenderer.on("orbit:embedded-browser:state", (_event, payload) => {
+  embeddedBrowserVisible = Boolean(payload?.visible);
+});
+ipcRenderer.on("orbit:browser:task:event", (_event, payload) => {
+  browserTaskRunning = payload?.task?.status === "running";
+});
+
+function looksLikeBrowserFollowUp(value) {
+  return /^(?:now\s+)?(?:search(?:\s+for)?\b|look\s+for\b|find\s+(?:on\s+)?(?:this|the)\s+page\b|open\s+(?:the\s+)?(?:(?:first|second|third|fourth|fifth|next|previous|last|\d+(?:st|nd|rd|th))\s+)?(?:result|link|article|repository|repo|release|issue|page)\b|click\b|select\b|choose\b|scroll\b|go\s+(?:back|forward)\b|back\b|forward\b|reload\b|refresh\b|summarize\s+(?:this|the)\s+page\b|read\s+(?:this|the)\s+page\b|what\b.*\bpage\b|tell\s+me\s+(?:what|when|where|which|who|how)\b|compare\b)/i.test(value.trim());
+}
+
 function normalizeOrbitCommand(command) {
   const value = String(command || "").trim();
   const browserAgent = value.match(/^(?:hey\s+)?orbit\s*[,;:\-]?\s*(?:please\s+)?(?:use\s+)?(?:your\s+|orbit(?:'s)?\s+)?(?:autonomous\s+|cloud\s+)?browser(?:\s+agent)?\s*[,;:\-]?\s*(?:to\s+)?(.+)$/i)
     || value.match(/^(?:please\s+)?(?:use\s+)?(?:your\s+|orbit(?:'s)?\s+)?(?:autonomous\s+|cloud\s+)?browser(?:\s+agent)?\s*[,;:\-]?\s*(?:to\s+)?(.+)$/i);
-  return browserAgent ? `browser agent to ${browserAgent[1].trim()}` : value;
+  if (browserAgent) return `browser agent to ${browserAgent[1].trim()}`;
+  if (embeddedBrowserVisible && !browserTaskRunning && looksLikeBrowserFollowUp(value)) return `browser agent to ${value}`;
+  return value;
 }
 
 function installLongCommandPreview() {

@@ -5,7 +5,7 @@ import type { BrowserTask, BrowserTaskAction, BrowserTaskEvent } from "../shared
 
 const riskyLabels = /\b(?:send|submit|apply|purchase|buy|pay|book|publish|post|delete|remove|confirm order|place order|accept|agree)\b/i;
 const MAX_STEPS = 20;
-const STEP_TIMEOUT_MS = 25_000;
+const STEP_TIMEOUT_MS = 40_000;
 const ACTION_TIMEOUT_MS = 15_000;
 const WORKFLOW_TIMEOUT_MS = 150_000;
 let active: BrowserTask | null = null;
@@ -27,6 +27,13 @@ function emit(listener: (event: BrowserTaskEvent) => void, type: BrowserTaskEven
   listener({ type, task: active, message });
 }
 
+function explicitGoalUrl(goal: string) {
+  const direct = goal.match(/https?:\/\/[^\s,)]+/i)?.[0];
+  if (direct) return direct;
+  const domain = goal.match(/\b(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s,)]+)?\b/i)?.[0];
+  return domain ? `https://${domain}` : "";
+}
+
 async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (event: BrowserTaskEvent) => void): Promise<BrowserTaskAction> {
   if (!active) throw new Error("No browser task is active");
   active.summary = steps.length ? "Inspecting the updated page" : "Inspecting the current page";
@@ -36,6 +43,15 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
 
   active.url = page.url;
   active.title = page.title;
+
+  // If the user named an explicit public site and the private agent is still on a
+  // blank/new-tab page, navigate there deterministically. This avoids spending a
+  // model call on an obvious first step and makes demo/startup behavior reliable.
+  const goalUrl = explicitGoalUrl(goal);
+  if (!steps.length && goalUrl && /^(?:about:blank|chrome:\/\/newtab\/?|)$/.test(page.url)) {
+    return { type: "navigate", url: goalUrl, reason: `Opening ${new URL(goalUrl).hostname}` };
+  }
+
   active.summary = `Planning browser step ${steps.length + 1}`;
   emit(listener, "status", active.summary);
 

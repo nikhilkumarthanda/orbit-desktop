@@ -34,6 +34,15 @@ function explicitGoalUrl(goal: string) {
   return domain ? `https://${domain}` : "";
 }
 
+function isBlankOrNewTab(url: string) {
+  const normalized = String(url || "").trim().toLowerCase().replace(/\/$/, "");
+  return !normalized
+    || normalized === "about:blank"
+    || normalized === "chrome://newtab"
+    || normalized === "chrome://new-tab-page"
+    || normalized === "chrome-search://local-ntp";
+}
+
 async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (event: BrowserTaskEvent) => void): Promise<BrowserTaskAction> {
   if (!active) throw new Error("No browser task is active");
   active.summary = steps.length ? "Inspecting the updated page" : "Inspecting the current page";
@@ -48,7 +57,7 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
   // blank/new-tab page, navigate there deterministically. This avoids spending a
   // model call on an obvious first step and makes demo/startup behavior reliable.
   const goalUrl = explicitGoalUrl(goal);
-  if (!steps.length && goalUrl && /^(?:about:blank|chrome:\/\/newtab\/?|)$/.test(page.url)) {
+  if (!steps.length && goalUrl && isBlankOrNewTab(page.url)) {
     return { type: "navigate", url: goalUrl, reason: `Opening ${new URL(goalUrl).hostname}` };
   }
 

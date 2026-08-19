@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as browser from "./embedded-browser.js";
 import { answerWithGemini, geminiStatus } from "./gemini.js";
-import { answerWithOllama, ollamaStatus } from "./ollama.js";
+import { ollamaStatus, planBrowserActionWithOllama } from "./ollama.js";
 import type { BrowserTask, BrowserTaskAction, BrowserTaskEvent } from "../shared/contracts.js";
 
 const riskyLabels = /\b(?:send|submit|apply|purchase|buy|pay|book|publish|post|delete|remove|confirm order|place order|accept|agree)\b/i;
@@ -20,7 +20,6 @@ const NAMED_SITES: Array<[RegExp, string]> = [
 ];
 let active: BrowserTask | null = null;
 let cancelled = false;
-const cleanJson = (value: string) => value.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
 
 function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string) {
   return new Promise<T>((resolve, reject) => {
@@ -74,10 +73,19 @@ function retryDelayMs(error: unknown) {
   return Math.min(35_000, Math.ceil(seconds * 1000) + 500);
 }
 
-async function planBrowserStep(prompt: string, listener: (event: BrowserTaskEvent) => void) {
+function parseBrowserAction(value: string): BrowserTaskAction {
+  const clean = value.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  const first = clean.indexOf("{");
+  const last = clean.lastIndexOf("}");
+  if (first < 0 || last <= first) throw new Error(`Browser planner returned invalid structured output: ${clean.slice(0, 120)}`);
+  try { return JSON.parse(clean.slice(first, last + 1)) as BrowserTaskAction; }
+  catch { throw new Error(`Browser planner returned invalid JSON: ${clean.slice(0, 120)}`); }
+}
+
+async function planBrowserStep(prompt: string, listener: (event: BrowserTaskEvent) => void): Promise<BrowserTaskAction> {
   if (geminiStatus().available) {
     try {
-      return await answerWithGemini({ query: prompt, history: [] });
+      return parseBrowserAction(await answerWithGemini({ query: prompt, history: [] }));
     } catch (error) {
       if (!quotaOrRateLimit(error)) throw error;
 
@@ -87,7 +95,7 @@ async function planBrowserStep(prompt: string, listener: (event: BrowserTaskEven
           active.summary = "Gemini quota reached — continuing locally";
           emit(listener, "status", active.summary);
         }
-        return answerWithOllama({ query: prompt, sources: [], history: [] });
+        return planBrowserActionWithOllama({ prompt });
       }
 
       const delay = retryDelayMs(error);
@@ -97,7 +105,7 @@ async function planBrowserStep(prompt: string, listener: (event: BrowserTaskEven
       }
       await new Promise(resolve => setTimeout(resolve, delay));
       if (cancelled) throw new Error("Browser task cancelled");
-      return answerWithGemini({ query: prompt, history: [] });
+      return parseBrowserAction(await answerWithGemini({ query: prompt, history: [] }));
     }
   }
 
@@ -107,14 +115,12 @@ async function planBrowserStep(prompt: string, listener: (event: BrowserTaskEven
     active.summary = "Planning browser step locally";
     emit(listener, "status", active.summary);
   }
-  return answerWithOllama({ query: prompt, sources: [], history: [] });
+  return planBrowserActionWithOllama({ prompt });
 }
 
 async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (event: BrowserTaskEvent) => void): Promise<BrowserTaskAction> {
   if (!active) throw new Error("No browser task is active");
 
-  // Named or explicit destinations should never require an inspection/model round-trip.
-  // Navigate first, then inspect only if the goal asks Orbit to do more on that site.
   if (!steps.length) {
     const goalUrl = explicitGoalUrl(goal);
     if (goalUrl) {
@@ -136,9 +142,6 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
   active.url = page.url;
   active.title = page.title;
 
-  // Never let the model "complete" a browser task from an empty surface. If a
-  // destination was named, recover by opening it. Otherwise fail visibly instead
-  // of answering from model memory and pretending the browser did the work.
   if (!usablePage(page.url, page.text)) {
     const goalUrl = explicitGoalUrl(goal);
     if (goalUrl && !sameDestination(page.url, goalUrl)) {
@@ -152,7 +155,7 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
 
   const history = steps.slice(-6).map(step => `${step.action.type}: ${step.action.label || step.action.url || ""} -> ${step.outcome}`).join("\n");
   const prompt = `You are Orbit's browser controller. Choose exactly one safe next browser action to advance the user's goal.\nGoal: ${goal}\nCurrent page: ${page.title} (${page.url})\nRecent steps:\n${history || "none"}\nVisible controls: ${JSON.stringify(page.controls.slice(0, 60))}\nVisible text: ${page.text.slice(0, 7000)}\nReturn JSON only: {"type":"navigate|click|fill|select|scroll|wait|complete|ask_user","url":"","label":"","value":"","direction":"down|up","reason":"short explanation"}. Use labels exactly as shown. Never choose send, submit, apply, purchase, pay, book, publish, post, delete, accept, or agree; use ask_user immediately before such an action. Use complete only when the goal is visibly satisfied by the current loaded page. Never answer from memory instead of using the browser. Never enter passwords, payment data, government IDs, or authentication codes.`;
-  const parsed = JSON.parse(cleanJson(await planBrowserStep(prompt, listener))) as BrowserTaskAction;
+  const parsed = await planBrowserStep(prompt, listener);
   if (!["navigate", "click", "fill", "select", "scroll", "wait", "complete", "ask_user"].includes(parsed.type)) throw new Error("Orbit's browser planner returned an unsupported action");
   if (parsed.type === "complete" && !usablePage(page.url, page.text)) throw new Error("Orbit refused to complete a browser task from an unloaded page");
   return parsed;

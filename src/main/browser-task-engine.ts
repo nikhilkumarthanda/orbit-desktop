@@ -61,6 +61,42 @@ function usablePage(url: string, text: string) {
   return /^https?:\/\//i.test(url) && text.trim().length >= 20;
 }
 
+function publicUrl(value: string) {
+  const url = new URL(value);
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error("Orbit only opens HTTP or HTTPS pages");
+  if (/^(?:localhost|127\.|0\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(url.hostname)) throw new Error("Orbit's browser agent cannot open private network addresses");
+  return url.toString();
+}
+
+function repairedNavigationUrl(value: string | undefined, currentUrl: string) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    if (/^https?:\/\//i.test(raw)) return publicUrl(raw);
+    if (/^(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s]*)?$/i.test(raw)) return publicUrl(`https://${raw}`);
+    if (/^(?:\/|\.\.?\/)/.test(raw) && /^https?:\/\//i.test(currentUrl)) return publicUrl(new URL(raw, currentUrl).toString());
+  } catch {}
+  return "";
+}
+
+function normalizePlannedAction(action: BrowserTaskAction, currentUrl: string): BrowserTaskAction {
+  if (action.type !== "navigate") return action;
+  const url = repairedNavigationUrl(action.url, currentUrl);
+  if (url) return { ...action, url };
+  const label = action.label?.trim();
+  if (label) {
+    return {
+      type: "click",
+      label,
+      reason: action.reason || `Using the visible “${label}” control instead of an invalid navigation target`,
+    };
+  }
+  return {
+    type: "wait",
+    reason: "Re-inspecting the page because the planner omitted a valid navigation URL",
+  };
+}
+
 function quotaOrRateLimit(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || "");
   return /quota|rate.?limit|resource.?exhausted|429|too many requests/i.test(message);
@@ -154,18 +190,11 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
   emit(listener, "status", active.summary);
 
   const history = steps.slice(-6).map(step => `${step.action.type}: ${step.action.label || step.action.url || ""} -> ${step.outcome}`).join("\n");
-  const prompt = `You are Orbit's browser controller. Choose exactly one safe next browser action to advance the user's goal.\nGoal: ${goal}\nCurrent page: ${page.title} (${page.url})\nRecent steps:\n${history || "none"}\nVisible controls: ${JSON.stringify(page.controls.slice(0, 60))}\nVisible text: ${page.text.slice(0, 7000)}\nReturn JSON only: {"type":"navigate|click|fill|select|scroll|wait|complete|ask_user","url":"","label":"","value":"","direction":"down|up","reason":"short explanation"}. Use labels exactly as shown. Never choose send, submit, apply, purchase, pay, book, publish, post, delete, accept, or agree; use ask_user immediately before such an action. Use complete only when the goal is visibly satisfied by the current loaded page. Never answer from memory instead of using the browser. Never enter passwords, payment data, government IDs, or authentication codes.`;
-  const parsed = await planBrowserStep(prompt, listener);
+  const prompt = `You are Orbit's browser controller. Choose exactly one safe next browser action to advance the user's goal.\nGoal: ${goal}\nCurrent page: ${page.title} (${page.url})\nRecent steps:\n${history || "none"}\nVisible controls: ${JSON.stringify(page.controls.slice(0, 60))}\nVisible text: ${page.text.slice(0, 7000)}\nReturn JSON only: {"type":"navigate|click|fill|select|scroll|wait|complete|ask_user","url":"","label":"","value":"","direction":"down|up","reason":"short explanation"}. Use labels exactly as shown. For navigate, url MUST be an absolute http:// or https:// URL; if you do not have one, use click, fill, select, scroll, wait, or ask_user instead. Never choose send, submit, apply, purchase, pay, book, publish, post, delete, accept, or agree; use ask_user immediately before such an action. Use complete only when the goal is visibly satisfied by the current loaded page. Never answer from memory instead of using the browser. Never enter passwords, payment data, government IDs, or authentication codes.`;
+  const parsed = normalizePlannedAction(await planBrowserStep(prompt, listener), page.url);
   if (!["navigate", "click", "fill", "select", "scroll", "wait", "complete", "ask_user"].includes(parsed.type)) throw new Error("Orbit's browser planner returned an unsupported action");
   if (parsed.type === "complete" && !usablePage(page.url, page.text)) throw new Error("Orbit refused to complete a browser task from an unloaded page");
   return parsed;
-}
-
-function publicUrl(value: string) {
-  const url = new URL(value);
-  if (!["http:", "https:"].includes(url.protocol)) throw new Error("Orbit only opens HTTP or HTTPS pages");
-  if (/^(?:localhost|127\.|0\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(url.hostname)) throw new Error("Orbit's browser agent cannot open private network addresses");
-  return url.toString();
 }
 
 async function act(action: BrowserTaskAction) {

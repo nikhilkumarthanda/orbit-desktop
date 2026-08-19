@@ -9,6 +9,8 @@ const MAX_STEPS = 20;
 const STEP_TIMEOUT_MS = 70_000;
 const ACTION_TIMEOUT_MS = 15_000;
 const WORKFLOW_TIMEOUT_MS = 180_000;
+const LOOP_RECOVERY_MARKER = "__orbit_loop_recovery__";
+const MAX_LOOP_RECOVERIES = 2;
 const NAMED_SITES: Array<[RegExp, string]> = [
   [/\bwikipedia\b/i, "https://en.wikipedia.org"],
   [/\bgithub\b/i, "https://github.com"],
@@ -22,6 +24,7 @@ let active: BrowserTask | null = null;
 let cancelled = false;
 let lastPageFingerprint = "";
 let stagnantPageRounds = 0;
+let loopRecoveryAttempts = 0;
 
 function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string) {
   return new Promise<T>((resolve, reject) => {
@@ -157,15 +160,15 @@ function avoidActionLoop(
     }
   }
 
-  if (action.type === "wait") {
+  if (action.type === "wait" && stagnantPageRounds < 4) {
     return { type: "scroll", direction: "down", reason: "The page did not change, so Orbit is inspecting more content instead of waiting again" };
   }
 
-  if (action.type === "navigate" && action.url && sameDestination(page.url, action.url)) {
+  if (action.type === "navigate" && action.url && sameDestination(page.url, action.url) && stagnantPageRounds < 4) {
     return { type: "scroll", direction: "down", reason: "Orbit is already at that destination, so it is inspecting the page instead of reopening it" };
   }
 
-  if (action.type === "scroll" && recentMatches >= 2) {
+  if (action.type === "scroll" && recentMatches >= 2 && stagnantPageRounds < 4) {
     return {
       type: "scroll",
       direction: action.direction === "up" ? "down" : "up",
@@ -174,7 +177,7 @@ function avoidActionLoop(
   }
 
   if (recentMatches >= 3 || stagnantPageRounds >= 4) {
-    throw new Error("Orbit detected a repeated browser-action loop and stopped before wasting the full step budget");
+    return { type: "wait", reason: LOOP_RECOVERY_MARKER };
   }
 
   return action;
@@ -270,6 +273,7 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
   else {
     lastPageFingerprint = fingerprint;
     stagnantPageRounds = 0;
+    loopRecoveryAttempts = 0;
   }
 
   if (!usablePage(page.url, page.text)) {
@@ -289,7 +293,39 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
     : "";
   const prompt = `You are Orbit's browser controller. Choose exactly one safe next browser action to advance the user's goal.\nGoal: ${goal}\nCurrent page: ${page.title} (${page.url})\nRecent steps:\n${history || "none"}${noProgress}\nVisible controls: ${JSON.stringify(page.controls.slice(0, 60))}\nVisible text: ${page.text.slice(0, 7000)}\nReturn JSON only: {"type":"navigate|click|fill|select|scroll|wait|complete|ask_user","url":"","label":"","value":"","direction":"down|up","reason":"short explanation"}. Use labels exactly as shown. For navigate, url MUST be an absolute http:// or https:// URL; if you do not have one, use click, fill, select, scroll, wait, or ask_user instead. Never repeat the same action from Recent steps when it did not change the page. Never choose send, submit, apply, purchase, pay, book, publish, post, delete, accept, or agree; use ask_user immediately before such an action. Use complete only when the goal is visibly satisfied by the current loaded page. Never answer from memory instead of using the browser. Never enter passwords, payment data, government IDs, or authentication codes.`;
   const normalized = normalizePlannedAction(await planBrowserStep(prompt, listener), page.url);
-  const parsed = avoidActionLoop(normalized, page, steps);
+  let parsed = avoidActionLoop(normalized, page, steps);
+
+  if (parsed.type === "wait" && parsed.reason === LOOP_RECOVERY_MARKER) {
+    loopRecoveryAttempts += 1;
+    const forbidden = [...new Set(steps.slice(-6).map(step => actionSignature(step.action)))];
+    if (active) {
+      active.summary = `Recovering from repeated browser actions · attempt ${loopRecoveryAttempts}/${MAX_LOOP_RECOVERIES}`;
+      emit(listener, "status", active.summary);
+    }
+    const recoveryPrompt = `${prompt}\nRECOVERY MODE: The previous plan is stuck. You MUST choose an action whose signature is NOT in this forbidden list: ${JSON.stringify(forbidden)}. Do not reverse-scroll back and forth. Do not refill the same field. Do not reopen the same URL. If the visible text already satisfies the user's goal, choose complete now. Otherwise choose a genuinely different visible control or safe action that advances the goal.`;
+    const recovered = normalizePlannedAction(await planBrowserStep(recoveryPrompt, listener), page.url);
+    const recoveredSignature = actionSignature(recovered);
+
+    if (forbidden.includes(recoveredSignature)) {
+      const recentLabels = new Set(steps.slice(-6).map(step => String(step.action.label || "").trim().toLowerCase()).filter(Boolean));
+      const alternate = page.controls.find(control => {
+        const label = control.label.trim();
+        if (!label || recentLabels.has(label.toLowerCase())) return false;
+        return /button|a|link|submit/i.test(control.kind) && /\b(?:search|result|article|release|issues?|next|more|details?|read|view|open)\b/i.test(label);
+      });
+      if (alternate) {
+        parsed = { type: "click", label: alternate.label, reason: `Loop recovery selected a different visible control: “${alternate.label}”` };
+      } else if (loopRecoveryAttempts < MAX_LOOP_RECOVERIES) {
+        parsed = { type: "scroll", direction: "down", reason: "Loop recovery is inspecting a new part of the page before replanning" };
+      } else {
+        throw new Error(`Orbit could not find a new safe browser path after ${MAX_LOOP_RECOVERIES} recovery attempts`);
+      }
+    } else {
+      parsed = recovered;
+      stagnantPageRounds = Math.max(0, stagnantPageRounds - 2);
+    }
+  }
+
   if (!["navigate", "click", "fill", "select", "scroll", "wait", "complete", "ask_user"].includes(parsed.type)) throw new Error("Orbit's browser planner returned an unsupported action");
   if (parsed.type === "complete" && !usablePage(page.url, page.text)) throw new Error("Orbit refused to complete a browser task from an unloaded page");
   return parsed;
@@ -399,6 +435,7 @@ export async function startBrowserTask(goal: string, listener: (event: BrowserTa
   cancelled = false;
   lastPageFingerprint = "";
   stagnantPageRounds = 0;
+  loopRecoveryAttempts = 0;
   await browser.showEmbeddedBrowser();
   active = {
     id: randomUUID(),

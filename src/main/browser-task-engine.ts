@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import * as browser from "./browser-agent.js";
+import * as browser from "./embedded-browser.js";
 import { answerWithGemini, geminiStatus } from "./gemini.js";
 import type { BrowserTask, BrowserTaskAction, BrowserTaskEvent } from "../shared/contracts.js";
 
@@ -36,16 +36,12 @@ function explicitGoalUrl(goal: string) {
 
 function isBlankOrNewTab(url: string) {
   const normalized = String(url || "").trim().toLowerCase().replace(/\/$/, "");
-  return !normalized
-    || normalized === "about:blank"
-    || normalized === "chrome://newtab"
-    || normalized === "chrome://new-tab-page"
-    || normalized === "chrome-search://local-ntp";
+  return !normalized || normalized === "about:blank";
 }
 
 async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (event: BrowserTaskEvent) => void): Promise<BrowserTaskAction> {
   if (!active) throw new Error("No browser task is active");
-  active.summary = steps.length ? "Inspecting the updated page" : "Inspecting the current page";
+  active.summary = steps.length ? "Inspecting the updated page" : "Inspecting the embedded browser";
   emit(listener, "status", active.summary);
   const page = await browser.actionSnapshot();
   if (cancelled) throw new Error("Browser task cancelled");
@@ -53,12 +49,11 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
   active.url = page.url;
   active.title = page.title;
 
-  // If the user named an explicit public site and the private agent is still on a
-  // blank/new-tab page, navigate there deterministically. This avoids spending a
-  // model call on an obvious first step and makes demo/startup behavior reliable.
+  // Explicit destinations are deterministic. Orbit opens the named site itself,
+  // then uses the model only for decisions that actually require page context.
   const goalUrl = explicitGoalUrl(goal);
   if (!steps.length && goalUrl && isBlankOrNewTab(page.url)) {
-    return { type: "navigate", url: goalUrl, reason: `Opening ${new URL(goalUrl).hostname}` };
+    return { type: "navigate", url: goalUrl, reason: `Opening ${new URL(goalUrl).hostname} inside Orbit` };
   }
 
   active.summary = `Planning browser step ${steps.length + 1}`;
@@ -93,7 +88,7 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
   if (!active || active.id !== taskId) return active;
   const startedAt = Date.now();
   active.status = "running";
-  active.summary = "Starting autonomous browser workflow";
+  active.summary = "Starting embedded browser workflow";
   emit(listener, "status", active.summary);
 
   try {
@@ -107,7 +102,7 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
       }
       if (Date.now() - startedAt >= WORKFLOW_TIMEOUT_MS) {
         active.status = "failed";
-        active.summary = "Orbit stopped this browser task after 2.5 minutes. The page was left unchanged after the last verified step.";
+        active.summary = "Orbit stopped this browser task after 2.5 minutes. The embedded page remains open at the last verified step.";
         emit(listener, "status", active.summary);
         return active;
       }
@@ -153,7 +148,7 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
 
     if (active && active.id === taskId) {
       active.status = "paused";
-      active.summary = `Orbit reached the ${MAX_STEPS}-step safety limit. Review the page before continuing.`;
+      active.summary = `Orbit reached the ${MAX_STEPS}-step safety limit. Review the embedded page before continuing.`;
       emit(listener, "status", active.summary);
     }
     return active;
@@ -165,7 +160,7 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
     } else {
       active.status = "failed";
       const detail = error instanceof Error ? error.message : "an unknown browser-agent error occurred";
-      active.summary = `Orbit paused the browser task safely: ${detail}`;
+      active.summary = `Orbit paused the embedded browser safely: ${detail}`;
     }
     emit(listener, "status", active.summary);
     return active;
@@ -178,14 +173,15 @@ export async function startBrowserTask(goal: string, listener: (event: BrowserTa
   if (active?.status === "running") throw new Error("Orbit is already running a browser task. Stop it before starting another one.");
 
   cancelled = false;
+  await browser.showEmbeddedBrowser();
   active = {
     id: randomUUID(),
     goal: goal.trim(),
     status: "running",
     steps: [],
-    summary: "Starting autonomous browser workflow",
-    url: "",
-    title: "",
+    summary: "Opening Orbit's embedded browser",
+    url: await browser.currentUrl(),
+    title: await browser.pageTitle(),
   };
   const taskId = active.id;
   emit(listener, "status", active.summary);
@@ -204,7 +200,7 @@ export async function resumeBrowserTask(confirmed: boolean, listener: (event: Br
   active.steps.push({ at: new Date().toISOString(), action: pending, outcome: "Confirmed by user and completed" });
   active.pendingAction = undefined;
   active.status = "running";
-  active.summary = "Confirmed. Continuing the browser workflow";
+  active.summary = "Confirmed. Continuing the embedded browser workflow";
   cancelled = false;
   const taskId = active.id;
   emit(listener, "step", `Confirmed action completed · Step ${active.steps.length} verified`);
@@ -218,6 +214,7 @@ export function cancelBrowserTask() {
     active.status = "cancelled";
     active.summary = "Browser task stopped";
   }
+  browser.hideEmbeddedBrowser();
   return active;
 }
 

@@ -38,6 +38,13 @@ function emit(listener: (event: BrowserTaskEvent) => void, type: BrowserTaskEven
   listener({ type, task: active, message });
 }
 
+function setPlanner(planner: "gemini"|"ollama", listener?: (event: BrowserTaskEvent) => void) {
+  if (!active) return;
+  const changed = active.planner !== planner;
+  active.planner = planner;
+  if (changed && listener) emit(listener, "status", planner === "ollama" ? "Browser planning switched to Local Ollama" : "Browser planning with Gemini");
+}
+
 function explicitGoalUrl(goal: string) {
   const direct = goal.match(/https?:\/\/[^\s,)]+/i)?.[0];
   if (direct) return direct;
@@ -197,12 +204,14 @@ function parseBrowserAction(value: string): BrowserTaskAction {
 async function planBrowserStep(prompt: string, listener: (event: BrowserTaskEvent) => void): Promise<BrowserTaskAction> {
   if (geminiStatus().available) {
     try {
+      setPlanner("gemini", listener);
       return parseBrowserAction(await answerWithGemini({ query: prompt, history: [] }));
     } catch (error) {
       if (!transientGeminiFailure(error)) throw error;
 
       const local = await ollamaStatus();
       if (local.available) {
+        setPlanner("ollama", listener);
         if (active) {
           active.summary = "Gemini temporarily unavailable — continuing locally";
           emit(listener, "status", active.summary);
@@ -217,12 +226,14 @@ async function planBrowserStep(prompt: string, listener: (event: BrowserTaskEven
       }
       await new Promise(resolve => setTimeout(resolve, delay));
       if (cancelled) throw new Error("Browser task cancelled");
+      setPlanner("gemini", listener);
       return parseBrowserAction(await answerWithGemini({ query: prompt, history: [] }));
     }
   }
 
   const local = await ollamaStatus();
   if (!local.available) throw new Error("Orbit needs Gemini or the local qwen3:4b model to plan browser actions");
+  setPlanner("ollama", listener);
   if (active) {
     active.summary = "Planning browser step locally";
     emit(listener, "status", active.summary);
@@ -381,7 +392,8 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
 export async function startBrowserTask(goal: string, listener: (event: BrowserTaskEvent) => void) {
   if (!goal.trim()) throw new Error("Tell Orbit what you want the browser to accomplish");
   const local = await ollamaStatus();
-  if (!geminiStatus().available && !local.available) throw new Error("Connect Gemini or start the local qwen3:4b model before starting an autonomous browser task");
+  const geminiReady = geminiStatus().available;
+  if (!geminiReady && !local.available) throw new Error("Connect Gemini or start the local qwen3:4b model before starting an autonomous browser task");
   if (active?.status === "running") throw new Error("Orbit is already running a browser task. Stop it before starting another one.");
 
   cancelled = false;
@@ -396,6 +408,7 @@ export async function startBrowserTask(goal: string, listener: (event: BrowserTa
     summary: "Opening Orbit's embedded browser",
     url: await browser.currentUrl(),
     title: await browser.pageTitle(),
+    planner: geminiReady ? "gemini" : "ollama",
   };
   const taskId = active.id;
   emit(listener, "status", active.summary);

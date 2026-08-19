@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import * as browser from "./embedded-browser.js";
 import { answerWithGemini, geminiStatus } from "./gemini.js";
+import { answerWithOllama, ollamaStatus } from "./ollama.js";
 import type { BrowserTask, BrowserTaskAction, BrowserTaskEvent } from "../shared/contracts.js";
 
 const riskyLabels = /\b(?:send|submit|apply|purchase|buy|pay|book|publish|post|delete|remove|confirm order|place order|accept|agree)\b/i;
 const MAX_STEPS = 20;
-const STEP_TIMEOUT_MS = 40_000;
+const STEP_TIMEOUT_MS = 70_000;
 const ACTION_TIMEOUT_MS = 15_000;
-const WORKFLOW_TIMEOUT_MS = 150_000;
+const WORKFLOW_TIMEOUT_MS = 180_000;
 const NAMED_SITES: Array<[RegExp, string]> = [
   [/\bwikipedia\b/i, "https://en.wikipedia.org"],
   [/\bgithub\b/i, "https://github.com"],
@@ -61,6 +62,54 @@ function usablePage(url: string, text: string) {
   return /^https?:\/\//i.test(url) && text.trim().length >= 20;
 }
 
+function quotaOrRateLimit(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /quota|rate.?limit|resource.?exhausted|429|too many requests/i.test(message);
+}
+
+function retryDelayMs(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  const seconds = Number(message.match(/retry\s+in\s+(\d+(?:\.\d+)?)s/i)?.[1] || 0);
+  if (!Number.isFinite(seconds) || seconds <= 0) return 30_000;
+  return Math.min(35_000, Math.ceil(seconds * 1000) + 500);
+}
+
+async function planBrowserStep(prompt: string, listener: (event: BrowserTaskEvent) => void) {
+  if (geminiStatus().available) {
+    try {
+      return await answerWithGemini({ query: prompt, history: [] });
+    } catch (error) {
+      if (!quotaOrRateLimit(error)) throw error;
+
+      const local = await ollamaStatus();
+      if (local.available) {
+        if (active) {
+          active.summary = "Gemini quota reached — continuing locally";
+          emit(listener, "status", active.summary);
+        }
+        return answerWithOllama({ query: prompt, sources: [], history: [] });
+      }
+
+      const delay = retryDelayMs(error);
+      if (active) {
+        active.summary = `Gemini rate limit reached — retrying in ${Math.ceil(delay / 1000)}s`;
+        emit(listener, "status", active.summary);
+      }
+      await new Promise(resolve => setTimeout(resolve, delay));
+      if (cancelled) throw new Error("Browser task cancelled");
+      return answerWithGemini({ query: prompt, history: [] });
+    }
+  }
+
+  const local = await ollamaStatus();
+  if (!local.available) throw new Error("Orbit needs Gemini or the local qwen3:4b model to plan browser actions");
+  if (active) {
+    active.summary = "Planning browser step locally";
+    emit(listener, "status", active.summary);
+  }
+  return answerWithOllama({ query: prompt, sources: [], history: [] });
+}
+
 async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (event: BrowserTaskEvent) => void): Promise<BrowserTaskAction> {
   if (!active) throw new Error("No browser task is active");
 
@@ -103,7 +152,7 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
 
   const history = steps.slice(-6).map(step => `${step.action.type}: ${step.action.label || step.action.url || ""} -> ${step.outcome}`).join("\n");
   const prompt = `You are Orbit's browser controller. Choose exactly one safe next browser action to advance the user's goal.\nGoal: ${goal}\nCurrent page: ${page.title} (${page.url})\nRecent steps:\n${history || "none"}\nVisible controls: ${JSON.stringify(page.controls.slice(0, 60))}\nVisible text: ${page.text.slice(0, 7000)}\nReturn JSON only: {"type":"navigate|click|fill|select|scroll|wait|complete|ask_user","url":"","label":"","value":"","direction":"down|up","reason":"short explanation"}. Use labels exactly as shown. Never choose send, submit, apply, purchase, pay, book, publish, post, delete, accept, or agree; use ask_user immediately before such an action. Use complete only when the goal is visibly satisfied by the current loaded page. Never answer from memory instead of using the browser. Never enter passwords, payment data, government IDs, or authentication codes.`;
-  const parsed = JSON.parse(cleanJson(await answerWithGemini({ query: prompt, history: [] }))) as BrowserTaskAction;
+  const parsed = JSON.parse(cleanJson(await planBrowserStep(prompt, listener))) as BrowserTaskAction;
   if (!["navigate", "click", "fill", "select", "scroll", "wait", "complete", "ask_user"].includes(parsed.type)) throw new Error("Orbit's browser planner returned an unsupported action");
   if (parsed.type === "complete" && !usablePage(page.url, page.text)) throw new Error("Orbit refused to complete a browser task from an unloaded page");
   return parsed;
@@ -145,7 +194,7 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
       }
       if (Date.now() - startedAt >= WORKFLOW_TIMEOUT_MS) {
         active.status = "failed";
-        active.summary = "Orbit stopped this browser task after 2.5 minutes. The embedded page remains open at the last verified step.";
+        active.summary = "Orbit stopped this browser task after 3 minutes. The embedded page remains open at the last verified step.";
         emit(listener, "status", active.summary);
         return active;
       }
@@ -212,7 +261,8 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
 
 export async function startBrowserTask(goal: string, listener: (event: BrowserTaskEvent) => void) {
   if (!goal.trim()) throw new Error("Tell Orbit what you want the browser to accomplish");
-  if (!geminiStatus().available) throw new Error("Connect Gemini in Settings before starting an autonomous browser task");
+  const local = await ollamaStatus();
+  if (!geminiStatus().available && !local.available) throw new Error("Connect Gemini or start the local qwen3:4b model before starting an autonomous browser task");
   if (active?.status === "running") throw new Error("Orbit is already running a browser task. Stop it before starting another one.");
 
   cancelled = false;

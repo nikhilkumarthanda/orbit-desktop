@@ -1,5 +1,12 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
+function normalizeOrbitCommand(command) {
+  const value = String(command || "").trim();
+  const browserAgent = value.match(/^(?:hey\s+)?orbit\s*[,;:\-]?\s*(?:please\s+)?(?:use\s+)?(?:your\s+|orbit(?:'s)?\s+)?(?:autonomous\s+|cloud\s+)?browser(?:\s+agent)?\s*[,;:\-]?\s*(?:to\s+)?(.+)$/i)
+    || value.match(/^(?:please\s+)?(?:use\s+)?(?:your\s+|orbit(?:'s)?\s+)?(?:autonomous\s+|cloud\s+)?browser(?:\s+agent)?\s*[,;:\-]?\s*(?:to\s+)?(.+)$/i);
+  return browserAgent ? `browser agent to ${browserAgent[1].trim()}` : value;
+}
+
 contextBridge.exposeInMainWorld("orbit", Object.freeze({
   policies: () => ipcRenderer.invoke("orbit:policies"),
   systemSnapshot: () => ipcRenderer.invoke("orbit:system"),
@@ -11,7 +18,7 @@ contextBridge.exposeInMainWorld("orbit", Object.freeze({
   audit: () => ipcRenderer.invoke("orbit:audit"),
   indexKnowledge: () => ipcRenderer.invoke("orbit:knowledge:index"),
   searchKnowledge: query => ipcRenderer.invoke("orbit:knowledge:search", query),
-  planCommand: command => ipcRenderer.invoke("orbit:command:plan", command),
+  planCommand: command => ipcRenderer.invoke("orbit:command:plan", normalizeOrbitCommand(command)),
   openPath: target => ipcRenderer.invoke("orbit:path:open", target),
   openFolder: folder => ipcRenderer.invoke("orbit:folder:open", folder),
   launchApplication: application => ipcRenderer.invoke("orbit:app:launch", application),

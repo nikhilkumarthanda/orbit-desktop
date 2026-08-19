@@ -8,6 +8,15 @@ const MAX_STEPS = 20;
 const STEP_TIMEOUT_MS = 40_000;
 const ACTION_TIMEOUT_MS = 15_000;
 const WORKFLOW_TIMEOUT_MS = 150_000;
+const NAMED_SITES: Array<[RegExp, string]> = [
+  [/\bwikipedia\b/i, "https://en.wikipedia.org"],
+  [/\bgithub\b/i, "https://github.com"],
+  [/\bnpm(?:js)?\b/i, "https://www.npmjs.com"],
+  [/\belectron(?:js)?\b/i, "https://www.electronjs.org"],
+  [/\byoutube\b/i, "https://www.youtube.com"],
+  [/\bamazon\b/i, "https://www.amazon.com"],
+  [/\blinkedin\b/i, "https://www.linkedin.com"],
+];
 let active: BrowserTask | null = null;
 let cancelled = false;
 const cleanJson = (value: string) => value.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
@@ -31,7 +40,8 @@ function explicitGoalUrl(goal: string) {
   const direct = goal.match(/https?:\/\/[^\s,)]+/i)?.[0];
   if (direct) return direct;
   const domain = goal.match(/\b(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s,)]+)?\b/i)?.[0];
-  return domain ? `https://${domain}` : "";
+  if (domain) return `https://${domain}`;
+  return NAMED_SITES.find(([pattern]) => pattern.test(goal))?.[1] || "";
 }
 
 function sameDestination(current: string, target: string) {
@@ -47,10 +57,14 @@ function sameDestination(current: string, target: string) {
   }
 }
 
+function usablePage(url: string, text: string) {
+  return /^https?:\/\//i.test(url) && text.trim().length >= 20;
+}
+
 async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (event: BrowserTaskEvent) => void): Promise<BrowserTaskAction> {
   if (!active) throw new Error("No browser task is active");
 
-  // Explicit destinations should never require an inspection/model round-trip.
+  // Named or explicit destinations should never require an inspection/model round-trip.
   // Navigate first, then inspect only if the goal asks Orbit to do more on that site.
   if (!steps.length) {
     const goalUrl = explicitGoalUrl(goal);
@@ -72,13 +86,26 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
 
   active.url = page.url;
   active.title = page.title;
+
+  // Never let the model "complete" a browser task from an empty surface. If a
+  // destination was named, recover by opening it. Otherwise fail visibly instead
+  // of answering from model memory and pretending the browser did the work.
+  if (!usablePage(page.url, page.text)) {
+    const goalUrl = explicitGoalUrl(goal);
+    if (goalUrl && !sameDestination(page.url, goalUrl)) {
+      return { type: "navigate", url: goalUrl, reason: `Opening ${new URL(goalUrl).hostname} inside Orbit` };
+    }
+    throw new Error("The embedded page did not finish loading, so Orbit did not continue from model memory");
+  }
+
   active.summary = `Planning browser step ${steps.length + 1}`;
   emit(listener, "status", active.summary);
 
   const history = steps.slice(-6).map(step => `${step.action.type}: ${step.action.label || step.action.url || ""} -> ${step.outcome}`).join("\n");
-  const prompt = `You are Orbit's browser controller. Choose exactly one safe next browser action to advance the user's goal.\nGoal: ${goal}\nCurrent page: ${page.title} (${page.url})\nRecent steps:\n${history || "none"}\nVisible controls: ${JSON.stringify(page.controls.slice(0, 60))}\nVisible text: ${page.text.slice(0, 7000)}\nReturn JSON only: {"type":"navigate|click|fill|select|scroll|wait|complete|ask_user","url":"","label":"","value":"","direction":"down|up","reason":"short explanation"}. Use labels exactly as shown. Never choose send, submit, apply, purchase, pay, book, publish, post, delete, accept, or agree; use ask_user immediately before such an action. Use complete only when the goal is visibly satisfied. Never enter passwords, payment data, government IDs, or authentication codes.`;
+  const prompt = `You are Orbit's browser controller. Choose exactly one safe next browser action to advance the user's goal.\nGoal: ${goal}\nCurrent page: ${page.title} (${page.url})\nRecent steps:\n${history || "none"}\nVisible controls: ${JSON.stringify(page.controls.slice(0, 60))}\nVisible text: ${page.text.slice(0, 7000)}\nReturn JSON only: {"type":"navigate|click|fill|select|scroll|wait|complete|ask_user","url":"","label":"","value":"","direction":"down|up","reason":"short explanation"}. Use labels exactly as shown. Never choose send, submit, apply, purchase, pay, book, publish, post, delete, accept, or agree; use ask_user immediately before such an action. Use complete only when the goal is visibly satisfied by the current loaded page. Never answer from memory instead of using the browser. Never enter passwords, payment data, government IDs, or authentication codes.`;
   const parsed = JSON.parse(cleanJson(await answerWithGemini({ query: prompt, history: [] }))) as BrowserTaskAction;
   if (!["navigate", "click", "fill", "select", "scroll", "wait", "complete", "ask_user"].includes(parsed.type)) throw new Error("Orbit's browser planner returned an unsupported action");
+  if (parsed.type === "complete" && !usablePage(page.url, page.text)) throw new Error("Orbit refused to complete a browser task from an unloaded page");
   return parsed;
 }
 

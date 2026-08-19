@@ -34,13 +34,37 @@ function explicitGoalUrl(goal: string) {
   return domain ? `https://${domain}` : "";
 }
 
-function isBlankOrNewTab(url: string) {
-  const normalized = String(url || "").trim().toLowerCase().replace(/\/$/, "");
-  return !normalized || normalized === "about:blank";
+function sameDestination(current: string, target: string) {
+  try {
+    const currentUrl = new URL(current);
+    const targetUrl = new URL(target);
+    const normalizedCurrentPath = currentUrl.pathname.replace(/\/$/, "") || "/";
+    const normalizedTargetPath = targetUrl.pathname.replace(/\/$/, "") || "/";
+    return currentUrl.hostname === targetUrl.hostname
+      && (normalizedTargetPath === "/" || normalizedCurrentPath === normalizedTargetPath);
+  } catch {
+    return false;
+  }
 }
 
 async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (event: BrowserTaskEvent) => void): Promise<BrowserTaskAction> {
   if (!active) throw new Error("No browser task is active");
+
+  // Explicit destinations should never require an inspection/model round-trip.
+  // Navigate first, then inspect only if the goal asks Orbit to do more on that site.
+  if (!steps.length) {
+    const goalUrl = explicitGoalUrl(goal);
+    if (goalUrl) {
+      const current = await browser.currentUrl();
+      if (!sameDestination(current, goalUrl)) {
+        active.url = current;
+        active.summary = `Opening ${new URL(goalUrl).hostname} inside Orbit`;
+        emit(listener, "status", active.summary);
+        return { type: "navigate", url: goalUrl, reason: active.summary };
+      }
+    }
+  }
+
   active.summary = steps.length ? "Inspecting the updated page" : "Inspecting the embedded browser";
   emit(listener, "status", active.summary);
   const page = await browser.actionSnapshot();
@@ -48,14 +72,6 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
 
   active.url = page.url;
   active.title = page.title;
-
-  // Explicit destinations are deterministic. Orbit opens the named site itself,
-  // then uses the model only for decisions that actually require page context.
-  const goalUrl = explicitGoalUrl(goal);
-  if (!steps.length && goalUrl && isBlankOrNewTab(page.url)) {
-    return { type: "navigate", url: goalUrl, reason: `Opening ${new URL(goalUrl).hostname} inside Orbit` };
-  }
-
   active.summary = `Planning browser step ${steps.length + 1}`;
   emit(listener, "status", active.summary);
 

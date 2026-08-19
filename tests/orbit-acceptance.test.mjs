@@ -44,10 +44,11 @@ test("destination acceptance: supported compose targets are HTTPS and explicit",
   }
 });
 
-test("autonomous browser acceptance: tasks are bounded, observable, and confirmation gated", async () => {
+test("autonomous browser acceptance: tasks are bounded, embedded, observable, and confirmation gated", async () => {
   const fs = await import("node:fs/promises");
-  const [engine, agent, main, contracts, preload, policy] = await Promise.all([
+  const [engine, embedded, agent, main, contracts, preload, policy] = await Promise.all([
     fs.readFile(new URL("../src/main/browser-task-engine.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../src/main/embedded-browser.ts", import.meta.url), "utf8"),
     fs.readFile(new URL("../src/main/browser-agent.ts", import.meta.url), "utf8"),
     fs.readFile(new URL("../src/main/main.ts", import.meta.url), "utf8"),
     fs.readFile(new URL("../src/shared/contracts.ts", import.meta.url), "utf8"),
@@ -61,6 +62,12 @@ test("autonomous browser acceptance: tasks are bounded, observable, and confirma
   assert.match(engine, /passwords, payment data, government IDs/);
   assert.match(engine, /private network addresses/);
   assert.match(engine, /cancelBrowserTask/);
+  assert.match(engine, /\.\/embedded-browser\.js/);
+  assert.match(embedded, /WebContentsView/);
+  assert.match(embedded, /persist:orbit-agent/);
+  assert.match(embedded, /showEmbeddedBrowser/);
+  assert.match(embedded, /executeJavaScript/);
+  assert.match(embedded, /cannot open private network addresses/);
   assert.match(agent, /launchPersistentContext/);
   assert.match(agent, /actionSnapshot/);
   assert.match(main, /Autonomous browser goal matched/);

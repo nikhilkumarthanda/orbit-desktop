@@ -26,8 +26,8 @@ function findHostWindow() {
 function layout() {
   if (!host || host.isDestroyed() || !view) return;
   const bounds = host.getContentBounds();
-  // Leave the left side of Orbit visible for conversation, progress and controls.
-  const left = Math.max(390, Math.round(bounds.width * 0.39));
+  // Keep Orbit's conversation/command surface on the left and the live web on the right.
+  const left = Math.max(460, Math.round(bounds.width * 0.5));
   const top = 88;
   const margin = 12;
   view.setBounds({
@@ -39,7 +39,7 @@ function layout() {
 }
 
 function emitState() {
-  if (!host || host.isDestroyed() || !view) return;
+  if (!host || host.isDestroyed() || !view || view.webContents.isDestroyed()) return;
   const contents = view.webContents;
   host.webContents.send("orbit:embedded-browser:state", {
     visible,
@@ -77,6 +77,16 @@ async function ensureView() {
 
   resizeListener = () => layout();
   host.on("resize", resizeListener);
+
+  const attachedHost = host;
+  const attachedView = view;
+  attachedHost.once("closed", () => {
+    attachedView.webContents.close();
+    if (view === attachedView) view = null;
+    if (host === attachedHost) host = null;
+    resizeListener = null;
+    visible = false;
+  });
 
   const contents = view.webContents;
   contents.setWindowOpenHandler(({ url }) => {

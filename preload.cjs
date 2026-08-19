@@ -50,6 +50,7 @@ contextBridge.exposeInMainWorld("orbit", Object.freeze({
   cancelBrowserTask: () => ipcRenderer.invoke("orbit:browser:task:cancel"),
   browserTaskStatus: () => ipcRenderer.invoke("orbit:browser:task:status"),
   onBrowserTask: callback => { const listener = (_event, payload) => callback(payload); ipcRenderer.on("orbit:browser:task:event", listener); return () => ipcRenderer.removeListener("orbit:browser:task:event", listener); },
+  onEmbeddedBrowserState: callback => { const listener = (_event, payload) => callback(payload); ipcRenderer.on("orbit:embedded-browser:state", listener); return () => ipcRenderer.removeListener("orbit:embedded-browser:state", listener); },
   research: query => ipcRenderer.invoke("orbit:web:research", query),
   onResearchProgress: callback => { const listener = (_event, progress) => callback(progress); ipcRenderer.on("orbit:web:progress", listener); return () => ipcRenderer.removeListener("orbit:web:progress", listener); },
   batteryStatus: () => ipcRenderer.invoke("orbit:system:battery"),

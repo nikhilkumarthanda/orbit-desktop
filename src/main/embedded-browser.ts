@@ -292,9 +292,26 @@ export async function actionSnapshot(): Promise<ActionSnapshot> {
 export async function clickByLabel(label: string) {
   const target = await contents();
   const encoded = JSON.stringify(label.trim().toLowerCase());
-  const result = await target.executeJavaScript(`(() => {
+  const result = await target.executeJavaScript(`(async () => {
     const wanted = ${encoded};
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const clean = value => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+    const cursor = (() => {
+      let node = document.getElementById('__orbit_agent_cursor');
+      if (node) return node;
+      node = document.createElement('div');
+      node.id = '__orbit_agent_cursor';
+      node.setAttribute('aria-hidden', 'true');
+      node.style.cssText = 'position:fixed;left:0;top:0;width:20px;height:20px;border:2px solid #9b7cff;border-radius:50%;background:rgba(155,124,255,.12);box-shadow:0 0 0 5px rgba(155,124,255,.10),0 0 22px rgba(155,124,255,.72);pointer-events:none;z-index:2147483647;opacity:0;transform:translate3d(28px,28px,0);transition:transform 420ms cubic-bezier(.2,.8,.2,1),opacity 120ms ease;mix-blend-mode:difference;';
+      const dot = document.createElement('i');
+      dot.style.cssText = 'position:absolute;left:50%;top:50%;width:5px;height:5px;border-radius:50%;background:white;transform:translate(-50%,-50%);box-shadow:0 0 8px white;';
+      const badge = document.createElement('span');
+      badge.textContent = 'ORBIT';
+      badge.style.cssText = 'position:absolute;left:16px;top:16px;padding:3px 6px;border-radius:999px;background:#171126;color:#dcd4ff;font:700 8px/1.2 -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.12em;box-shadow:0 4px 14px rgba(0,0,0,.35);white-space:nowrap;';
+      node.append(dot, badge);
+      document.documentElement.appendChild(node);
+      return node;
+    })();
     const elements = Array.from(document.querySelectorAll('button,a[href],[role="button"],[role="link"],input[type="button"],input[type="submit"]'));
     const ranked = elements.map(element => {
       const text = clean(element.getAttribute('aria-label') || element.textContent || element.getAttribute('value'));
@@ -302,8 +319,22 @@ export async function clickByLabel(label: string) {
     }).filter(item => item.score > 0).sort((a, b) => b.score - a.score);
     const match = ranked[0]?.element;
     if (!match) return false;
-    match.scrollIntoView({ block: 'center', inline: 'center' });
+    match.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+    await sleep(280);
+    const rect = match.getBoundingClientRect();
+    const x = Math.max(4, Math.min(innerWidth - 24, rect.left + rect.width / 2 - 10));
+    const y = Math.max(4, Math.min(innerHeight - 24, rect.top + rect.height / 2 - 10));
+    cursor.style.opacity = '1';
+    cursor.style.transform = 'translate3d(' + x + 'px,' + y + 'px,0)';
+    await sleep(440);
+    cursor.animate([
+      { transform: 'translate3d(' + x + 'px,' + y + 'px,0) scale(1)' },
+      { transform: 'translate3d(' + x + 'px,' + y + 'px,0) scale(.72)', boxShadow: '0 0 0 12px rgba(155,124,255,.25),0 0 28px rgba(155,124,255,.95)' },
+      { transform: 'translate3d(' + x + 'px,' + y + 'px,0) scale(1)' }
+    ], { duration: 300, easing: 'ease-out' });
+    await sleep(120);
     match.click();
+    await sleep(180);
     return true;
   })()`, true);
   if (!result) throw new Error(`Orbit could not find the control “${label}”`);
@@ -313,24 +344,64 @@ export async function fillByLabel(label: string, value: string) {
   const target = await contents();
   const encodedLabel = JSON.stringify(label.trim().toLowerCase());
   const encodedValue = JSON.stringify(value);
-  const result = await target.executeJavaScript(`(() => {
+  const result = await target.executeJavaScript(`(async () => {
     const wanted = ${encodedLabel};
     const value = ${encodedValue};
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const clean = text => String(text || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-    const fields = Array.from(document.querySelectorAll('input:not([type="hidden"]),textarea'));
+    const cursor = (() => {
+      let node = document.getElementById('__orbit_agent_cursor');
+      if (node) return node;
+      node = document.createElement('div');
+      node.id = '__orbit_agent_cursor';
+      node.setAttribute('aria-hidden', 'true');
+      node.style.cssText = 'position:fixed;left:0;top:0;width:20px;height:20px;border:2px solid #9b7cff;border-radius:50%;background:rgba(155,124,255,.12);box-shadow:0 0 0 5px rgba(155,124,255,.10),0 0 22px rgba(155,124,255,.72);pointer-events:none;z-index:2147483647;opacity:0;transform:translate3d(28px,28px,0);transition:transform 420ms cubic-bezier(.2,.8,.2,1),opacity 120ms ease;mix-blend-mode:difference;';
+      const dot = document.createElement('i');
+      dot.style.cssText = 'position:absolute;left:50%;top:50%;width:5px;height:5px;border-radius:50%;background:white;transform:translate(-50%,-50%);box-shadow:0 0 8px white;';
+      const badge = document.createElement('span');
+      badge.textContent = 'ORBIT';
+      badge.style.cssText = 'position:absolute;left:16px;top:16px;padding:3px 6px;border-radius:999px;background:#171126;color:#dcd4ff;font:700 8px/1.2 -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.12em;box-shadow:0 4px 14px rgba(0,0,0,.35);white-space:nowrap;';
+      node.append(dot, badge);
+      document.documentElement.appendChild(node);
+      return node;
+    })();
+    const fields = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="password"]),textarea'));
     const field = fields.find(element => {
       const id = element.id;
       const explicit = id ? document.querySelector('label[for="' + CSS.escape(id) + '"]')?.textContent : '';
       const wrapped = element.closest('label')?.textContent || '';
       const labels = [element.getAttribute('aria-label'), element.getAttribute('placeholder'), element.getAttribute('name'), explicit, wrapped].map(clean);
-      return labels.some(item => item === wanted || item.includes(wanted) || wanted.includes(item));
+      return labels.some(item => item && (item === wanted || item.includes(wanted) || wanted.includes(item)));
     });
     if (!field) return false;
+    field.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+    await sleep(260);
+    const rect = field.getBoundingClientRect();
+    const x = Math.max(4, Math.min(innerWidth - 24, rect.left + Math.min(rect.width * .35, 140) - 10));
+    const y = Math.max(4, Math.min(innerHeight - 24, rect.top + rect.height / 2 - 10));
+    cursor.style.opacity = '1';
+    cursor.style.transform = 'translate3d(' + x + 'px,' + y + 'px,0)';
+    await sleep(430);
+    cursor.animate([
+      { transform: 'translate3d(' + x + 'px,' + y + 'px,0) scale(1)' },
+      { transform: 'translate3d(' + x + 'px,' + y + 'px,0) scale(.78)' },
+      { transform: 'translate3d(' + x + 'px,' + y + 'px,0) scale(1)' }
+    ], { duration: 240, easing: 'ease-out' });
     field.focus();
     const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), 'value')?.set;
-    if (setter) setter.call(field, value); else field.value = value;
+    const setValue = next => { if (setter) setter.call(field, next); else field.value = next; };
+    setValue('');
     field.dispatchEvent(new Event('input', { bubbles: true }));
+    const delay = value.length > 160 ? 4 : value.length > 80 ? 8 : 18;
+    let current = '';
+    for (const character of value) {
+      current += character;
+      setValue(current);
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      await sleep(delay);
+    }
     field.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(120);
     return true;
   })()`, true);
   if (!result) throw new Error(`Orbit could not find the field “${label}”`);
@@ -340,23 +411,50 @@ export async function selectByLabel(label: string, value: string) {
   const target = await contents();
   const encodedLabel = JSON.stringify(label.trim().toLowerCase());
   const encodedValue = JSON.stringify(value.trim().toLowerCase());
-  const result = await target.executeJavaScript(`(() => {
+  const result = await target.executeJavaScript(`(async () => {
     const wanted = ${encodedLabel};
     const optionWanted = ${encodedValue};
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const clean = text => String(text || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+    const cursor = (() => {
+      let node = document.getElementById('__orbit_agent_cursor');
+      if (node) return node;
+      node = document.createElement('div');
+      node.id = '__orbit_agent_cursor';
+      node.setAttribute('aria-hidden', 'true');
+      node.style.cssText = 'position:fixed;left:0;top:0;width:20px;height:20px;border:2px solid #9b7cff;border-radius:50%;background:rgba(155,124,255,.12);box-shadow:0 0 0 5px rgba(155,124,255,.10),0 0 22px rgba(155,124,255,.72);pointer-events:none;z-index:2147483647;opacity:0;transform:translate3d(28px,28px,0);transition:transform 420ms cubic-bezier(.2,.8,.2,1),opacity 120ms ease;mix-blend-mode:difference;';
+      const dot = document.createElement('i');
+      dot.style.cssText = 'position:absolute;left:50%;top:50%;width:5px;height:5px;border-radius:50%;background:white;transform:translate(-50%,-50%);box-shadow:0 0 8px white;';
+      const badge = document.createElement('span');
+      badge.textContent = 'ORBIT';
+      badge.style.cssText = 'position:absolute;left:16px;top:16px;padding:3px 6px;border-radius:999px;background:#171126;color:#dcd4ff;font:700 8px/1.2 -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.12em;box-shadow:0 4px 14px rgba(0,0,0,.35);white-space:nowrap;';
+      node.append(dot, badge);
+      document.documentElement.appendChild(node);
+      return node;
+    })();
     const menus = Array.from(document.querySelectorAll('select'));
     const menu = menus.find(element => {
       const id = element.id;
       const explicit = id ? document.querySelector('label[for="' + CSS.escape(id) + '"]')?.textContent : '';
       const labels = [element.getAttribute('aria-label'), element.getAttribute('name'), explicit].map(clean);
-      return labels.some(item => item === wanted || item.includes(wanted) || wanted.includes(item));
+      return labels.some(item => item && (item === wanted || item.includes(wanted) || wanted.includes(item)));
     });
     if (!menu) return false;
     const option = Array.from(menu.options).find(item => clean(item.label) === optionWanted || clean(item.textContent).includes(optionWanted) || clean(item.value) === optionWanted);
     if (!option) return false;
+    menu.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+    await sleep(240);
+    const rect = menu.getBoundingClientRect();
+    const x = Math.max(4, Math.min(innerWidth - 24, rect.right - 26));
+    const y = Math.max(4, Math.min(innerHeight - 24, rect.top + rect.height / 2 - 10));
+    cursor.style.opacity = '1';
+    cursor.style.transform = 'translate3d(' + x + 'px,' + y + 'px,0)';
+    await sleep(420);
+    cursor.animate([{ transform: 'translate3d(' + x + 'px,' + y + 'px,0) scale(1)' }, { transform: 'translate3d(' + x + 'px,' + y + 'px,0) scale(.74)' }, { transform: 'translate3d(' + x + 'px,' + y + 'px,0) scale(1)' }], { duration: 260 });
     menu.value = option.value;
     menu.dispatchEvent(new Event('input', { bubbles: true }));
     menu.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(140);
     return true;
   })()`, true);
   if (!result) throw new Error(`Orbit could not select “${value}” from “${label}”`);
@@ -364,5 +462,36 @@ export async function selectByLabel(label: string, value: string) {
 
 export async function scroll(direction: "up" | "down" = "down", amount = 800) {
   const target = await contents();
-  await target.executeJavaScript(`window.scrollBy({ top: ${direction === "down" ? amount : -amount}, behavior: 'smooth' })`, true);
+  await target.executeJavaScript(`(async () => {
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const cursor = (() => {
+      let node = document.getElementById('__orbit_agent_cursor');
+      if (node) return node;
+      node = document.createElement('div');
+      node.id = '__orbit_agent_cursor';
+      node.setAttribute('aria-hidden', 'true');
+      node.style.cssText = 'position:fixed;left:0;top:0;width:20px;height:20px;border:2px solid #9b7cff;border-radius:50%;background:rgba(155,124,255,.12);box-shadow:0 0 0 5px rgba(155,124,255,.10),0 0 22px rgba(155,124,255,.72);pointer-events:none;z-index:2147483647;opacity:0;transform:translate3d(28px,28px,0);transition:transform 420ms cubic-bezier(.2,.8,.2,1),opacity 120ms ease;mix-blend-mode:difference;';
+      const dot = document.createElement('i');
+      dot.style.cssText = 'position:absolute;left:50%;top:50%;width:5px;height:5px;border-radius:50%;background:white;transform:translate(-50%,-50%);box-shadow:0 0 8px white;';
+      const badge = document.createElement('span');
+      badge.textContent = 'ORBIT';
+      badge.style.cssText = 'position:absolute;left:16px;top:16px;padding:3px 6px;border-radius:999px;background:#171126;color:#dcd4ff;font:700 8px/1.2 -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.12em;box-shadow:0 4px 14px rgba(0,0,0,.35);white-space:nowrap;';
+      node.append(dot, badge);
+      document.documentElement.appendChild(node);
+      return node;
+    })();
+    const x = Math.max(12, innerWidth - 46);
+    const y = Math.max(24, Math.round(innerHeight * .62));
+    cursor.style.opacity = '1';
+    cursor.style.transform = 'translate3d(' + x + 'px,' + y + 'px,0)';
+    await sleep(260);
+    cursor.animate([
+      { transform: 'translate3d(' + x + 'px,' + y + 'px,0)' },
+      { transform: 'translate3d(' + x + 'px,' + (y + ${direction === "down" ? 24 : -24}) + 'px,0)' },
+      { transform: 'translate3d(' + x + 'px,' + y + 'px,0)' }
+    ], { duration: 520, easing: 'ease-in-out' });
+    window.scrollBy({ top: ${direction === "down" ? amount : -amount}, behavior: 'smooth' });
+    await sleep(620);
+    return true;
+  })()`, true);
 }

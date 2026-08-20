@@ -6,9 +6,9 @@ import type { BrowserTask, BrowserTaskAction, BrowserTaskEvent } from "../shared
 
 const riskyLabels = /\b(?:send|submit|apply|purchase|buy|pay|book|publish|post|delete|remove|confirm order|place order|accept|agree)\b/i;
 const MAX_STEPS = 20;
-const STEP_TIMEOUT_MS = 70_000;
-const ACTION_TIMEOUT_MS = 15_000;
-const WORKFLOW_TIMEOUT_MS = 180_000;
+const STEP_TIMEOUT_MS = 105_000;
+const ACTION_TIMEOUT_MS = 25_000;
+const WORKFLOW_TIMEOUT_MS = 240_000;
 const LOOP_RECOVERY_MARKER = "__orbit_loop_recovery__";
 const MAX_LOOP_RECOVERIES = 2;
 const NAMED_SITES: Array<[RegExp, string]> = [
@@ -185,7 +185,7 @@ function avoidActionLoop(
 
 function transientGeminiFailure(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || "");
-  return /quota|rate.?limit|resource.?exhausted|429|too many requests|high demand|try again later|temporar(?:y|ily)|overload(?:ed)?|service unavailable|\b503\b/i.test(message);
+  return /quota|rate.?limit|resource.?exhausted|429|too many requests|high demand|try again later|temporar(?:y|ily)|overload(?:ed)?|service unavailable|\b503\b|timeout|timed.?out|aborted|aborterror/i.test(message);
 }
 
 function retryDelayMs(error: unknown) {
@@ -360,7 +360,7 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
       }
       if (Date.now() - startedAt >= WORKFLOW_TIMEOUT_MS) {
         active.status = "failed";
-        active.summary = "Orbit stopped this browser task after 3 minutes. The embedded page remains open at the last verified step.";
+        active.summary = "Orbit stopped this browser task after 4 minutes. The embedded page remains open at the last verified step.";
         emit(listener, "status", active.summary);
         return active;
       }
@@ -418,7 +418,10 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
     } else {
       active.status = "failed";
       const detail = error instanceof Error ? error.message : "an unknown browser-agent error occurred";
-      active.summary = `Orbit paused the embedded browser safely: ${detail}`;
+      const friendly = /timeout|timed.?out|aborted|aborterror/i.test(detail)
+        ? "the browser planner timed out before it could verify the next step. The current page is still open, so retrying can continue from here."
+        : detail;
+      active.summary = `Orbit paused the embedded browser safely: ${friendly}`;
     }
     emit(listener, "status", active.summary);
     return active;

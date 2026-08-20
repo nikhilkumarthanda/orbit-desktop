@@ -26,6 +26,36 @@ function nativeApplicationRequest(value) {
   return "";
 }
 
+function activeOrbitBrowserHost() {
+  try { return new URL(String(embeddedBrowserState?.url || "")).hostname.replace(/^www\./, "").toLowerCase(); }
+  catch { return ""; }
+}
+
+function contextualOrbitBrowserFollowUp(value) {
+  const text = String(value || "").trim();
+  if (!embeddedBrowserVisible || !text) return false;
+  if (nativeApplicationRequest(text) || explicitlyRequestsExternalBrowser(text)) return false;
+  const host = activeOrbitBrowserHost();
+  if (!host) return false;
+  if (/(?:^|\.)youtube\.com$/i.test(host)) {
+    return /^(?:now\s+)?(?:open|play|search(?:\s+for)?|find|look\s+up)\b.+/i.test(text)
+      || /^(?:now\s+)?(?:open|play)\s+(?:another|next)\b/i.test(text);
+  }
+  return /^(?:now\s+)?(?:open|search(?:\s+for)?|find|look\s+up|click|select|choose|scroll|go\s+(?:back|forward)|back|forward|reload|refresh|summarize|read|tell\s+me|what|which|who|when|where|how|compare)\b/i.test(text);
+}
+
+function contextualizeOrbitBrowserCommand(value) {
+  const text = String(value || "").trim();
+  const host = activeOrbitBrowserHost();
+  if (/(?:^|\.)youtube\.com$/i.test(host)) {
+    let match = text.match(/^(?:now\s+)?(?:open|play)\s+(.+?)\s*[.!?]*$/i);
+    if (match && !/\byoutube\b/i.test(match[1])) return `play ${match[1].trim()} on YouTube`;
+    match = text.match(/^(?:now\s+)?(?:search(?:\s+for)?|find|look\s+up)\s+(.+?)\s*[.!?]*$/i);
+    if (match && !/\byoutube\b/i.test(match[1])) return `search YouTube for ${match[1].trim()}`;
+  }
+  return text;
+}
+
 function looksLikeCareerBrowserRequest(value) {
   const text = String(value || "").trim();
   if (!text) return false;
@@ -63,7 +93,8 @@ function normalizeOrbitCommand(command) {
 
   if (nativeApplicationRequest(value)) return value;
   if (explicitlyRequestsExternalBrowser(value)) return value;
-  if (looksLikeCareerBrowserRequest(value) || wantsNewOrbitTab(value) || looksLikeWebRequest(value)) return `browser agent to ${value}`;
+  const contextual = contextualOrbitBrowserFollowUp(value);
+  if (looksLikeCareerBrowserRequest(value) || wantsNewOrbitTab(value) || looksLikeWebRequest(value) || contextual) return `browser agent to ${contextual ? contextualizeOrbitBrowserCommand(value) : value}`;
   if (embeddedBrowserVisible && looksLikeBrowserFollowUp(value)) return `browser agent to ${value}`;
   return value;
 }
@@ -82,7 +113,8 @@ async function planOrbitCommand(command) {
   }
 
   const external = explicitlyRequestsExternalBrowser(value);
-  const browserFollowUp = !external && (looksLikeCareerBrowserRequest(value) || wantsNewOrbitTab(value) || looksLikeWebRequest(value) || (embeddedBrowserVisible && looksLikeBrowserFollowUp(value)));
+  const contextual = !external && contextualOrbitBrowserFollowUp(value);
+  const browserFollowUp = !external && (looksLikeCareerBrowserRequest(value) || wantsNewOrbitTab(value) || looksLikeWebRequest(value) || contextual || (embeddedBrowserVisible && looksLikeBrowserFollowUp(value)));
 
   // A fresh browser command retargets the agent runtime. Native tab creation is
   // executed by the browser-task engine so one user request creates one tab only.

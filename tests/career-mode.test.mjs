@@ -24,8 +24,9 @@ test("career mode stays in Orbit Browser and has local profile/application primi
 
   assert.match(engine, /\.\/career-agent\.js/);
   assert.match(engine, /Opening an Apply or Easy Apply flow is allowed without confirmation/);
-  assert.match(engine, /Final submission, sending a message, connecting, publishing/);
+  assert.match(engine, /Final submission, sending a message, connecting, posting\/publishing/);
   assert.doesNotMatch(engine.match(/const riskyLabels = .*;/)?.[0] || "", /\|apply\|/i);
+  assert.match(engine.match(/const riskyLabels = .*;/)?.[0] || "", /post/);
 
   assert.match(preload, /looksLikeCareerBrowserRequest/);
   assert.match(preload, /jobright/);

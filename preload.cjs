@@ -56,6 +56,17 @@ function contextualizeOrbitBrowserCommand(value) {
   return text;
 }
 
+function youtubePlaybackCommand(value) {
+  const text = String(value || "").trim();
+  if (!text || explicitlyRequestsExternalBrowser(text)) return "";
+  if (/\byoutube\b/i.test(text) && /\bplay\b/i.test(text)) return text;
+  if (/(?:^|\.)youtube\.com$/i.test(activeOrbitBrowserHost()) && contextualOrbitBrowserFollowUp(text)) {
+    const contextual = contextualizeOrbitBrowserCommand(text);
+    if (/\byoutube\b/i.test(contextual) && /\bplay\b/i.test(contextual)) return contextual;
+  }
+  return "";
+}
+
 function looksLikeCareerBrowserRequest(value) {
   const text = String(value || "").trim();
   if (!text) return false;
@@ -93,6 +104,8 @@ function normalizeOrbitCommand(command) {
 
   if (nativeApplicationRequest(value)) return value;
   if (explicitlyRequestsExternalBrowser(value)) return value;
+  const playback = youtubePlaybackCommand(value);
+  if (playback) return playback;
   const contextual = contextualOrbitBrowserFollowUp(value);
   if (looksLikeCareerBrowserRequest(value) || wantsNewOrbitTab(value) || looksLikeWebRequest(value) || contextual) return `browser agent to ${contextual ? contextualizeOrbitBrowserCommand(value) : value}`;
   if (embeddedBrowserVisible && looksLikeBrowserFollowUp(value)) return `browser agent to ${value}`;
@@ -113,6 +126,15 @@ async function planOrbitCommand(command) {
   }
 
   const external = explicitlyRequestsExternalBrowser(value);
+  const playback = !external ? youtubePlaybackCommand(value) : "";
+  if (playback) {
+    if (browserTaskRunning) {
+      await ipcRenderer.invoke("orbit:browser:task:cancel").catch(() => null);
+      browserTaskRunning = false;
+      browserTaskState = null;
+    }
+    return ipcRenderer.invoke("orbit:command:plan", playback);
+  }
   const contextual = !external && contextualOrbitBrowserFollowUp(value);
   const browserFollowUp = !external && (looksLikeCareerBrowserRequest(value) || wantsNewOrbitTab(value) || looksLikeWebRequest(value) || contextual || (embeddedBrowserVisible && looksLikeBrowserFollowUp(value)));
 

@@ -23,7 +23,9 @@ function looksLikeWebRequest(value) {
 }
 
 function looksLikeBrowserFollowUp(value) {
-  return /^(?:now\s+)?(?:search(?:\s+for)?\b|look\s+for\b|find\s+(?:on\s+)?(?:this|the)\s+page\b|open\s+(?:the\s+)?(?:(?:first|second|third|fourth|fifth|next|previous|last|\d+(?:st|nd|rd|th))\s+)?(?:result|link|article|repository|repo|release|releases|issue|issues|page)\b|click\b|select\b|choose\b|scroll\b|go\s+(?:back|forward)\b|back\b|forward\b|reload\b|refresh\b|summarize\s+(?:this|the)\s+page\b|read\s+(?:this|the)\s+page\b|what\b.*\bpage\b|tell\s+me\s+(?:what|when|where|which|who|how)\b|compare\b)/i.test(value.trim());
+  const text = value.trim();
+  return /^(?:now\s+)?(?:search(?:\s+for)?\b|look\s+for\b|find\s+(?:on\s+)?(?:this|the)\s+page\b|open\s+(?:the\s+)?(?:(?:first|second|third|fourth|fifth|next|previous|last|\d+(?:st|nd|rd|th))\s+)?(?:result|link|article|repository|repo|release|releases|issue|issues|page)\b|click\b|select\b|choose\b|scroll\b|go\s+(?:back|forward)\b|back\b|forward\b|reload\b|refresh\b|summarize\s+(?:this|the)\s+page\b|read\s+(?:this|the)\s+page\b|what\b.*\bpage\b|tell\s+me\s+(?:what|when|where|which|who|how)\b|compare\b)/i.test(text)
+    || /^(?:now\s+)?(?:tell\s+me|what(?:'s|\s+is|\s+are)?|which|who|when|where|how)\b.*\b(?:shown|visible|here|page|site|result|release|releases|issue|issues|repository|repo|article|link)\b/i.test(text);
 }
 
 function normalizeOrbitCommand(command) {

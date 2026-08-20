@@ -17,19 +17,27 @@ function explicitlyRequestsExternalBrowser(value) {
   return /\b(?:use|using|with|through|in|via|open(?:\s+it|\s+this|\s+that)?\s+in)\s+(?:google\s+)?chrome\b|\b(?:use|using|with|through|in|via|open(?:\s+it|\s+this|\s+that)?\s+in)\s+safari\b|\b(?:use|using|with|through|in|via)\s+(?:firefox|edge|brave)\b/i.test(value.trim());
 }
 
+function looksLikeCareerBrowserRequest(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  const careerTarget = /\b(?:linkedin|jobright|greenhouse|lever|workday|career\s+site|job\s+site|jobs?|job\s+posting|role|application|recruiter|hiring\s+manager|outreach|connection\s+note|career\s+profile|application\s+profile)\b/i.test(text);
+  const careerAction = /\b(?:open|visit|search|find|apply|inspect|review|analy[sz]e|autofill|fill|track|mark|save|draft|write|create|post|publish|message|connect|enhance|improve|update|switch|continue|submit)\b/i.test(text);
+  return careerTarget && careerAction;
+}
+
 function looksLikeWebRequest(value) {
   const text = value.trim();
   if (!text) return false;
   return /\b(?:open|visit|browse|go\s+to|navigate\s+to|search|look\s+up|find\s+online|check\s+online|google)\b/i.test(text)
-    && /\b(?:github|youtube|amazon|wikipedia|reddit|linkedin|google|website|site|web|page|repository|repo|release|issue|article|result|link)\b|\b[a-z0-9-]+\.(?:com|org|net|io|ai|dev|app|co|edu)\b/i.test(text)
-    || /\b(?:github|youtube|amazon|wikipedia|reddit|linkedin)\b/i.test(text)
+    && /\b(?:github|youtube|amazon|wikipedia|reddit|linkedin|jobright|greenhouse|lever|workday|google|website|site|web|page|repository|repo|release|issue|article|result|link|job|application)\b|\b[a-z0-9-]+\.(?:com|org|net|io|ai|dev|app|co|edu)\b/i.test(text)
+    || /\b(?:github|youtube|amazon|wikipedia|reddit|linkedin|jobright|greenhouse|lever|workday)\b/i.test(text)
     || /\b[a-z0-9-]+\.(?:com|org|net|io|ai|dev|app|co|edu)\b/i.test(text);
 }
 
 function looksLikeBrowserFollowUp(value) {
   const text = value.trim();
-  return /^(?:now\s+)?(?:search(?:\s+for)?\b|look\s+for\b|find\s+(?:on\s+)?(?:this|the)\s+page\b|open\s+(?:the\s+)?(?:(?:first|second|third|fourth|fifth|next|previous|last|\d+(?:st|nd|rd|th))\s+)?(?:result|link|article|repository|repo|release|releases|issue|issues|page)\b|click\b|select\b|choose\b|scroll\b|go\s+(?:back|forward)\b|back\b|forward\b|reload\b|refresh\b|summarize\s+(?:this|the)\s+page\b|read\s+(?:this|the)\s+page\b|what\b.*\bpage\b|tell\s+me\s+(?:what|when|where|which|who|how)\b|compare\b|switch\s+(?:back\s+)?to\b|close\s+(?:this|current|active|the)?\s*(?:orbit\s+browser\s+)?tab\b)/i.test(text)
-    || /^(?:now\s+)?(?:tell\s+me|what(?:'s|\s+is|\s+are)?|which|who|when|where|how)\b.*\b(?:shown|visible|here|page|site|result|release|releases|issue|issues|repository|repo|article|link)\b/i.test(text);
+  return /^(?:now\s+)?(?:search(?:\s+for)?\b|look\s+for\b|find\s+(?:on\s+)?(?:this|the)\s+page\b|open\s+(?:the\s+)?(?:(?:first|second|third|fourth|fifth|next|previous|last|\d+(?:st|nd|rd|th))\s+)?(?:result|link|article|repository|repo|release|releases|issue|issues|page|job|application)\b|apply\b|autofill\b|fill\s+(?:this|the)\s+(?:application|form)\b|inspect\s+(?:this|the)\s+(?:job|application|form)\b|click\b|select\b|choose\b|scroll\b|go\s+(?:back|forward)\b|back\b|forward\b|reload\b|refresh\b|summarize\s+(?:this|the)\s+page\b|read\s+(?:this|the)\s+page\b|what\b.*\bpage\b|tell\s+me\s+(?:what|when|where|which|who|how)\b|compare\b|switch\s+(?:back\s+)?to\b|close\s+(?:this|current|active|the)?\s*(?:orbit\s+browser\s+)?tab\b)/i.test(text)
+    || /^(?:now\s+)?(?:tell\s+me|what(?:'s|\s+is|\s+are)?|which|who|when|where|how)\b.*\b(?:shown|visible|here|page|site|result|release|releases|issue|issues|repository|repo|article|link|job|application)\b/i.test(text);
 }
 
 function wantsNewOrbitTab(value) {
@@ -45,7 +53,7 @@ function normalizeOrbitCommand(command) {
   if (browserAgent) return `browser agent to ${browserAgent[1].trim()}`;
 
   if (explicitlyRequestsExternalBrowser(value)) return value;
-  if (wantsNewOrbitTab(value) || looksLikeWebRequest(value)) return `browser agent to ${value}`;
+  if (looksLikeCareerBrowserRequest(value) || wantsNewOrbitTab(value) || looksLikeWebRequest(value)) return `browser agent to ${value}`;
   if (embeddedBrowserVisible && looksLikeBrowserFollowUp(value)) return `browser agent to ${value}`;
   return value;
 }
@@ -53,7 +61,7 @@ function normalizeOrbitCommand(command) {
 async function planOrbitCommand(command) {
   const value = String(command || "").trim();
   const external = explicitlyRequestsExternalBrowser(value);
-  const browserFollowUp = !external && (wantsNewOrbitTab(value) || looksLikeWebRequest(value) || (embeddedBrowserVisible && looksLikeBrowserFollowUp(value)));
+  const browserFollowUp = !external && (looksLikeCareerBrowserRequest(value) || wantsNewOrbitTab(value) || looksLikeWebRequest(value) || (embeddedBrowserVisible && looksLikeBrowserFollowUp(value)));
 
   // A fresh browser command retargets the agent runtime. Native tab creation is
   // executed by the browser-task engine so one user request creates one tab only.

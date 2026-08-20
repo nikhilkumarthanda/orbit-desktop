@@ -29,6 +29,17 @@ test("open calculator bypasses browser context and launches native Calculator", 
   assert.ok(nativeIndex >= 0 && browserIndex >= 0 && nativeIndex < browserIndex, "native app routing must run before browser follow-up routing");
 });
 
+test("active YouTube context keeps vague trailer follow-ups inside Orbit Browser", async () => {
+  const preload = await source("preload.cjs");
+  assert.match(preload, /function activeOrbitBrowserHost/);
+  assert.match(preload, /function contextualOrbitBrowserFollowUp/);
+  assert.match(preload, /function contextualizeOrbitBrowserCommand/);
+  assert.match(preload, /play \$\{match\[1\]\.trim\(\)\} on YouTube/);
+  assert.match(preload, /const contextual = !external && contextualOrbitBrowserFollowUp\(value\)/);
+  assert.match(preload, /looksLikeCareerBrowserRequest\(value\).*\|\| contextual/s);
+  assert.ok(preload.indexOf("if (explicitlyRequestsExternalBrowser(value)) return value") < preload.indexOf("const contextual = contextualOrbitBrowserFollowUp(value)"), "explicit Chrome/Safari requests must override Orbit Browser context");
+});
+
 test("career/browser consequential actions remain approval gated", async () => {
   const [engine, preload] = await Promise.all([source("src/main/browser-task-engine.ts"), source("preload.cjs")]);
   const risky = engine.match(/const riskyLabels = .*;/)?.[0] || "";

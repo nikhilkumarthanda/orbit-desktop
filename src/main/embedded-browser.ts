@@ -1,9 +1,10 @@
-import { BrowserWindow, WebContentsView, type WebContents } from "electron";
+import { BrowserWindow, WebContentsView, ipcMain, type WebContents } from "electron";
+import { randomUUID } from "node:crypto";
 
 const PARTITION = "persist:orbit-agent";
 const SIDEBAR_WIDTH = 276;
 const PANE_GAP = 12;
-const BROWSER_TOP = 42;
+const BROWSER_TOP = 114;
 const HOST_LAYOUT_CSS = `
 html.orbit-browser-open main {
   grid-template-columns: ${SIDEBAR_WIDTH}px var(--orbit-agent-pane-width, 460px) minmax(0, 1fr) !important;
@@ -25,33 +26,38 @@ html.orbit-browser-open .assistant-shell {
   width: calc(100% - 30px) !important;
   padding: 42px 0 84px !important;
 }
-html.orbit-browser-open .assistant-heading {
-  max-width: 430px !important;
-}
-html.orbit-browser-open .assistant-heading h1 {
-  font-size: clamp(30px, 3.2vw, 43px) !important;
-}
-html.orbit-browser-open .assistant-heading p {
-  font-size: 11px !important;
-}
-html.orbit-browser-open .assistant-core {
-  width: 168px !important;
-  margin: 12px 0 9px !important;
-}
+html.orbit-browser-open .assistant-heading { max-width: 430px !important; }
+html.orbit-browser-open .assistant-heading h1 { font-size: clamp(30px, 3.2vw, 43px) !important; }
+html.orbit-browser-open .assistant-heading p { font-size: 11px !important; }
+html.orbit-browser-open .assistant-core { width: 168px !important; margin: 12px 0 9px !important; }
 html.orbit-browser-open .assistant-shell .space-interaction,
-html.orbit-browser-open .activity-strip {
-  width: 100% !important;
-}
+html.orbit-browser-open .activity-strip { width: 100% !important; }
 html.orbit-browser-open .quick-prompts,
-html.orbit-browser-open .space-stats {
-  display: none !important;
-}
-html.orbit-browser-open .conversation-history {
-  max-height: 190px !important;
-}
+html.orbit-browser-open .space-stats { display: none !important; }
+html.orbit-browser-open .conversation-history { max-height: 190px !important; }
 `;
 
-let view: WebContentsView | null = null;
+const CURSOR_FACTORY_JS = `(() => {
+  let node = document.getElementById('__orbit_agent_cursor');
+  if (node) return node;
+  node = document.createElement('div');
+  node.id = '__orbit_agent_cursor';
+  node.setAttribute('aria-hidden', 'true');
+  node.style.cssText = 'position:fixed;left:0;top:0;width:20px;height:20px;border:2px solid #9b7cff;border-radius:50%;background:rgba(155,124,255,.12);box-shadow:0 0 0 5px rgba(155,124,255,.10),0 0 22px rgba(155,124,255,.72);pointer-events:none;z-index:2147483647;opacity:.88;transform:translate3d(22px,22px,0);transition:transform 420ms cubic-bezier(.2,.8,.2,1),opacity 120ms ease;mix-blend-mode:difference;';
+  const dot = document.createElement('i');
+  dot.style.cssText = 'position:absolute;left:50%;top:50%;width:5px;height:5px;border-radius:50%;background:white;transform:translate(-50%,-50%);box-shadow:0 0 8px white;';
+  const badge = document.createElement('span');
+  badge.textContent = 'ORBIT';
+  badge.style.cssText = 'position:absolute;left:16px;top:16px;padding:3px 6px;border-radius:999px;background:#171126;color:#dcd4ff;font:700 8px/1.2 -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.12em;box-shadow:0 4px 14px rgba(0,0,0,.35);white-space:nowrap;';
+  node.append(dot, badge);
+  document.documentElement.appendChild(node);
+  return node;
+})()`;
+
+type BrowserTab = { id: string; view: WebContentsView };
+
+let tabs: BrowserTab[] = [];
+let activeTabId = "";
 let host: BrowserWindow | null = null;
 let resizeListener: (() => void) | null = null;
 let layoutCssKey: string | null = null;
@@ -59,8 +65,8 @@ let visible = false;
 
 function publicUrl(value: string) {
   const url = new URL(value);
-  if (!["http:", "https:"].includes(url.protocol)) throw new Error("Orbit's embedded browser only opens HTTP or HTTPS pages");
-  if (/^(?:localhost|127\.|0\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(url.hostname)) throw new Error("Orbit's embedded browser cannot open private network addresses");
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error("Orbit Browser only opens HTTP or HTTPS pages");
+  if (/^(?:localhost|127\.|0\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(url.hostname)) throw new Error("Orbit Browser cannot open private network addresses");
   return url.toString();
 }
 
@@ -74,6 +80,10 @@ function findHostWindow() {
   })[0];
 }
 
+function activeTab() {
+  return tabs.find(tab => tab.id === activeTabId) || tabs[0] || null;
+}
+
 function paneGeometry(width: number) {
   const available = Math.max(0, width - SIDEBAR_WIDTH);
   let agentWidth = Math.min(560, Math.max(390, Math.round(available * 0.4)));
@@ -82,11 +92,7 @@ function paneGeometry(width: number) {
     agentWidth = Math.max(340, available - minimumBrowserWidth - PANE_GAP * 2);
   }
   const browserX = SIDEBAR_WIDTH + agentWidth + PANE_GAP;
-  return {
-    agentWidth,
-    browserX,
-    browserWidth: Math.max(320, width - browserX - PANE_GAP),
-  };
+  return { agentWidth, browserX, browserWidth: Math.max(320, width - browserX - PANE_GAP) };
 }
 
 function syncHostLayout(open = visible) {
@@ -99,64 +105,103 @@ function syncHostLayout(open = visible) {
 }
 
 function layout() {
-  if (!host || host.isDestroyed() || !view) return;
+  if (!host || host.isDestroyed()) return;
   const bounds = host.getContentBounds();
   const geometry = paneGeometry(bounds.width);
   syncHostLayout();
-  view.setBounds({
-    x: geometry.browserX,
-    y: BROWSER_TOP,
-    width: geometry.browserWidth,
-    height: Math.max(320, bounds.height - BROWSER_TOP - PANE_GAP),
-  });
+  for (const tab of tabs) {
+    tab.view.setBounds({
+      x: geometry.browserX,
+      y: BROWSER_TOP,
+      width: geometry.browserWidth,
+      height: Math.max(280, bounds.height - BROWSER_TOP - PANE_GAP),
+    });
+    tab.view.setVisible(visible && tab.id === activeTabId);
+  }
+}
+
+function tabSnapshot(tab: BrowserTab) {
+  const contents = tab.view.webContents;
+  return {
+    id: tab.id,
+    url: contents.isDestroyed() ? "" : contents.getURL(),
+    title: contents.isDestroyed() ? "" : (contents.getTitle() || (contents.getURL() ? "Loading…" : "New tab")),
+    loading: !contents.isDestroyed() && contents.isLoading(),
+  };
+}
+
+export function embeddedBrowserState() {
+  const current = activeTab();
+  const contents = current && !current.view.webContents.isDestroyed() ? current.view.webContents : null;
+  return {
+    visible,
+    url: contents?.getURL() || "",
+    title: contents?.getTitle() || (contents ? "New tab" : ""),
+    loading: Boolean(contents?.isLoading()),
+    canGoBack: Boolean(contents?.navigationHistory.canGoBack()),
+    canGoForward: Boolean(contents?.navigationHistory.canGoForward()),
+    activeTabId: current?.id || "",
+    tabs: tabs.filter(tab => !tab.view.webContents.isDestroyed()).map(tabSnapshot),
+  };
 }
 
 function emitState() {
-  if (!host || host.isDestroyed() || !view || view.webContents.isDestroyed()) return;
-  const contents = view.webContents;
-  host.webContents.send("orbit:embedded-browser:state", {
-    visible,
-    url: contents.getURL(),
-    title: contents.getTitle(),
-    loading: contents.isLoading(),
-    canGoBack: contents.navigationHistory.canGoBack(),
-    canGoForward: contents.navigationHistory.canGoForward(),
-  });
+  if (!host || host.isDestroyed()) return;
+  host.webContents.send("orbit:embedded-browser:state", embeddedBrowserState());
 }
 
 async function installAgentCursor(target: WebContents) {
   if (target.isDestroyed() || !target.getURL().startsWith("http")) return;
   await target.executeJavaScript(`(() => {
     if (!document.documentElement) return false;
-    let node = document.getElementById('__orbit_agent_cursor');
-    if (!node) {
-      node = document.createElement('div');
-      node.id = '__orbit_agent_cursor';
-      node.setAttribute('aria-hidden', 'true');
-      node.style.cssText = 'position:fixed;left:0;top:0;width:20px;height:20px;border:2px solid #9b7cff;border-radius:50%;background:rgba(155,124,255,.12);box-shadow:0 0 0 5px rgba(155,124,255,.10),0 0 22px rgba(155,124,255,.72);pointer-events:none;z-index:2147483647;opacity:.88;transform:translate3d(22px,22px,0);transition:transform 420ms cubic-bezier(.2,.8,.2,1),opacity 120ms ease;mix-blend-mode:difference;';
-      const dot = document.createElement('i');
-      dot.style.cssText = 'position:absolute;left:50%;top:50%;width:5px;height:5px;border-radius:50%;background:white;transform:translate(-50%,-50%);box-shadow:0 0 8px white;';
-      const badge = document.createElement('span');
-      badge.textContent = 'ORBIT';
-      badge.style.cssText = 'position:absolute;left:16px;top:16px;padding:3px 6px;border-radius:999px;background:#171126;color:#dcd4ff;font:700 8px/1.2 -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.12em;box-shadow:0 4px 14px rgba(0,0,0,.35);white-space:nowrap;';
-      node.append(dot, badge);
-      document.documentElement.appendChild(node);
-    }
-    node.style.opacity = '.88';
+    const cursor = ${CURSOR_FACTORY_JS};
+    cursor.style.opacity = '.88';
     return true;
   })()`, true).catch(() => false);
 }
 
-async function ensureView() {
-  const nextHost = findHostWindow();
-  if (view && host === nextHost && !view.webContents.isDestroyed()) return view;
+function closeAllTabs() {
+  if (host && !host.isDestroyed()) {
+    for (const tab of tabs) {
+      try { host.contentView.removeChildView(tab.view); } catch {}
+      if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
+    }
+  } else {
+    for (const tab of tabs) if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
+  }
+  tabs = [];
+  activeTabId = "";
+}
 
-  if (view && host && !host.isDestroyed()) host.contentView.removeChildView(view);
+async function ensureHost() {
+  const nextHost = findHostWindow();
+  if (host === nextHost && !host.isDestroyed()) return host;
+
   if (resizeListener && host && !host.isDestroyed()) host.removeListener("resize", resizeListener);
+  if (layoutCssKey && host && !host.isDestroyed()) void host.webContents.removeInsertedCSS(layoutCssKey).catch(() => {});
+  closeAllTabs();
 
   host = nextHost;
   layoutCssKey = await host.webContents.insertCSS(HOST_LAYOUT_CSS).catch(() => null);
-  view = new WebContentsView({
+  resizeListener = () => layout();
+  host.on("resize", resizeListener);
+
+  const attachedHost = host;
+  attachedHost.once("closed", () => {
+    if (host !== attachedHost) return;
+    closeAllTabs();
+    host = null;
+    resizeListener = null;
+    layoutCssKey = null;
+    visible = false;
+  });
+  return host;
+}
+
+async function createTab(url?: string) {
+  const currentHost = await ensureHost();
+  const id = randomUUID();
+  const tabView = new WebContentsView({
     webPreferences: {
       partition: PARTITION,
       sandbox: true,
@@ -167,82 +212,114 @@ async function ensureView() {
       allowRunningInsecureContent: false,
     },
   });
-  view.setBackgroundColor("#0b0c10");
-  view.setBorderRadius(16);
-  view.setVisible(false);
-  host.contentView.addChildView(view);
+  tabView.setBackgroundColor("#0b0c10");
+  tabView.setBorderRadius(16);
+  tabView.setVisible(false);
+  currentHost.contentView.addChildView(tabView);
 
-  resizeListener = () => layout();
-  host.on("resize", resizeListener);
+  const tab: BrowserTab = { id, view: tabView };
+  tabs.push(tab);
+  activeTabId = id;
 
-  const attachedHost = host;
-  const attachedView = view;
-  attachedHost.once("closed", () => {
-    attachedView.webContents.close();
-    if (view === attachedView) view = null;
-    if (host === attachedHost) host = null;
-    resizeListener = null;
-    layoutCssKey = null;
-    visible = false;
-  });
-
-  const contents = view.webContents;
-  contents.setWindowOpenHandler(({ url }) => {
-    try { void contents.loadURL(publicUrl(url)); } catch {}
+  const contents = tabView.webContents;
+  contents.setWindowOpenHandler(({ url: popupUrl }) => {
+    try { void newTab(publicUrl(popupUrl)); } catch {}
     return { action: "deny" };
   });
-  contents.on("will-navigate", (event, url) => {
-    try { publicUrl(url); }
+  contents.on("will-navigate", (event, nextUrl) => {
+    try { publicUrl(nextUrl); }
     catch { event.preventDefault(); }
   });
-  for (const event of ["did-start-loading", "did-stop-loading", "did-navigate", "did-navigate-in-page", "page-title-updated"] as const) {
+  for (const event of ["did-start-loading", "did-navigate", "did-navigate-in-page", "page-title-updated"] as const) {
     contents.on(event as any, () => emitState());
   }
-  contents.on("did-stop-loading", () => { void installAgentCursor(contents); });
-  contents.on("render-process-gone", () => {
-    visible = false;
-    syncHostLayout(false);
+  contents.on("did-stop-loading", () => {
+    if (tab.id === activeTabId) void installAgentCursor(contents);
     emitState();
   });
+  contents.on("render-process-gone", () => emitState());
 
   layout();
-  return view;
+  if (url) await contents.loadURL(publicUrl(url));
+  if (visible) {
+    tabView.setVisible(true);
+    void installAgentCursor(contents);
+  }
+  emitState();
+  return tab;
+}
+
+async function ensureTab() {
+  await ensureHost();
+  return activeTab() || createTab();
 }
 
 export async function showEmbeddedBrowser() {
-  const browserView = await ensureView();
+  await ensureTab();
   visible = true;
   syncHostLayout(true);
-  browserView.setVisible(true);
   layout();
-  void installAgentCursor(browserView.webContents);
+  const current = activeTab();
+  if (current) void installAgentCursor(current.view.webContents);
   emitState();
   return embeddedBrowserState();
 }
 
 export function hideEmbeddedBrowser() {
   visible = false;
-  view?.setVisible(false);
+  for (const tab of tabs) tab.view.setVisible(false);
   syncHostLayout(false);
   emitState();
   return embeddedBrowserState();
 }
 
-export function embeddedBrowserState() {
-  const contents = view && !view.webContents.isDestroyed() ? view.webContents : null;
-  return {
-    visible,
-    url: contents?.getURL() || "",
-    title: contents?.getTitle() || "",
-    loading: Boolean(contents?.isLoading()),
-    canGoBack: Boolean(contents?.navigationHistory.canGoBack()),
-    canGoForward: Boolean(contents?.navigationHistory.canGoForward()),
-  };
+export async function newTab(url?: string) {
+  await ensureHost();
+  visible = true;
+  syncHostLayout(true);
+  await createTab(url);
+  layout();
+  emitState();
+  return embeddedBrowserState();
+}
+
+export async function switchTab(id: string) {
+  await ensureHost();
+  const target = tabs.find(tab => tab.id === id);
+  if (!target) return embeddedBrowserState();
+  activeTabId = target.id;
+  visible = true;
+  syncHostLayout(true);
+  layout();
+  void installAgentCursor(target.view.webContents);
+  emitState();
+  return embeddedBrowserState();
+}
+
+export async function closeTab(id: string) {
+  await ensureHost();
+  const index = tabs.findIndex(tab => tab.id === id);
+  if (index < 0) return embeddedBrowserState();
+  const [removed] = tabs.splice(index, 1);
+  try { host?.contentView.removeChildView(removed.view); } catch {}
+  if (!removed.view.webContents.isDestroyed()) removed.view.webContents.close();
+
+  if (activeTabId === id) {
+    const replacement = tabs[Math.min(index, tabs.length - 1)] || tabs.at(-1) || null;
+    activeTabId = replacement?.id || "";
+  }
+  if (!tabs.length) {
+    visible = false;
+    syncHostLayout(false);
+  }
+  layout();
+  emitState();
+  return embeddedBrowserState();
 }
 
 async function contents() {
-  const browserView = await ensureView();
-  return browserView.webContents;
+  const tab = await ensureTab();
+  return tab.view.webContents;
 }
 
 export async function openUrl(url: string) {
@@ -253,13 +330,8 @@ export async function openUrl(url: string) {
   emitState();
 }
 
-export async function pageTitle() {
-  return (await contents()).getTitle();
-}
-
-export async function currentUrl() {
-  return (await contents()).getURL();
-}
+export async function pageTitle() { return (await contents()).getTitle(); }
+export async function currentUrl() { return (await contents()).getURL(); }
 
 export async function goBack() {
   const target = await contents();
@@ -305,12 +377,7 @@ export async function actionSnapshot(): Promise<ActionSnapshot> {
         return { kind, label: label.slice(0, 120) };
       })
       .filter(item => item.label);
-    return {
-      title: document.title,
-      url: location.href,
-      text: clean(document.body?.innerText).slice(0, 10000),
-      controls,
-    };
+    return { title: document.title, url: location.href, text: clean(document.body?.innerText).slice(0, 10000), controls };
   })()`, true) as ActionSnapshot;
   emitState();
   return snapshot;
@@ -323,22 +390,7 @@ export async function clickByLabel(label: string) {
     const wanted = ${encoded};
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const clean = value => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-    const cursor = (() => {
-      let node = document.getElementById('__orbit_agent_cursor');
-      if (node) return node;
-      node = document.createElement('div');
-      node.id = '__orbit_agent_cursor';
-      node.setAttribute('aria-hidden', 'true');
-      node.style.cssText = 'position:fixed;left:0;top:0;width:20px;height:20px;border:2px solid #9b7cff;border-radius:50%;background:rgba(155,124,255,.12);box-shadow:0 0 0 5px rgba(155,124,255,.10),0 0 22px rgba(155,124,255,.72);pointer-events:none;z-index:2147483647;opacity:0;transform:translate3d(28px,28px,0);transition:transform 420ms cubic-bezier(.2,.8,.2,1),opacity 120ms ease;mix-blend-mode:difference;';
-      const dot = document.createElement('i');
-      dot.style.cssText = 'position:absolute;left:50%;top:50%;width:5px;height:5px;border-radius:50%;background:white;transform:translate(-50%,-50%);box-shadow:0 0 8px white;';
-      const badge = document.createElement('span');
-      badge.textContent = 'ORBIT';
-      badge.style.cssText = 'position:absolute;left:16px;top:16px;padding:3px 6px;border-radius:999px;background:#171126;color:#dcd4ff;font:700 8px/1.2 -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.12em;box-shadow:0 4px 14px rgba(0,0,0,.35);white-space:nowrap;';
-      node.append(dot, badge);
-      document.documentElement.appendChild(node);
-      return node;
-    })();
+    const cursor = ${CURSOR_FACTORY_JS};
     const elements = Array.from(document.querySelectorAll('button,a[href],[role="button"],[role="link"],input[type="button"],input[type="submit"]'));
     const ranked = elements.map(element => {
       const text = clean(element.getAttribute('aria-label') || element.textContent || element.getAttribute('value'));
@@ -376,22 +428,7 @@ export async function fillByLabel(label: string, value: string) {
     const value = ${encodedValue};
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const clean = text => String(text || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-    const cursor = (() => {
-      let node = document.getElementById('__orbit_agent_cursor');
-      if (node) return node;
-      node = document.createElement('div');
-      node.id = '__orbit_agent_cursor';
-      node.setAttribute('aria-hidden', 'true');
-      node.style.cssText = 'position:fixed;left:0;top:0;width:20px;height:20px;border:2px solid #9b7cff;border-radius:50%;background:rgba(155,124,255,.12);box-shadow:0 0 0 5px rgba(155,124,255,.10),0 0 22px rgba(155,124,255,.72);pointer-events:none;z-index:2147483647;opacity:0;transform:translate3d(28px,28px,0);transition:transform 420ms cubic-bezier(.2,.8,.2,1),opacity 120ms ease;mix-blend-mode:difference;';
-      const dot = document.createElement('i');
-      dot.style.cssText = 'position:absolute;left:50%;top:50%;width:5px;height:5px;border-radius:50%;background:white;transform:translate(-50%,-50%);box-shadow:0 0 8px white;';
-      const badge = document.createElement('span');
-      badge.textContent = 'ORBIT';
-      badge.style.cssText = 'position:absolute;left:16px;top:16px;padding:3px 6px;border-radius:999px;background:#171126;color:#dcd4ff;font:700 8px/1.2 -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.12em;box-shadow:0 4px 14px rgba(0,0,0,.35);white-space:nowrap;';
-      node.append(dot, badge);
-      document.documentElement.appendChild(node);
-      return node;
-    })();
+    const cursor = ${CURSOR_FACTORY_JS};
     const fields = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="password"]),textarea'));
     const field = fields.find(element => {
       const id = element.id;
@@ -443,22 +480,7 @@ export async function selectByLabel(label: string, value: string) {
     const optionWanted = ${encodedValue};
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const clean = text => String(text || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-    const cursor = (() => {
-      let node = document.getElementById('__orbit_agent_cursor');
-      if (node) return node;
-      node = document.createElement('div');
-      node.id = '__orbit_agent_cursor';
-      node.setAttribute('aria-hidden', 'true');
-      node.style.cssText = 'position:fixed;left:0;top:0;width:20px;height:20px;border:2px solid #9b7cff;border-radius:50%;background:rgba(155,124,255,.12);box-shadow:0 0 0 5px rgba(155,124,255,.10),0 0 22px rgba(155,124,255,.72);pointer-events:none;z-index:2147483647;opacity:0;transform:translate3d(28px,28px,0);transition:transform 420ms cubic-bezier(.2,.8,.2,1),opacity 120ms ease;mix-blend-mode:difference;';
-      const dot = document.createElement('i');
-      dot.style.cssText = 'position:absolute;left:50%;top:50%;width:5px;height:5px;border-radius:50%;background:white;transform:translate(-50%,-50%);box-shadow:0 0 8px white;';
-      const badge = document.createElement('span');
-      badge.textContent = 'ORBIT';
-      badge.style.cssText = 'position:absolute;left:16px;top:16px;padding:3px 6px;border-radius:999px;background:#171126;color:#dcd4ff;font:700 8px/1.2 -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.12em;box-shadow:0 4px 14px rgba(0,0,0,.35);white-space:nowrap;';
-      node.append(dot, badge);
-      document.documentElement.appendChild(node);
-      return node;
-    })();
+    const cursor = ${CURSOR_FACTORY_JS};
     const menus = Array.from(document.querySelectorAll('select'));
     const menu = menus.find(element => {
       const id = element.id;
@@ -491,22 +513,7 @@ export async function scroll(direction: "up" | "down" = "down", amount = 800) {
   const target = await contents();
   await target.executeJavaScript(`(async () => {
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-    const cursor = (() => {
-      let node = document.getElementById('__orbit_agent_cursor');
-      if (node) return node;
-      node = document.createElement('div');
-      node.id = '__orbit_agent_cursor';
-      node.setAttribute('aria-hidden', 'true');
-      node.style.cssText = 'position:fixed;left:0;top:0;width:20px;height:20px;border:2px solid #9b7cff;border-radius:50%;background:rgba(155,124,255,.12);box-shadow:0 0 0 5px rgba(155,124,255,.10),0 0 22px rgba(155,124,255,.72);pointer-events:none;z-index:2147483647;opacity:0;transform:translate3d(28px,28px,0);transition:transform 420ms cubic-bezier(.2,.8,.2,1),opacity 120ms ease;mix-blend-mode:difference;';
-      const dot = document.createElement('i');
-      dot.style.cssText = 'position:absolute;left:50%;top:50%;width:5px;height:5px;border-radius:50%;background:white;transform:translate(-50%,-50%);box-shadow:0 0 8px white;';
-      const badge = document.createElement('span');
-      badge.textContent = 'ORBIT';
-      badge.style.cssText = 'position:absolute;left:16px;top:16px;padding:3px 6px;border-radius:999px;background:#171126;color:#dcd4ff;font:700 8px/1.2 -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.12em;box-shadow:0 4px 14px rgba(0,0,0,.35);white-space:nowrap;';
-      node.append(dot, badge);
-      document.documentElement.appendChild(node);
-      return node;
-    })();
+    const cursor = ${CURSOR_FACTORY_JS};
     const x = Math.max(12, innerWidth - 46);
     const y = Math.max(24, Math.round(innerHeight * .62));
     cursor.style.opacity = '1';
@@ -522,3 +529,20 @@ export async function scroll(direction: "up" | "down" = "down", amount = 800) {
     return true;
   })()`, true);
 }
+
+function registerBrowserChromeIpc() {
+  const registrations: Array<[string, (...args: any[]) => any]> = [
+    ["orbit:embedded-browser:tab:new", (_event, url?: string) => newTab(url)],
+    ["orbit:embedded-browser:tab:switch", (_event, id: string) => switchTab(String(id || ""))],
+    ["orbit:embedded-browser:tab:close", (_event, id: string) => closeTab(String(id || ""))],
+    ["orbit:embedded-browser:back", () => goBack()],
+    ["orbit:embedded-browser:forward", () => goForward()],
+    ["orbit:embedded-browser:reload", () => reload()],
+  ];
+  for (const [channel, handler] of registrations) {
+    ipcMain.removeHandler(channel);
+    ipcMain.handle(channel, handler);
+  }
+}
+
+registerBrowserChromeIpc();

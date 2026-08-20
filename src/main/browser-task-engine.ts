@@ -103,7 +103,7 @@ function directCareerCommand(goal: string) {
 }
 
 function requiresReasoningAfterNavigation(goal: string) {
-  return /\b(?:tell\s+me|summari[sz]e|compare|explain|read\s+(?:this|the)|find\s+out|report|what\s+(?:is|are|was|were)|who\s+is|when\s+(?:is|was|did)|where\s+(?:is|was)|why\b|how\b|open\s+(?:the\s+)?(?:first|second|third|next|result|article|repository|repo|release|issue))\b/i.test(goal);
+  return /\b(?:play|tell\s+me|summari[sz]e|compare|explain|read\s+(?:this|the)|find\s+out|report|what\s+(?:is|are|was|were)|who\s+is|when\s+(?:is|was|did)|where\s+(?:is|was)|why\b|how\b|open\s+(?:the\s+)?(?:first|second|third|next|result|article|repository|repo|release|issue))\b/i.test(goal);
 }
 
 function youtubeUrl(url: string) {
@@ -138,7 +138,7 @@ function youtubeResultControl(query: string, controls: Array<{ kind: string; lab
 
 function deterministicGoalSatisfied(goal: string, pageUrl: string, pageText: string) {
   const play = youtubePlayTerms(goal);
-  if (play && youtubeWatchUrl(pageUrl)) return true;
+  if (play) return youtubeWatchUrl(pageUrl);
   if (requiresReasoningAfterNavigation(goal)) return false;
   const target = initialGoalUrl(goal);
   if (!target || !usablePage(pageUrl, pageText)) return false;
@@ -226,7 +226,9 @@ function sameDestination(current: string, target: string) {
     const targetUrl = new URL(target);
     const normalizedCurrentPath = currentUrl.pathname.replace(/\/$/, "") || "/";
     const normalizedTargetPath = targetUrl.pathname.replace(/\/$/, "") || "/";
-    return currentUrl.hostname === targetUrl.hostname && (normalizedTargetPath === "/" || normalizedCurrentPath === normalizedTargetPath);
+    if (currentUrl.hostname !== targetUrl.hostname || (normalizedTargetPath !== "/" && normalizedCurrentPath !== normalizedTargetPath)) return false;
+    if (targetUrl.search) return currentUrl.search === targetUrl.search;
+    return normalizedTargetPath === "/" || normalizedCurrentPath === normalizedTargetPath;
   } catch { return false; }
 }
 

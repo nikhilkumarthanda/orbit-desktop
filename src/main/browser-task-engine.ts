@@ -5,7 +5,7 @@ import { answerWithGemini, geminiStatus } from "./gemini.js";
 import { ollamaStatus, planBrowserActionWithOllama } from "./ollama.js";
 import type { BrowserTask, BrowserTaskAction, BrowserTaskEvent, EmbeddedBrowserState } from "../shared/contracts.js";
 
-const riskyLabels = /\b(?:send|submit(?:\s+application)?|purchase|buy|pay|book|publish|delete|remove|confirm order|place order|accept|agree|connect)\b/i;
+const riskyLabels = /\b(?:send|submit(?:\s+application)?|purchase|buy|pay|book|publish|post|delete|remove|confirm order|place order|accept|agree|connect)\b/i;
 const MAX_STEPS = 20;
 const STEP_TIMEOUT_MS = 105_000;
 const ACTION_TIMEOUT_MS = 25_000;
@@ -59,7 +59,21 @@ function explicitGoalUrl(goal: string) {
   return NAMED_SITES.find(([pattern]) => pattern.test(goal))?.[1] || "";
 }
 
+function youtubePlayTerms(goal: string) {
+  if (!/\byoutube\b/i.test(goal) || !/\bplay\b/i.test(goal)) return "";
+  return goal
+    .replace(/^(?:hey\s+orbit[,;:\s-]*)?/i, "")
+    .replace(/^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?/i, "")
+    .replace(/\bplay\b/gi, " ")
+    .replace(/\b(?:on\s+)?youtube\b/gi, " ")
+    .replace(/\b(?:for\s+me|please|now)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function searchTerms(goal: string) {
+  const play = youtubePlayTerms(goal);
+  if (play) return play;
   const match = goal.match(/\b(?:search|look\s+up|find)(?:\s+(?:on|in))?\s+(?:github|wikipedia|youtube|amazon|npm(?:js)?)?\s*(?:for\s+)?(.+?)(?=,\s*(?:and|then)\b|\s+and\s+(?:tell|show|give|report|find out|open)\b|$)/i);
   return match?.[1]?.trim().replace(/^the\s+/i, "") || "";
 }
@@ -92,7 +106,39 @@ function requiresReasoningAfterNavigation(goal: string) {
   return /\b(?:tell\s+me|summari[sz]e|compare|explain|read\s+(?:this|the)|find\s+out|report|what\s+(?:is|are|was|were)|who\s+is|when\s+(?:is|was|did)|where\s+(?:is|was)|why\b|how\b|open\s+(?:the\s+)?(?:first|second|third|next|result|article|repository|repo|release|issue))\b/i.test(goal);
 }
 
+function youtubeUrl(url: string) {
+  try { return /(?:^|\.)youtube\.com$/i.test(new URL(url).hostname); }
+  catch { return false; }
+}
+
+function youtubeWatchUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    return /(?:^|\.)youtube\.com$/i.test(parsed.hostname) && parsed.pathname === "/watch" && Boolean(parsed.searchParams.get("v"));
+  } catch { return false; }
+}
+
+function youtubeResultControl(query: string, controls: Array<{ kind: string; label: string }>) {
+  const stop = new Set(["the", "a", "an", "and", "or", "of", "to", "for", "on", "in", "official", "video"]);
+  const tokens = query.toLowerCase().split(/[^a-z0-9]+/).filter(token => token.length > 2 && !stop.has(token));
+  const candidates = controls
+    .filter(control => /^(?:a|link)$/i.test(control.kind) && control.label.trim().length >= 4)
+    .filter(control => !/^(?:home|shorts|subscriptions|you|history|sign in|youtube|explore|trending)$/i.test(control.label.trim()))
+    .map(control => {
+      const label = control.label.toLowerCase();
+      const score = tokens.reduce((total, token) => total + (label.includes(token) ? 3 : 0), 0)
+        + (/trailer/i.test(query) && /trailer/i.test(label) ? 2 : 0)
+        + (label.includes(query.toLowerCase()) ? 6 : 0);
+      return { control, score };
+    })
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+  return candidates[0]?.control || null;
+}
+
 function deterministicGoalSatisfied(goal: string, pageUrl: string, pageText: string) {
+  const play = youtubePlayTerms(goal);
+  if (play && youtubeWatchUrl(pageUrl)) return true;
   if (requiresReasoningAfterNavigation(goal)) return false;
   const target = initialGoalUrl(goal);
   if (!target || !usablePage(pageUrl, pageText)) return false;
@@ -185,6 +231,19 @@ function sameDestination(current: string, target: string) {
 }
 
 function usablePage(url: string, text: string) { return /^https?:\/\//i.test(url) && text.trim().length >= 20; }
+
+async function dynamicPageSnapshot(goal: string) {
+  let page = await browser.actionSnapshot();
+  if (!youtubePlayTerms(goal) || !youtubeUrl(page.url) || usablePage(page.url, page.text) || youtubeWatchUrl(page.url)) return page;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    if (cancelled) throw new Error("Browser task cancelled");
+    if (active) active.summary = `Waiting for YouTube to finish rendering · ${attempt}/4`;
+    await new Promise(resolve => setTimeout(resolve, 900 + attempt * 350));
+    page = await browser.actionSnapshot();
+    if (usablePage(page.url, page.text) || youtubeWatchUrl(page.url)) break;
+  }
+  return page;
+}
 
 function githubSecondaryRateLimit(url: string, text: string) {
   try { if (!/(?:^|\.)github\.com$/i.test(new URL(url).hostname)) return false; }
@@ -316,11 +375,26 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
   }
   active.summary = steps.length ? "Inspecting the updated page" : "Inspecting the active Orbit Browser tab";
   emit(listener, "status", active.summary);
-  const page = await browser.actionSnapshot();
+  const page = await dynamicPageSnapshot(goal);
   if (cancelled) throw new Error("Browser task cancelled");
   active.url = page.url;
   active.title = page.title;
   if (githubSecondaryRateLimit(page.url, page.text)) throw new Error("GITHUB_SECONDARY_RATE_LIMIT");
+
+  const playQuery = youtubePlayTerms(goal);
+  if (playQuery && youtubeWatchUrl(page.url)) {
+    return { type: "complete", reason: `Opened the matching YouTube video for “${playQuery}” in Orbit Browser` };
+  }
+  if (playQuery && youtubeUrl(page.url)) {
+    try {
+      const parsed = new URL(page.url);
+      if (parsed.pathname.startsWith("/results")) {
+        const result = youtubeResultControl(playQuery, page.controls);
+        if (result) return { type: "click", label: result.label, reason: `Opening the best matching YouTube result for “${playQuery}”` };
+      }
+    } catch {}
+  }
+
   const fingerprint = pageFingerprint(page);
   if (fingerprint === lastPageFingerprint) stagnantPageRounds += 1;
   else { lastPageFingerprint = fingerprint; stagnantPageRounds = 0; loopRecoveryAttempts = 0; }
@@ -331,6 +405,8 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
   if (!usablePage(page.url, page.text)) {
     const goalUrl = initialGoalUrl(goal);
     if (goalUrl && !sameDestination(page.url, goalUrl)) return { type: "navigate", url: goalUrl, reason: `Opening ${new URL(goalUrl).hostname} inside Orbit` };
+    const alreadyReloaded = steps.some(step => step.action.type === "reload");
+    if (playQuery && youtubeUrl(page.url) && !alreadyReloaded) return { type: "reload", reason: "YouTube is still rendering, so Orbit is retrying this tab once before giving up" };
     throw new Error("The active Orbit Browser page did not finish loading, so Orbit did not continue from model memory");
   }
   active.summary = `Planning browser step ${steps.length + 1}`;
@@ -339,7 +415,7 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
   const noProgress = stagnantPageRounds > 0 ? `\nProgress warning: the visible page has been materially unchanged for ${stagnantPageRounds} planning round(s). Do NOT repeat the same action; choose a different control/action that can advance the goal.` : "";
   const latestState = browser.embeddedBrowserState() as EmbeddedBrowserState;
   const tabContext = latestState.tabs.map((tab, index) => ({ index, id: tab.id, active: tab.id === latestState.activeTabId, title: tab.title, url: tab.url }));
-  const prompt = `You are Orbit's browser controller. Orbit Browser is a native multi-tab browser. Choose exactly one safe next action to advance the user's goal.\nGoal: ${goal}\nActive page: ${page.title} (${page.url})\nOrbit Browser tabs: ${JSON.stringify(tabContext)}\nRecent steps:\n${history || "none"}${noProgress}\nVisible controls: ${JSON.stringify(page.controls.slice(0, 60))}\nVisible text: ${page.text.slice(0, 7000)}\nReturn JSON only: {"type":"navigate|new_tab|switch_tab|close_tab|back|forward|reload|click|fill|select|scroll|wait|complete|ask_user","url":"","label":"","value":"","direction":"down|up","tabId":"","tabIndex":0,"reason":"short explanation"}. Prefer native tab/navigation actions when they match the user's request. Opening an Apply or Easy Apply flow is allowed without confirmation because it does not submit an application. Final submission, sending a message, connecting, publishing, purchasing, paying, deleting, accepting, agreeing, or other consequential external actions MUST use ask_user immediately before the action. Never guess or fill work authorization, sponsorship, visa, citizenship, salary/compensation, demographic/EEO, disability, veteran, identity, authentication, signature, or attestation fields; use ask_user for those. For navigate/new_tab with a URL, url MUST be an absolute http:// or https:// URL. Use tabId from Orbit Browser tabs when switching or closing a specific tab. Use labels exactly as shown for page controls. Never repeat a failed action. Use complete only when the goal is visibly satisfied. Never answer from memory instead of using the browser. Never enter passwords, payment data, government IDs, or authentication codes.`;
+  const prompt = `You are Orbit's browser controller. Orbit Browser is a native multi-tab browser. Choose exactly one safe next action to advance the user's goal.\nGoal: ${goal}\nActive page: ${page.title} (${page.url})\nOrbit Browser tabs: ${JSON.stringify(tabContext)}\nRecent steps:\n${history || "none"}${noProgress}\nVisible controls: ${JSON.stringify(page.controls.slice(0, 60))}\nVisible text: ${page.text.slice(0, 7000)}\nReturn JSON only: {"type":"navigate|new_tab|switch_tab|close_tab|back|forward|reload|click|fill|select|scroll|wait|complete|ask_user","url":"","label":"","value":"","direction":"down|up","tabId":"","tabIndex":0,"reason":"short explanation"}. Prefer native tab/navigation actions when they match the user's request. Opening an Apply or Easy Apply flow is allowed without confirmation because it does not submit an application. Final submission, sending a message, connecting, posting/publishing, purchasing, paying, deleting, accepting, agreeing, or other consequential external actions MUST use ask_user immediately before the action. Never guess or fill work authorization, sponsorship, visa, citizenship, salary/compensation, demographic/EEO, disability, veteran, identity, authentication, signature, or attestation fields; use ask_user for those. For navigate/new_tab with a URL, url MUST be an absolute http:// or https:// URL. Use tabId from Orbit Browser tabs when switching or closing a specific tab. Use labels exactly as shown for page controls. Never repeat a failed action. Use complete only when the goal is visibly satisfied. Never answer from memory instead of using the browser. Never enter passwords, payment data, government IDs, or authentication codes.`;
   const normalized = normalizePlannedAction(await planBrowserStep(prompt, listener), page.url);
   let parsed = avoidActionLoop(normalized, page, steps);
   if (parsed.type === "wait" && parsed.reason === LOOP_RECOVERY_MARKER) {
@@ -365,7 +441,7 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
     } else { parsed = recovered; stagnantPageRounds = Math.max(0, stagnantPageRounds - 2); }
   }
   if (!(SUPPORTED_ACTIONS as readonly string[]).includes(parsed.type)) throw new Error("Orbit's browser planner returned an unsupported action");
-  if (parsed.type === "complete" && !usablePage(page.url, page.text)) throw new Error("Orbit refused to complete a browser task from an unloaded page");
+  if (parsed.type === "complete" && !usablePage(page.url, page.text) && !youtubeWatchUrl(page.url)) throw new Error("Orbit refused to complete a browser task from an unloaded page");
   return parsed;
 }
 

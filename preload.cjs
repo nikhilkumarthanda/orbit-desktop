@@ -10,7 +10,7 @@ ipcRenderer.on("orbit:embedded-browser:state", (_event, payload) => {
   renderOrbitBrowserChrome();
 });
 ipcRenderer.on("orbit:browser:task:event", (_event, payload) => {
-  browserTaskRunning = payload?.task?.status === "running";
+  browserTaskRunning = ["running", "waiting_for_confirmation", "paused"].includes(payload?.task?.status);
 });
 
 function explicitlyRequestsExternalBrowser(value) {
@@ -28,14 +28,14 @@ function looksLikeWebRequest(value) {
 
 function looksLikeBrowserFollowUp(value) {
   const text = value.trim();
-  return /^(?:now\s+)?(?:search(?:\s+for)?\b|look\s+for\b|find\s+(?:on\s+)?(?:this|the)\s+page\b|open\s+(?:the\s+)?(?:(?:first|second|third|fourth|fifth|next|previous|last|\d+(?:st|nd|rd|th))\s+)?(?:result|link|article|repository|repo|release|releases|issue|issues|page)\b|click\b|select\b|choose\b|scroll\b|go\s+(?:back|forward)\b|back\b|forward\b|reload\b|refresh\b|summarize\s+(?:this|the)\s+page\b|read\s+(?:this|the)\s+page\b|what\b.*\bpage\b|tell\s+me\s+(?:what|when|where|which|who|how)\b|compare\b)/i.test(text)
+  return /^(?:now\s+)?(?:search(?:\s+for)?\b|look\s+for\b|find\s+(?:on\s+)?(?:this|the)\s+page\b|open\s+(?:the\s+)?(?:(?:first|second|third|fourth|fifth|next|previous|last|\d+(?:st|nd|rd|th))\s+)?(?:result|link|article|repository|repo|release|releases|issue|issues|page)\b|click\b|select\b|choose\b|scroll\b|go\s+(?:back|forward)\b|back\b|forward\b|reload\b|refresh\b|summarize\s+(?:this|the)\s+page\b|read\s+(?:this|the)\s+page\b|what\b.*\bpage\b|tell\s+me\s+(?:what|when|where|which|who|how)\b|compare\b|switch\s+(?:back\s+)?to\b|close\s+(?:this|current|active|the)?\s*(?:orbit\s+browser\s+)?tab\b)/i.test(text)
     || /^(?:now\s+)?(?:tell\s+me|what(?:'s|\s+is|\s+are)?|which|who|when|where|how)\b.*\b(?:shown|visible|here|page|site|result|release|releases|issue|issues|repository|repo|article|link)\b/i.test(text);
 }
 
 function wantsNewOrbitTab(value) {
   const text = String(value || "").trim();
-  return /\b(?:open|create|start|add|use)\b[^.?!]{0,45}\bnew\s+(?:orbit\s+browser\s+)?tab\b/i.test(text)
-    || /\b(?:in|into)\s+(?:a\s+)?new\s+orbit\s+browser\s+tab\b/i.test(text);
+  return /\b(?:open|create|start|add|use)\b[^.?!]{0,50}\bnew\s+(?:orbit\s+browser\s+)?tab\b/i.test(text)
+    || /\b(?:in|into)\s+(?:a\s+)?new\s+(?:orbit\s+browser\s+)?tab\b/i.test(text);
 }
 
 function normalizeOrbitCommand(command) {
@@ -45,7 +45,7 @@ function normalizeOrbitCommand(command) {
   if (browserAgent) return `browser agent to ${browserAgent[1].trim()}`;
 
   if (explicitlyRequestsExternalBrowser(value)) return value;
-  if (looksLikeWebRequest(value)) return `browser agent to ${value}`;
+  if (wantsNewOrbitTab(value) || looksLikeWebRequest(value)) return `browser agent to ${value}`;
   if (embeddedBrowserVisible && looksLikeBrowserFollowUp(value)) return `browser agent to ${value}`;
   return value;
 }
@@ -53,18 +53,13 @@ function normalizeOrbitCommand(command) {
 async function planOrbitCommand(command) {
   const value = String(command || "").trim();
   const external = explicitlyRequestsExternalBrowser(value);
-  const browserFollowUp = !external && (looksLikeWebRequest(value) || (embeddedBrowserVisible && looksLikeBrowserFollowUp(value)) || wantsNewOrbitTab(value));
+  const browserFollowUp = !external && (wantsNewOrbitTab(value) || looksLikeWebRequest(value) || (embeddedBrowserVisible && looksLikeBrowserFollowUp(value)));
 
-  // A fresh browser command is a user-directed retarget. Never let an older
-  // background browser task force the new command into Orbit's legacy Chrome path.
+  // A fresh browser command retargets the agent runtime. Native tab creation is
+  // executed by the browser-task engine so one user request creates one tab only.
   if (browserFollowUp && browserTaskRunning) {
     await ipcRenderer.invoke("orbit:browser:task:cancel").catch(() => null);
     browserTaskRunning = false;
-  }
-
-  if (!external && wantsNewOrbitTab(value)) {
-    await ipcRenderer.invoke("orbit:embedded-browser:tab:new");
-    embeddedBrowserVisible = true;
   }
 
   return ipcRenderer.invoke("orbit:command:plan", normalizeOrbitCommand(value));

@@ -18,11 +18,13 @@ const BROWSER_ACTION_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
-    type: { type: "string", enum: ["navigate", "click", "fill", "select", "scroll", "wait", "complete", "ask_user"] },
+    type: { type: "string", enum: ["navigate", "new_tab", "switch_tab", "close_tab", "back", "forward", "reload", "click", "fill", "select", "scroll", "wait", "complete", "ask_user"] },
     url: { type: "string", maxLength: 500 },
     label: { type: "string", maxLength: 180 },
     value: { type: "string", maxLength: 500 },
     direction: { type: "string", enum: ["up", "down"] },
+    tabId: { type: "string", maxLength: 120 },
+    tabIndex: { type: "integer", minimum: 0, maximum: 24 },
     reason: { type: "string", maxLength: 220 },
   },
   required: ["type", "reason"],
@@ -53,7 +55,7 @@ export async function ollamaStatus(fetcher: typeof fetch = fetch): Promise<AISta
 export async function planWithOllama(args: { command: string; history: ConversationTurn[]; installedApplications: string[]; fetcher?: typeof fetch }): Promise<CommandPlan> {
   const fetcher = args.fetcher ?? fetch;
   const apps = args.installedApplications.slice(0, 120).join(", ");
-  const system = `You are Orbit, a concise, confident, voice-first local Mac companion with calm cinematic presence. You are not a generic chatbot. Address the user as Boss naturally at important acknowledgements, confirmations, or transitions, not mechanically in every sentence. Vary brief acknowledgements such as “Certainly, Boss,” “Right away,” and “On it.” Never imitate or claim to be a copyrighted character. Choose exactly one intent. Greetings and casual conversation use answer. Questions requesting facts, explanations, recommendations, comparisons, or current information use research. Use screenshot when asked to take, capture, or save a screenshot. Use screen when asked to describe, read, analyze, or inspect what is visible. Use notifications only for Mac/app notifications; never confuse notifications with news. Use weather, news, or cricket for those explicit live requests; never invent live facts. Use github when asked to inspect GitHub Actions, workflows, deployment, CI, or build status; default repository to nikhilkumarthanda/orbit-desktop when Orbit is implied. Use browser for opening any website or explicitly navigating/searching in Chrome. Put a safe https URL in url when known; otherwise put search terms in query. Use launch only for installed desktop apps, never for a website. Return every required JSON field. Keep explanation under 12 words and spoken reply under 2 short sentences. Use empty strings for unused query, application, repository, and url. Never read raw technical errors aloud. Never claim an action happened. Never invent local data. Launch only from: ${apps || "none"}. Cleanup is preview-only and requires confirmation.`;
+  const system = `You are Orbit, a concise, confident, voice-first local Mac companion with calm cinematic presence. You are not a generic chatbot. Address the user as Boss naturally at important acknowledgements, confirmations, or transitions, not mechanically in every sentence. Vary brief acknowledgements such as “Certainly, Boss,” “Right away,” and “On it.” Never imitate or claim to be a copyrighted character. Choose exactly one intent. Greetings and casual conversation use answer. Questions requesting facts, explanations, recommendations, comparisons, or current information use research. Use screenshot when asked to take, capture, or save a screenshot. Use screen when asked to describe, read, analyze, or inspect what is visible. Use notifications only for Mac/app notifications; never confuse notifications with news. Use weather, news, or cricket for those explicit live requests; never invent live facts. Use github when asked to inspect GitHub Actions, workflows, deployment, CI, or build status; default repository to nikhilkumarthanda/orbit-desktop when Orbit is implied. Use browser for websites and web navigation; Orbit Browser is the default web surface. Use an external browser only when the user explicitly names Chrome, Safari, Firefox, Edge, or Brave. Put a safe https URL in url when known; otherwise put search terms in query. Use launch only for installed desktop apps, never for a website. Return every required JSON field. Keep explanation under 12 words and spoken reply under 2 short sentences. Use empty strings for unused query, application, repository, and url. Never read raw technical errors aloud. Never claim an action happened. Never invent local data. Launch only from: ${apps || "none"}. Cleanup is preview-only and requires confirmation.`;
   const response = await fetcher(`${OLLAMA_URL}/api/chat`, {
     method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60_000),
     body: JSON.stringify({ model: OLLAMA_MODEL, stream: false, think: false, keep_alive: "30s", format: PLAN_SCHEMA, options: { temperature: 0, num_predict: 1000 }, messages: [
@@ -86,9 +88,9 @@ export async function planBrowserActionWithOllama(args: { prompt: string; fetche
       think: false,
       keep_alive: "30s",
       format: BROWSER_ACTION_SCHEMA,
-      options: { temperature: 0, num_predict: 260 },
+      options: { temperature: 0, num_predict: 300 },
       messages: [
-        { role: "system", content: "You are Orbit's local browser action planner. Return exactly one browser action matching the supplied JSON schema. Do not explain your reasoning outside the reason field. Use only controls and page text supplied in the prompt. Never claim success unless the loaded page visibly satisfies the goal." },
+        { role: "system", content: "You are Orbit's local browser action planner. Orbit Browser is a native multi-tab browser. Return exactly one browser action matching the supplied JSON schema. Prefer native new_tab, switch_tab, close_tab, back, forward, and reload when the user's goal explicitly asks for them. Do not explain reasoning outside the reason field. Use only supplied tabs, controls, page text, and URLs. Never claim success unless the loaded page visibly satisfies the goal." },
         { role: "user", content: args.prompt.slice(0, 14_000) },
       ],
     }),
@@ -105,7 +107,7 @@ export async function planBrowserActionWithOllama(args: { prompt: string; fetche
   if (first < 0 || last <= first) throw new Error(`Local browser planner returned invalid structured output: ${content.slice(0, 120)}`);
   try {
     const action = JSON.parse(content.slice(first, last + 1)) as BrowserTaskAction;
-    if (!["navigate", "click", "fill", "select", "scroll", "wait", "complete", "ask_user"].includes(action.type)) throw new Error("unsupported browser action");
+    if (!["navigate", "new_tab", "switch_tab", "close_tab", "back", "forward", "reload", "click", "fill", "select", "scroll", "wait", "complete", "ask_user"].includes(action.type)) throw new Error("unsupported browser action");
     return action;
   } catch (error) {
     const detail = error instanceof Error ? error.message : "invalid JSON";

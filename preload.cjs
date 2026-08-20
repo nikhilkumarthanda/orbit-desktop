@@ -43,8 +43,9 @@ function normalizeOrbitCommand(command) {
 }
 
 function installLongCommandPreview() {
+  const isCommandInput = input => Boolean(input && input.tagName === "INPUT" && input.closest?.(".command:not(.knowledge-search)"));
   const syncInput = input => {
-    if (!(input instanceof HTMLInputElement)) return;
+    if (!isCommandInput(input)) return;
     const command = input.closest(".command:not(.knowledge-search)");
     if (!command) return;
 
@@ -53,12 +54,13 @@ function installLongCommandPreview() {
       preview = document.createElement("div");
       preview.className = "orbit-command-preview";
       preview.setAttribute("aria-live", "polite");
-      preview.innerHTML = "<small>CURRENT REQUEST</small><p></p>";
+      preview.innerHTML = "<small>FULL REQUEST</small><p></p>";
+      preview.addEventListener("click", () => input.focus());
       command.prepend(preview);
     }
 
     const value = String(input.value || "").trim();
-    const show = value.length > 58;
+    const show = value.length > 34 || value.includes("\n");
     preview.hidden = !show;
     command.classList.toggle("has-prompt-preview", show);
     const text = preview.querySelector("p");
@@ -72,11 +74,12 @@ function installLongCommandPreview() {
   const start = () => {
     syncAll();
     document.addEventListener("input", event => {
-      if (event.target instanceof HTMLInputElement) syncInput(event.target);
+      const target = event.target;
+      if (isCommandInput(target)) syncInput(target);
     }, true);
     // React can update the controlled command value from voice events without a
-    // native input event, so keep the preview synchronized with those updates too.
-    window.setInterval(syncAll, 180);
+    // native input event, so keep the expanded command view synchronized too.
+    window.setInterval(syncAll, 120);
   };
 
   if (document.readyState === "loading") window.addEventListener("DOMContentLoaded", start, { once: true });

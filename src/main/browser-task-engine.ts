@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import * as browser from "./embedded-browser.js";
+import { handleCareerCommand } from "./career-agent.js";
 import { answerWithGemini, geminiStatus } from "./gemini.js";
 import { ollamaStatus, planBrowserActionWithOllama } from "./ollama.js";
 import type { BrowserTask, BrowserTaskAction, BrowserTaskEvent, EmbeddedBrowserState } from "../shared/contracts.js";
 
-const riskyLabels = /\b(?:send|submit|apply|purchase|buy|pay|book|publish|post|delete|remove|confirm order|place order|accept|agree)\b/i;
+const riskyLabels = /\b(?:send|submit(?:\s+application)?|purchase|buy|pay|book|publish|delete|remove|confirm order|place order|accept|agree|connect)\b/i;
 const MAX_STEPS = 20;
 const STEP_TIMEOUT_MS = 105_000;
 const ACTION_TIMEOUT_MS = 25_000;
@@ -20,6 +21,7 @@ const NAMED_SITES: Array<[RegExp, string]> = [
   [/\byoutube\b/i, "https://www.youtube.com"],
   [/\bamazon\b/i, "https://www.amazon.com"],
   [/\blinkedin\b/i, "https://www.linkedin.com"],
+  [/\bjobright\b/i, "https://jobright.ai"],
 ];
 let active: BrowserTask | null = null;
 let cancelled = false;
@@ -75,6 +77,15 @@ function deterministicSearchUrl(goal: string) {
 
 function initialGoalUrl(goal: string) {
   return deterministicSearchUrl(goal) || explicitGoalUrl(goal);
+}
+
+function directCareerCommand(goal: string) {
+  const text = goal.trim();
+  return /\b(?:career|application)\s+profile\b/i.test(text)
+    || /\b(?:inspect|review|analy[sz]e|read|summari[sz]e)\b.*\b(?:job|role|posting|description|application|form)\b/i.test(text)
+    || /\b(?:autofill|auto-fill|fill)\b.*\b(?:application|form)\b/i.test(text)
+    || /\b(?:draft|write|create)\b.*\b(?:recruiter|hiring manager|outreach|connection note|linkedin message)\b/i.test(text)
+    || /\b(?:show|list|mark|track|save)\b.*\b(?:applications?|job tracker|career tracker|applied|application|job)\b/i.test(text);
 }
 
 function requiresReasoningAfterNavigation(goal: string) {
@@ -141,19 +152,15 @@ function deterministicNativeAction(goal: string, state: EmbeddedBrowserState): B
     const url = initialGoalUrl(goal);
     return { type: "new_tab", ...(url ? { url } : {}), reason: url ? `Opening a new Orbit Browser tab at ${new URL(url).hostname}` : "Opening a new Orbit Browser tab" };
   }
-  if (/\b(?:close|remove)\s+(?:this|current|active|the)?\s*(?:orbit\s+browser\s+)?tab\b/i.test(goal)) {
-    return { type: "close_tab", tabId: state.activeTabId, reason: "Closing the active Orbit Browser tab" };
-  }
+  if (/\b(?:close|remove)\s+(?:this|current|active|the)?\s*(?:orbit\s+browser\s+)?tab\b/i.test(goal)) return { type: "close_tab", tabId: state.activeTabId, reason: "Closing the active Orbit Browser tab" };
   if (/^(?:please\s+)?(?:go\s+)?back\b/i.test(goal.trim())) return { type: "back", reason: "Going back in the active Orbit Browser tab" };
   if (/^(?:please\s+)?(?:go\s+)?forward\b/i.test(goal.trim())) return { type: "forward", reason: "Going forward in the active Orbit Browser tab" };
   if (/^(?:please\s+)?(?:reload|refresh)(?:\s+(?:this|the)\s+page)?\b/i.test(goal.trim())) return { type: "reload", reason: "Reloading the active Orbit Browser tab" };
-
   const subject = tabSubject(goal);
   if (subject) {
     const match = state.tabs.find(tab => `${tab.title} ${tab.url}`.toLowerCase().includes(subject));
     if (match) return { type: "switch_tab", tabId: match.id, reason: `Switching to the ${subject} Orbit Browser tab` };
   }
-
   const ordinal = tabOrdinal(goal);
   if (ordinal !== null && state.tabs.length) {
     const currentIndex = Math.max(0, state.tabs.findIndex(tab => tab.id === state.activeTabId));
@@ -173,27 +180,17 @@ function sameDestination(current: string, target: string) {
     const targetUrl = new URL(target);
     const normalizedCurrentPath = currentUrl.pathname.replace(/\/$/, "") || "/";
     const normalizedTargetPath = targetUrl.pathname.replace(/\/$/, "") || "/";
-    return currentUrl.hostname === targetUrl.hostname
-      && (normalizedTargetPath === "/" || normalizedCurrentPath === normalizedTargetPath);
-  } catch {
-    return false;
-  }
+    return currentUrl.hostname === targetUrl.hostname && (normalizedTargetPath === "/" || normalizedCurrentPath === normalizedTargetPath);
+  } catch { return false; }
 }
 
-function usablePage(url: string, text: string) {
-  return /^https?:\/\//i.test(url) && text.trim().length >= 20;
-}
+function usablePage(url: string, text: string) { return /^https?:\/\//i.test(url) && text.trim().length >= 20; }
 
 function githubSecondaryRateLimit(url: string, text: string) {
-  try {
-    const hostname = new URL(url).hostname;
-    if (!/(?:^|\.)github\.com$/i.test(hostname)) return false;
-  } catch {
-    return false;
-  }
+  try { if (!/(?:^|\.)github\.com$/i.test(new URL(url).hostname)) return false; }
+  catch { return false; }
   const normalized = text.toLowerCase();
-  return normalized.includes("secondary rate limit")
-    || (normalized.includes("too many requests") && normalized.includes("please wait"));
+  return normalized.includes("secondary rate limit") || (normalized.includes("too many requests") && normalized.includes("please wait"));
 }
 
 function publicUrl(value: string) {
@@ -225,19 +222,15 @@ function normalizePlannedAction(action: BrowserTaskAction, currentUrl: string): 
 }
 
 function actionSignature(action: BrowserTaskAction) {
-  return [action.type, action.url || "", action.label || "", action.value || "", action.direction || "", action.tabId || "", action.tabIndex ?? ""]
-    .map(value => String(value).trim().toLowerCase()).join("|");
+  return [action.type, action.url || "", action.label || "", action.value || "", action.direction || "", action.tabId || "", action.tabIndex ?? ""].map(value => String(value).trim().toLowerCase()).join("|");
 }
 
-function pageFingerprint(page: { url: string; title: string; text: string }) {
-  return `${page.url}|${page.title}|${page.text.slice(0, 1600)}`;
-}
+function pageFingerprint(page: { url: string; title: string; text: string }) { return `${page.url}|${page.title}|${page.text.slice(0, 1600)}`; }
 
 function avoidActionLoop(action: BrowserTaskAction, page: { url: string; controls: Array<{ kind: string; label: string }> }, steps: BrowserTask["steps"]): BrowserTaskAction {
   const signature = actionSignature(action);
   const recentMatches = steps.slice(-5).filter(step => actionSignature(step.action) === signature).length;
   if (recentMatches < 2 && stagnantPageRounds < 2) return action;
-
   if (action.type === "fill") {
     const wanted = (action.label || "").trim().toLowerCase();
     const submit = page.controls.find(control => {
@@ -247,7 +240,6 @@ function avoidActionLoop(action: BrowserTaskAction, page: { url: string; control
     });
     if (submit) return { type: "click", label: submit.label, reason: `Submitting with “${submit.label}” instead of repeating the same fill action` };
   }
-
   if (action.type === "wait" && stagnantPageRounds < 4) return { type: "scroll", direction: "down", reason: "The page did not change, so Orbit is inspecting more content instead of waiting again" };
   if (action.type === "navigate" && action.url && sameDestination(page.url, action.url) && stagnantPageRounds < 4) return { type: "scroll", direction: "down", reason: "Orbit is already at that destination, so it is inspecting the page instead of reopening it" };
   if (action.type === "scroll" && recentMatches >= 2 && stagnantPageRounds < 4) return { type: "scroll", direction: action.direction === "up" ? "down" : "up", reason: "Orbit detected repeated scrolling without progress and changed direction" };
@@ -283,49 +275,33 @@ async function planBrowserStep(prompt: string, listener: (event: BrowserTaskEven
       return parseBrowserAction(await answerWithGemini({ query: prompt, history: [] }));
     } catch (error) {
       if (!transientGeminiFailure(error)) throw error;
-
       const local = await ollamaStatus();
       if (local.available) {
         setPlanner("ollama", listener);
-        if (active) {
-          active.summary = "Gemini temporarily unavailable — continuing locally";
-          emit(listener, "status", active.summary);
-        }
+        if (active) { active.summary = "Gemini temporarily unavailable — continuing locally"; emit(listener, "status", active.summary); }
         return planBrowserActionWithOllama({ prompt });
       }
-
       const delay = retryDelayMs(error);
-      if (active) {
-        active.summary = `Gemini temporarily unavailable — retrying in ${Math.ceil(delay / 1000)}s`;
-        emit(listener, "status", active.summary);
-      }
+      if (active) { active.summary = `Gemini temporarily unavailable — retrying in ${Math.ceil(delay / 1000)}s`; emit(listener, "status", active.summary); }
       await new Promise(resolve => setTimeout(resolve, delay));
       if (cancelled) throw new Error("Browser task cancelled");
       setPlanner("gemini", listener);
       return parseBrowserAction(await answerWithGemini({ query: prompt, history: [] }));
     }
   }
-
   const local = await ollamaStatus();
   if (!local.available) throw new Error("Orbit needs Gemini or the local qwen3:4b model to reason about this browser step");
   setPlanner("ollama", listener);
-  if (active) {
-    active.summary = "Planning browser step locally";
-    emit(listener, "status", active.summary);
-  }
+  if (active) { active.summary = "Planning browser step locally"; emit(listener, "status", active.summary); }
   return planBrowserActionWithOllama({ prompt });
 }
 
 async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (event: BrowserTaskEvent) => void): Promise<BrowserTaskAction> {
   if (!active) throw new Error("No browser task is active");
-
   const browserState = browser.embeddedBrowserState() as EmbeddedBrowserState;
   const native = deterministicNativeAction(goal, browserState);
   if (!steps.length && native) return native;
-  if (steps.length && native && nativeActionCompletesImmediately(steps[0].action) && steps[0].action.type === native.type) {
-    return { type: "complete", reason: steps[0].outcome || "Orbit Browser action completed" };
-  }
-
+  if (steps.length && native && nativeActionCompletesImmediately(steps[0].action) && steps[0].action.type === native.type) return { type: "complete", reason: steps[0].outcome || "Orbit Browser action completed" };
   if (!steps.length) {
     const goalUrl = initialGoalUrl(goal);
     if (goalUrl) {
@@ -338,66 +314,47 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
       }
     }
   }
-
   active.summary = steps.length ? "Inspecting the updated page" : "Inspecting the active Orbit Browser tab";
   emit(listener, "status", active.summary);
   const page = await browser.actionSnapshot();
   if (cancelled) throw new Error("Browser task cancelled");
-
   active.url = page.url;
   active.title = page.title;
-
-  if (githubSecondaryRateLimit(page.url, page.text)) {
-    throw new Error("GITHUB_SECONDARY_RATE_LIMIT");
-  }
-
+  if (githubSecondaryRateLimit(page.url, page.text)) throw new Error("GITHUB_SECONDARY_RATE_LIMIT");
   const fingerprint = pageFingerprint(page);
   if (fingerprint === lastPageFingerprint) stagnantPageRounds += 1;
-  else {
-    lastPageFingerprint = fingerprint;
-    stagnantPageRounds = 0;
-    loopRecoveryAttempts = 0;
-  }
-
+  else { lastPageFingerprint = fingerprint; stagnantPageRounds = 0; loopRecoveryAttempts = 0; }
   if (deterministicGoalSatisfied(goal, page.url, page.text)) {
     const query = searchTerms(goal);
-    return { type: "complete", reason: query ? `Search results are open in Orbit Browser for “${query}”` : `The requested page is open in Orbit Browser` };
+    return { type: "complete", reason: query ? `Search results are open in Orbit Browser for “${query}”` : "The requested page is open in Orbit Browser" };
   }
-
   if (!usablePage(page.url, page.text)) {
     const goalUrl = initialGoalUrl(goal);
     if (goalUrl && !sameDestination(page.url, goalUrl)) return { type: "navigate", url: goalUrl, reason: `Opening ${new URL(goalUrl).hostname} inside Orbit` };
     throw new Error("The active Orbit Browser page did not finish loading, so Orbit did not continue from model memory");
   }
-
   active.summary = `Planning browser step ${steps.length + 1}`;
   emit(listener, "status", active.summary);
-
   const history = steps.slice(-6).map(step => `${step.action.type}: ${step.action.label || step.action.url || step.action.tabId || ""} -> ${step.outcome}`).join("\n");
   const noProgress = stagnantPageRounds > 0 ? `\nProgress warning: the visible page has been materially unchanged for ${stagnantPageRounds} planning round(s). Do NOT repeat the same action; choose a different control/action that can advance the goal.` : "";
   const latestState = browser.embeddedBrowserState() as EmbeddedBrowserState;
   const tabContext = latestState.tabs.map((tab, index) => ({ index, id: tab.id, active: tab.id === latestState.activeTabId, title: tab.title, url: tab.url }));
-  const prompt = `You are Orbit's browser controller. Orbit Browser is a native multi-tab browser. Choose exactly one safe next action to advance the user's goal.\nGoal: ${goal}\nActive page: ${page.title} (${page.url})\nOrbit Browser tabs: ${JSON.stringify(tabContext)}\nRecent steps:\n${history || "none"}${noProgress}\nVisible controls: ${JSON.stringify(page.controls.slice(0, 60))}\nVisible text: ${page.text.slice(0, 7000)}\nReturn JSON only: {"type":"navigate|new_tab|switch_tab|close_tab|back|forward|reload|click|fill|select|scroll|wait|complete|ask_user","url":"","label":"","value":"","direction":"down|up","tabId":"","tabIndex":0,"reason":"short explanation"}. Prefer native tab/navigation actions when they match the user's request. For navigate/new_tab with a URL, url MUST be an absolute http:// or https:// URL. Use tabId from Orbit Browser tabs when switching or closing a specific tab. Use labels exactly as shown for page controls. Never repeat a failed action. Never choose send, submit, apply, purchase, pay, book, publish, post, delete, accept, or agree; use ask_user immediately before such an action. Use complete only when the goal is visibly satisfied. Never answer from memory instead of using the browser. Never enter passwords, payment data, government IDs, or authentication codes.`;
+  const prompt = `You are Orbit's browser controller. Orbit Browser is a native multi-tab browser. Choose exactly one safe next action to advance the user's goal.\nGoal: ${goal}\nActive page: ${page.title} (${page.url})\nOrbit Browser tabs: ${JSON.stringify(tabContext)}\nRecent steps:\n${history || "none"}${noProgress}\nVisible controls: ${JSON.stringify(page.controls.slice(0, 60))}\nVisible text: ${page.text.slice(0, 7000)}\nReturn JSON only: {"type":"navigate|new_tab|switch_tab|close_tab|back|forward|reload|click|fill|select|scroll|wait|complete|ask_user","url":"","label":"","value":"","direction":"down|up","tabId":"","tabIndex":0,"reason":"short explanation"}. Prefer native tab/navigation actions when they match the user's request. Opening an Apply or Easy Apply flow is allowed without confirmation because it does not submit an application. Final submission, sending a message, connecting, publishing, purchasing, paying, deleting, accepting, agreeing, or other consequential external actions MUST use ask_user immediately before the action. Never guess or fill work authorization, sponsorship, visa, citizenship, salary/compensation, demographic/EEO, disability, veteran, identity, authentication, signature, or attestation fields; use ask_user for those. For navigate/new_tab with a URL, url MUST be an absolute http:// or https:// URL. Use tabId from Orbit Browser tabs when switching or closing a specific tab. Use labels exactly as shown for page controls. Never repeat a failed action. Use complete only when the goal is visibly satisfied. Never answer from memory instead of using the browser. Never enter passwords, payment data, government IDs, or authentication codes.`;
   const normalized = normalizePlannedAction(await planBrowserStep(prompt, listener), page.url);
   let parsed = avoidActionLoop(normalized, page, steps);
-
   if (parsed.type === "wait" && parsed.reason === LOOP_RECOVERY_MARKER) {
     loopRecoveryAttempts += 1;
     const forbidden = [...new Set(steps.slice(-6).map(step => actionSignature(step.action)))];
-    if (active) {
-      active.summary = `Recovering from repeated browser actions · attempt ${loopRecoveryAttempts}/${MAX_LOOP_RECOVERIES}`;
-      emit(listener, "status", active.summary);
-    }
+    if (active) { active.summary = `Recovering from repeated browser actions · attempt ${loopRecoveryAttempts}/${MAX_LOOP_RECOVERIES}`; emit(listener, "status", active.summary); }
     const recoveryPrompt = `${prompt}\nRECOVERY MODE: The previous plan is stuck. You MUST choose an action whose signature is NOT in this forbidden list: ${JSON.stringify(forbidden)}. Do not reverse-scroll back and forth. Do not refill the same field. Do not reopen the same URL. If another Orbit Browser tab is relevant, you may switch_tab. If the visible text already satisfies the user's goal, choose complete now. Otherwise choose a genuinely different visible control or safe action that advances the goal.`;
     const recovered = normalizePlannedAction(await planBrowserStep(recoveryPrompt, listener), page.url);
     const recoveredSignature = actionSignature(recovered);
-
     if (forbidden.includes(recoveredSignature)) {
       const recentLabels = new Set(steps.slice(-6).map(step => String(step.action.label || "").trim().toLowerCase()).filter(Boolean));
       const alternate = page.controls.find(control => {
         const label = control.label.trim();
         if (!label || recentLabels.has(label.toLowerCase())) return false;
-        return /button|a|link|submit/i.test(control.kind) && /\b(?:search|result|article|release|issues?|next|more|details?|read|view|open)\b/i.test(label);
+        return /button|a|link|submit/i.test(control.kind) && /\b(?:search|result|article|release|issues?|next|more|details?|read|view|open|apply)\b/i.test(label);
       });
       if (alternate) parsed = { type: "click", label: alternate.label, reason: `Loop recovery selected a different visible control: “${alternate.label}”` };
       else if (latestState.tabs.length > 1 && latestState.tabs.some(tab => tab.id !== latestState.activeTabId)) {
@@ -405,12 +362,8 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
         parsed = { type: "switch_tab", tabId: alternateTab.id, reason: "Loop recovery is checking another Orbit Browser tab for relevant context" };
       } else if (loopRecoveryAttempts < MAX_LOOP_RECOVERIES) parsed = { type: "scroll", direction: "down", reason: "Loop recovery is inspecting a new part of the page before replanning" };
       else throw new Error(`Orbit could not find a new safe browser path after ${MAX_LOOP_RECOVERIES} recovery attempts`);
-    } else {
-      parsed = recovered;
-      stagnantPageRounds = Math.max(0, stagnantPageRounds - 2);
-    }
+    } else { parsed = recovered; stagnantPageRounds = Math.max(0, stagnantPageRounds - 2); }
   }
-
   if (!(SUPPORTED_ACTIONS as readonly string[]).includes(parsed.type)) throw new Error("Orbit's browser planner returned an unsupported action");
   if (parsed.type === "complete" && !usablePage(page.url, page.text)) throw new Error("Orbit refused to complete a browser task from an unloaded page");
   return parsed;
@@ -449,69 +402,30 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
   active.status = "running";
   active.summary = "Starting Orbit Browser workflow";
   emit(listener, "status", active.summary);
-
   try {
     for (let round = active.steps.length; round < MAX_STEPS; round++) {
       if (!active || active.id !== taskId) return active;
-      if (cancelled) {
-        active.status = "cancelled";
-        active.summary = "Browser task stopped";
-        emit(listener, "status", active.summary);
-        return active;
-      }
-      if (Date.now() - startedAt >= WORKFLOW_TIMEOUT_MS) {
-        active.status = "paused";
-        active.summary = "Orbit paused this browser workflow after 4 minutes. The Orbit Browser session remains open at the last verified step.";
-        emit(listener, "status", active.summary);
-        return active;
-      }
-
+      if (cancelled) { active.status = "cancelled"; active.summary = "Browser task stopped"; emit(listener, "status", active.summary); return active; }
+      if (Date.now() - startedAt >= WORKFLOW_TIMEOUT_MS) { active.status = "paused"; active.summary = "Orbit paused this browser workflow after 4 minutes. The Orbit Browser session remains open at the last verified step."; emit(listener, "status", active.summary); return active; }
       const action = await withTimeout(nextAction(active.goal, active.steps, listener), STEP_TIMEOUT_MS, "The browser planner took too long on this step");
       if (!active || active.id !== taskId) return active;
-      if (cancelled) {
-        active.status = "cancelled";
-        active.summary = "Browser task stopped before the next action";
-        emit(listener, "status", active.summary);
-        return active;
-      }
-
-      if (action.type === "complete") {
-        active.status = "completed";
-        active.summary = action.reason || "Browser task completed";
-        emit(listener, "status", active.summary);
-        return active;
-      }
-
+      if (cancelled) { active.status = "cancelled"; active.summary = "Browser task stopped before the next action"; emit(listener, "status", active.summary); return active; }
+      if (action.type === "complete") { active.status = "completed"; active.summary = action.reason || "Browser task completed"; emit(listener, "status", active.summary); return active; }
       active.summary = action.reason || `Executing ${action.type}`;
       emit(listener, "status", active.summary);
       const result = await withTimeout(act(action), ACTION_TIMEOUT_MS, `The ${action.type} action took too long`);
       active.steps.push({ at: new Date().toISOString(), action, outcome: result.outcome });
       active.url = await browser.currentUrl();
       active.title = await browser.pageTitle();
-
-      if (result.pause) {
-        active.status = "waiting_for_confirmation";
-        active.pendingAction = action;
-        active.summary = result.outcome;
-        emit(listener, "status", active.summary);
-        return active;
-      }
-
+      if (result.pause) { active.status = "waiting_for_confirmation"; active.pendingAction = action; active.summary = result.outcome; emit(listener, "status", active.summary); return active; }
       emit(listener, "step", `${result.outcome} · Step ${active.steps.length} verified`);
     }
-
-    if (active && active.id === taskId) {
-      active.status = "paused";
-      active.summary = `Orbit reached the ${MAX_STEPS}-step safety limit. Review the Orbit Browser before continuing.`;
-      emit(listener, "status", active.summary);
-    }
+    if (active && active.id === taskId) { active.status = "paused"; active.summary = `Orbit reached the ${MAX_STEPS}-step safety limit. Review the Orbit Browser before continuing.`; emit(listener, "status", active.summary); }
     return active;
   } catch (error) {
     if (!active || active.id !== taskId) return active;
-    if (cancelled || (error instanceof Error && /cancelled/i.test(error.message))) {
-      active.status = "cancelled";
-      active.summary = "Browser task stopped";
-    } else {
+    if (cancelled || (error instanceof Error && /cancelled/i.test(error.message))) { active.status = "cancelled"; active.summary = "Browser task stopped"; }
+    else {
       const detail = error instanceof Error ? error.message : "an unknown browser-agent error occurred";
       const githubRateLimited = detail === "GITHUB_SECONDARY_RATE_LIMIT" || /secondary rate limit|too many requests/i.test(detail);
       const providerUnavailable = /service(?:\s+is)?(?:\s+currently)?\s+unavailable|currently\s+unavailable|\b503\b|quota|rate.?limit|resource.?exhausted|429|high demand|overload/i.test(detail);
@@ -532,27 +446,34 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
 }
 
 export async function startBrowserTask(goal: string, listener: (event: BrowserTaskEvent) => void) {
-  if (!goal.trim()) throw new Error("Tell Orbit what you want the browser to accomplish");
-  const geminiReady = geminiStatus().available;
-  const deterministic = Boolean(initialGoalUrl(goal) || deterministicNativeIntent(goal));
-  const local = deterministic ? null : await ollamaStatus();
-  if (!deterministic && !geminiReady && !local?.available) throw new Error("Connect Gemini or start the local qwen3:4b model before starting a browser task that requires AI reasoning");
+  const cleanGoal = goal.trim();
+  if (!cleanGoal) throw new Error("Tell Orbit what you want the browser to accomplish");
   if (active?.status === "running") throw new Error("Orbit is already running a browser task. Stop it before starting another one.");
 
+  if (directCareerCommand(cleanGoal)) {
+    cancelled = false;
+    const result = await handleCareerCommand(cleanGoal);
+    const state = browser.embeddedBrowserState();
+    active = {
+      id: randomUUID(), goal: cleanGoal, status: "completed", steps: [], summary: String(result.summary || "Career Mode action completed"),
+      url: state.url || "", title: state.title || "Orbit Career Mode",
+    };
+    emit(listener, "status", active.summary);
+    return active;
+  }
+
+  const geminiReady = geminiStatus().available;
+  const deterministic = Boolean(initialGoalUrl(cleanGoal) || deterministicNativeIntent(cleanGoal));
+  const local = deterministic ? null : await ollamaStatus();
+  if (!deterministic && !geminiReady && !local?.available) throw new Error("Connect Gemini or start the local qwen3:4b model before starting a browser task that requires AI reasoning");
   cancelled = false;
   lastPageFingerprint = "";
   stagnantPageRounds = 0;
   loopRecoveryAttempts = 0;
   await browser.showEmbeddedBrowser();
   active = {
-    id: randomUUID(),
-    goal: goal.trim(),
-    status: "running",
-    steps: [],
-    summary: deterministic ? "Using Orbit Browser's native controls" : "Opening Orbit Browser",
-    url: await browser.currentUrl(),
-    title: await browser.pageTitle(),
-    planner: geminiReady ? "gemini" : local?.available ? "ollama" : undefined,
+    id: randomUUID(), goal: cleanGoal, status: "running", steps: [], summary: deterministic ? "Using Orbit Browser's native controls" : "Opening Orbit Browser",
+    url: await browser.currentUrl(), title: await browser.pageTitle(), planner: geminiReady ? "gemini" : local?.available ? "ollama" : undefined,
   };
   const taskId = active.id;
   emit(listener, "status", active.summary);
@@ -564,7 +485,6 @@ export async function resumeBrowserTask(confirmed: boolean, listener: (event: Br
   if (!active) throw new Error("No browser task is waiting");
   if (active.status !== "waiting_for_confirmation") return active;
   if (!confirmed) return active;
-
   const pending = active.pendingAction;
   if (!pending || !pending.label || !["click", "ask_user"].includes(pending.type)) throw new Error("Orbit needs you to take over for this step");
   await withTimeout(browser.clickByLabel(pending.label), ACTION_TIMEOUT_MS, "The confirmed browser action took too long");
@@ -581,10 +501,7 @@ export async function resumeBrowserTask(confirmed: boolean, listener: (event: Br
 
 export function cancelBrowserTask() {
   cancelled = true;
-  if (active && !["completed", "failed", "cancelled"].includes(active.status)) {
-    active.status = "cancelled";
-    active.summary = "Browser task stopped";
-  }
+  if (active && !["completed", "failed", "cancelled"].includes(active.status)) { active.status = "cancelled"; active.summary = "Browser task stopped"; }
   browser.hideEmbeddedBrowser();
   return active;
 }

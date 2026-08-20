@@ -1,4 +1,4 @@
-import { BrowserWindow, WebContentsView } from "electron";
+import { BrowserWindow, WebContentsView, type WebContents } from "electron";
 
 const PARTITION = "persist:orbit-agent";
 const SIDEBAR_WIDTH = 276;
@@ -124,6 +124,29 @@ function emitState() {
   });
 }
 
+async function installAgentCursor(target: WebContents) {
+  if (target.isDestroyed() || !target.getURL().startsWith("http")) return;
+  await target.executeJavaScript(`(() => {
+    if (!document.documentElement) return false;
+    let node = document.getElementById('__orbit_agent_cursor');
+    if (!node) {
+      node = document.createElement('div');
+      node.id = '__orbit_agent_cursor';
+      node.setAttribute('aria-hidden', 'true');
+      node.style.cssText = 'position:fixed;left:0;top:0;width:20px;height:20px;border:2px solid #9b7cff;border-radius:50%;background:rgba(155,124,255,.12);box-shadow:0 0 0 5px rgba(155,124,255,.10),0 0 22px rgba(155,124,255,.72);pointer-events:none;z-index:2147483647;opacity:.88;transform:translate3d(22px,22px,0);transition:transform 420ms cubic-bezier(.2,.8,.2,1),opacity 120ms ease;mix-blend-mode:difference;';
+      const dot = document.createElement('i');
+      dot.style.cssText = 'position:absolute;left:50%;top:50%;width:5px;height:5px;border-radius:50%;background:white;transform:translate(-50%,-50%);box-shadow:0 0 8px white;';
+      const badge = document.createElement('span');
+      badge.textContent = 'ORBIT';
+      badge.style.cssText = 'position:absolute;left:16px;top:16px;padding:3px 6px;border-radius:999px;background:#171126;color:#dcd4ff;font:700 8px/1.2 -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.12em;box-shadow:0 4px 14px rgba(0,0,0,.35);white-space:nowrap;';
+      node.append(dot, badge);
+      document.documentElement.appendChild(node);
+    }
+    node.style.opacity = '.88';
+    return true;
+  })()`, true).catch(() => false);
+}
+
 async function ensureView() {
   const nextHost = findHostWindow();
   if (view && host === nextHost && !view.webContents.isDestroyed()) return view;
@@ -175,6 +198,7 @@ async function ensureView() {
   for (const event of ["did-start-loading", "did-stop-loading", "did-navigate", "did-navigate-in-page", "page-title-updated"] as const) {
     contents.on(event as any, () => emitState());
   }
+  contents.on("did-stop-loading", () => { void installAgentCursor(contents); });
   contents.on("render-process-gone", () => {
     visible = false;
     syncHostLayout(false);
@@ -191,6 +215,7 @@ export async function showEmbeddedBrowser() {
   syncHostLayout(true);
   browserView.setVisible(true);
   layout();
+  void installAgentCursor(browserView.webContents);
   emitState();
   return embeddedBrowserState();
 }
@@ -224,6 +249,7 @@ export async function openUrl(url: string) {
   await showEmbeddedBrowser();
   const target = await contents();
   await target.loadURL(publicUrl(url));
+  void installAgentCursor(target);
   emitState();
 }
 
@@ -261,6 +287,7 @@ export interface ActionSnapshot { title: string; url: string; text: string; cont
 export async function actionSnapshot(): Promise<ActionSnapshot> {
   await showEmbeddedBrowser();
   const target = await contents();
+  void installAgentCursor(target);
   const snapshot = await target.executeJavaScript(`(() => {
     const clean = value => String(value || '').replace(/\\s+/g, ' ').trim();
     const visible = element => {

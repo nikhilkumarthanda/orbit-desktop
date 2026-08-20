@@ -48,11 +48,13 @@ export interface ResearchProgress { stage: ResearchStage; message: string; curre
 export interface ResearchAnswer { answer: string; spokenAnswer: string; sources: ResearchSource[]; updatedAt: string }
 export type BrowserTaskStatus = "running"|"waiting_for_confirmation"|"paused"|"completed"|"cancelled"|"failed";
 export type BrowserPlanner = "gemini"|"ollama";
-export interface BrowserTaskAction { type: "navigate"|"click"|"fill"|"select"|"scroll"|"wait"|"complete"|"ask_user"; url?: string; label?: string; value?: string; direction?: "up"|"down"; reason?: string }
+export type BrowserTaskActionType = "navigate"|"new_tab"|"switch_tab"|"close_tab"|"back"|"forward"|"reload"|"click"|"fill"|"select"|"scroll"|"wait"|"complete"|"ask_user";
+export interface BrowserTaskAction { type: BrowserTaskActionType; url?: string; label?: string; value?: string; direction?: "up"|"down"; tabId?: string; tabIndex?: number; reason?: string }
 export interface BrowserTaskStep { at: string; action: BrowserTaskAction; outcome: string }
 export interface BrowserTask { id: string; goal: string; status: BrowserTaskStatus; steps: BrowserTaskStep[]; summary: string; url: string; title: string; planner?: BrowserPlanner; pendingAction?: BrowserTaskAction }
 export interface BrowserTaskEvent { type: "status"|"step"; task: BrowserTask; message?: string }
-export interface EmbeddedBrowserState { visible: boolean; url: string; title: string; loading: boolean; canGoBack: boolean; canGoForward: boolean }
+export interface EmbeddedBrowserTab { id: string; url: string; title: string; loading: boolean }
+export interface EmbeddedBrowserState { visible: boolean; url: string; title: string; loading: boolean; canGoBack: boolean; canGoForward: boolean; activeTabId: string; tabs: EmbeddedBrowserTab[] }
 export interface AIStatus { provider: "ollama"; configured: boolean; available: boolean; running: boolean; model: string; cost: "$0"; installCommand: string }
 export interface GeminiUsageStatus { month: string; requests: number; inputTokens: number; outputTokens: number; estimatedCostUsd: number; monthlyBudgetUsd: number; remainingUsd: number; blocked: boolean }
 export interface GeminiStatus { provider: "gemini"; configured: boolean; available: boolean; model: string; cost: "$0 on Google free tier"; usage: GeminiUsageStatus }

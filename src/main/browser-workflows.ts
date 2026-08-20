@@ -17,19 +17,31 @@ function bestYouTubeResult(query: string, controls: YouTubeControl[]) {
   const stopWords = new Set(["the", "a", "an", "and", "or", "of", "to", "for", "on", "in", "official", "video", "youtube"]);
   const tokens = query.toLowerCase().split(/[^a-z0-9]+/).filter(token => token.length > 2 && !stopWords.has(token));
   const normalizedQuery = query.toLowerCase().trim();
-  return controls
-    .filter(control => /^(?:a|link)$/i.test(control.kind) && control.label.trim().length >= 4)
-    .filter(control => !/^(?:home|shorts|subscriptions|you|history|sign in|youtube|explore|trending)$/i.test(control.label.trim()))
-    .map(control => {
+  const wantsTrailer = /\btrailer\b/i.test(query);
+  const candidates = controls
+    .map((control, index) => ({ control, index }))
+    .filter(({ control }) => /^(?:a|link)$/i.test(control.kind) && control.label.trim().length >= 4)
+    .filter(({ control }) => !/^(?:home|shorts|subscriptions|you|history|sign in|youtube|explore|trending)$/i.test(control.label.trim()))
+    .map(({ control, index }) => {
       const label = control.label.toLowerCase();
-      const score = tokens.reduce((total, token) => total + (label.includes(token) ? 4 : 0), 0)
+      const matchedTokens = tokens.filter(token => label.includes(token)).length;
+      const coverage = tokens.length ? matchedTokens / tokens.length : 0;
+      const score = matchedTokens * 4
         + (normalizedQuery && label.includes(normalizedQuery) ? 8 : 0)
-        + (/trailer/i.test(query) && /trailer/i.test(label) ? 4 : 0)
-        + (/official/i.test(label) ? 1 : 0);
-      return { control, score };
+        + (wantsTrailer && /\btrailer\b/i.test(label) ? 4 : 0)
+        + (/\bofficial\b/i.test(label) ? 1 : 0)
+        - Math.min(index, 20) * 0.08;
+      return { control, index, coverage, score, trailer: /\btrailer\b/i.test(label) };
     })
-    .filter(item => item.score > 0)
-    .sort((a, b) => b.score - a.score)[0]?.control || null;
+    .filter(item => item.score > 0);
+
+  // A simple "open/play X trailer" should behave like a normal browser user:
+  // choose the earliest result that clearly matches the request. Do not jump to
+  // a lower result merely because it repeats more keywords or says "official".
+  const strongEarly = candidates.find(item => item.coverage >= 1 && (!wantsTrailer || item.trailer));
+  if (strongEarly) return strongEarly.control;
+
+  return candidates.sort((a, b) => b.score - a.score || a.index - b.index)[0]?.control || null;
 }
 
 export async function youtubePlayFirst(query: string): Promise<WorkflowResult> {

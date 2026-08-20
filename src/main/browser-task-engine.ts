@@ -118,6 +118,16 @@ function youtubeWatchUrl(url: string) {
   } catch { return false; }
 }
 
+function youtubeSearchMatches(url: string, target: string) {
+  try {
+    const current = new URL(url);
+    const expected = new URL(target);
+    return /(?:^|\.)youtube\.com$/i.test(current.hostname)
+      && current.pathname.startsWith("/results")
+      && current.searchParams.get("search_query") === expected.searchParams.get("search_query");
+  } catch { return false; }
+}
+
 function youtubeResultControl(query: string, controls: Array<{ kind: string; label: string }>) {
   const stop = new Set(["the", "a", "an", "and", "or", "of", "to", "for", "on", "in", "official", "video"]);
   const tokens = query.toLowerCase().split(/[^a-z0-9]+/).filter(token => token.length > 2 && !stop.has(token));
@@ -236,13 +246,14 @@ function usablePage(url: string, text: string) { return /^https?:\/\//i.test(url
 
 async function dynamicPageSnapshot(goal: string) {
   let page = await browser.actionSnapshot();
-  if (!youtubePlayTerms(goal) || !youtubeUrl(page.url) || usablePage(page.url, page.text) || youtubeWatchUrl(page.url)) return page;
+  const playQuery = youtubePlayTerms(goal);
+  if (!playQuery || !youtubeUrl(page.url) || usablePage(page.url, page.text) || youtubeWatchUrl(page.url) || youtubeResultControl(playQuery, page.controls)) return page;
   for (let attempt = 1; attempt <= 4; attempt++) {
     if (cancelled) throw new Error("Browser task cancelled");
     if (active) active.summary = `Waiting for YouTube to finish rendering · ${attempt}/4`;
     await new Promise(resolve => setTimeout(resolve, 900 + attempt * 350));
     page = await browser.actionSnapshot();
-    if (usablePage(page.url, page.text) || youtubeWatchUrl(page.url)) break;
+    if (usablePage(page.url, page.text) || youtubeWatchUrl(page.url) || youtubeResultControl(playQuery, page.controls)) break;
   }
   return page;
 }
@@ -384,17 +395,16 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
   if (githubSecondaryRateLimit(page.url, page.text)) throw new Error("GITHUB_SECONDARY_RATE_LIMIT");
 
   const playQuery = youtubePlayTerms(goal);
+  const playTarget = playQuery ? deterministicSearchUrl(goal) : "";
   if (playQuery && youtubeWatchUrl(page.url)) {
     return { type: "complete", reason: `Opened the matching YouTube video for “${playQuery}” in Orbit Browser` };
   }
   if (playQuery && youtubeUrl(page.url)) {
-    try {
-      const parsed = new URL(page.url);
-      if (parsed.pathname.startsWith("/results")) {
-        const result = youtubeResultControl(playQuery, page.controls);
-        if (result) return { type: "click", label: result.label, reason: `Opening the best matching YouTube result for “${playQuery}”` };
-      }
-    } catch {}
+    if (playTarget && !youtubeSearchMatches(page.url, playTarget)) {
+      return { type: "navigate", url: playTarget, reason: `Correcting YouTube to the search results for “${playQuery}” before inspecting the page` };
+    }
+    const result = youtubeResultControl(playQuery, page.controls);
+    if (result) return { type: "click", label: result.label, reason: `Opening the best matching YouTube result for “${playQuery}”` };
   }
 
   const fingerprint = pageFingerprint(page);
@@ -407,8 +417,14 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
   if (!usablePage(page.url, page.text)) {
     const goalUrl = initialGoalUrl(goal);
     if (goalUrl && !sameDestination(page.url, goalUrl)) return { type: "navigate", url: goalUrl, reason: `Opening ${new URL(goalUrl).hostname} inside Orbit` };
-    const alreadyReloaded = steps.some(step => step.action.type === "reload");
-    if (playQuery && youtubeUrl(page.url) && !alreadyReloaded) return { type: "reload", reason: "YouTube is still rendering, so Orbit is retrying this tab once before giving up" };
+    if (playQuery && youtubeUrl(page.url)) {
+      const youtubeRecoverySteps = steps.filter(step => /YouTube/i.test(step.outcome || step.action.reason || "")).length;
+      const alreadyReloaded = steps.some(step => step.action.type === "reload");
+      if (youtubeRecoverySteps < 2) return { type: "wait", reason: "YouTube search results are still rendering; Orbit is keeping the tab open and re-inspecting instead of failing" };
+      if (!alreadyReloaded) return { type: "reload", reason: "YouTube search results are still sparse, so Orbit is reloading this tab once and preserving the search" };
+      if (youtubeRecoverySteps < 4) return { type: "wait", reason: "YouTube is still hydrating the results; Orbit is making one more bounded re-inspection" };
+      throw new Error("YouTube stayed on the requested search but did not expose a playable result to Orbit after bounded recovery");
+    }
     throw new Error("The active Orbit Browser page did not finish loading, so Orbit did not continue from model memory");
   }
   active.summary = `Planning browser step ${steps.length + 1}`;

@@ -32,6 +32,12 @@ function looksLikeBrowserFollowUp(value) {
     || /^(?:now\s+)?(?:tell\s+me|what(?:'s|\s+is|\s+are)?|which|who|when|where|how)\b.*\b(?:shown|visible|here|page|site|result|release|releases|issue|issues|repository|repo|article|link)\b/i.test(text);
 }
 
+function wantsNewOrbitTab(value) {
+  const text = String(value || "").trim();
+  return /\b(?:open|create|start|add|use)\b[^.?!]{0,45}\bnew\s+(?:orbit\s+browser\s+)?tab\b/i.test(text)
+    || /\b(?:in|into)\s+(?:a\s+)?new\s+orbit\s+browser\s+tab\b/i.test(text);
+}
+
 function normalizeOrbitCommand(command) {
   const value = String(command || "").trim();
   const browserAgent = value.match(/^(?:hey\s+)?orbit\s*[,;:\-]?\s*(?:please\s+)?(?:use\s+)?(?:your\s+|orbit(?:'s)?\s+)?(?:autonomous\s+|cloud\s+)?browser(?:\s+agent)?\s*[,;:\-]?\s*(?:to\s+)?(.+)$/i)
@@ -39,9 +45,29 @@ function normalizeOrbitCommand(command) {
   if (browserAgent) return `browser agent to ${browserAgent[1].trim()}`;
 
   if (explicitlyRequestsExternalBrowser(value)) return value;
-  if (!browserTaskRunning && looksLikeWebRequest(value)) return `browser agent to ${value}`;
-  if (embeddedBrowserVisible && !browserTaskRunning && looksLikeBrowserFollowUp(value)) return `browser agent to ${value}`;
+  if (looksLikeWebRequest(value)) return `browser agent to ${value}`;
+  if (embeddedBrowserVisible && looksLikeBrowserFollowUp(value)) return `browser agent to ${value}`;
   return value;
+}
+
+async function planOrbitCommand(command) {
+  const value = String(command || "").trim();
+  const external = explicitlyRequestsExternalBrowser(value);
+  const browserFollowUp = !external && (looksLikeWebRequest(value) || (embeddedBrowserVisible && looksLikeBrowserFollowUp(value)) || wantsNewOrbitTab(value));
+
+  // A fresh browser command is a user-directed retarget. Never let an older
+  // background browser task force the new command into Orbit's legacy Chrome path.
+  if (browserFollowUp && browserTaskRunning) {
+    await ipcRenderer.invoke("orbit:browser:task:cancel").catch(() => null);
+    browserTaskRunning = false;
+  }
+
+  if (!external && wantsNewOrbitTab(value)) {
+    await ipcRenderer.invoke("orbit:embedded-browser:tab:new");
+    embeddedBrowserVisible = true;
+  }
+
+  return ipcRenderer.invoke("orbit:command:plan", normalizeOrbitCommand(value));
 }
 
 function browserHost(url) {
@@ -202,7 +228,7 @@ contextBridge.exposeInMainWorld("orbit", Object.freeze({
   audit: () => ipcRenderer.invoke("orbit:audit"),
   indexKnowledge: () => ipcRenderer.invoke("orbit:knowledge:index"),
   searchKnowledge: query => ipcRenderer.invoke("orbit:knowledge:search", query),
-  planCommand: command => ipcRenderer.invoke("orbit:command:plan", normalizeOrbitCommand(command)),
+  planCommand: command => planOrbitCommand(command),
   openPath: target => ipcRenderer.invoke("orbit:path:open", target),
   openFolder: folder => ipcRenderer.invoke("orbit:folder:open", folder),
   launchApplication: application => ipcRenderer.invoke("orbit:app:launch", application),

@@ -56,16 +56,40 @@ function explicitGoalUrl(goal: string) {
   return NAMED_SITES.find(([pattern]) => pattern.test(goal))?.[1] || "";
 }
 
-function wikipediaSearchUrl(goal: string) {
-  if (!/\bwikipedia\b/i.test(goal)) return "";
-  const match = goal.match(/\bsearch(?:\s+for)?\s+(.+?)(?=,\s*(?:and|then)\b|\s+and\s+(?:tell|show|give|report|find out)\b|$)/i);
-  const query = match?.[1]?.trim().replace(/^the\s+/i, "");
+function searchTerms(goal: string) {
+  const match = goal.match(/\b(?:search|look\s+up|find)(?:\s+(?:on|in))?\s+(?:github|wikipedia|youtube|amazon|npm(?:js)?)?\s*(?:for\s+)?(.+?)(?=,\s*(?:and|then)\b|\s+and\s+(?:tell|show|give|report|find out|open)\b|$)/i);
+  return match?.[1]?.trim().replace(/^the\s+/i, "") || "";
+}
+
+function deterministicSearchUrl(goal: string) {
+  const query = searchTerms(goal);
   if (!query) return "";
-  return `https://en.wikipedia.org/w/index.php?search=${encodeURIComponent(query.slice(0, 180))}`;
+  if (/\bgithub\b/i.test(goal)) return `https://github.com/search?q=${encodeURIComponent(query.slice(0, 180))}&type=repositories`;
+  if (/\bwikipedia\b/i.test(goal)) return `https://en.wikipedia.org/w/index.php?search=${encodeURIComponent(query.slice(0, 180))}`;
+  if (/\byoutube\b/i.test(goal)) return `https://www.youtube.com/results?search_query=${encodeURIComponent(query.slice(0, 180))}`;
+  if (/\bnpm(?:js)?\b/i.test(goal)) return `https://www.npmjs.com/search?q=${encodeURIComponent(query.slice(0, 180))}`;
+  if (/\bamazon\b/i.test(goal)) return `https://www.amazon.com/s?k=${encodeURIComponent(query.slice(0, 180))}`;
+  return "";
 }
 
 function initialGoalUrl(goal: string) {
-  return wikipediaSearchUrl(goal) || explicitGoalUrl(goal);
+  return deterministicSearchUrl(goal) || explicitGoalUrl(goal);
+}
+
+function deterministicGoalSatisfied(goal: string, pageUrl: string, pageText: string) {
+  const target = deterministicSearchUrl(goal);
+  if (!target || !usablePage(pageUrl, pageText)) return false;
+  try {
+    const current = new URL(pageUrl);
+    const expected = new URL(target);
+    if (current.hostname !== expected.hostname) return false;
+    if (/github\.com$/i.test(current.hostname)) return current.pathname.startsWith("/search") && Boolean(current.searchParams.get("q"));
+    if (/wikipedia\.org$/i.test(current.hostname)) return current.pathname.includes("/w/index.php") || current.searchParams.has("search");
+    if (/youtube\.com$/i.test(current.hostname)) return current.pathname.startsWith("/results") && Boolean(current.searchParams.get("search_query"));
+    if (/npmjs\.com$/i.test(current.hostname)) return current.pathname.startsWith("/search") && Boolean(current.searchParams.get("q"));
+    if (/amazon\.com$/i.test(current.hostname)) return current.pathname.startsWith("/s") && Boolean(current.searchParams.get("k"));
+  } catch {}
+  return false;
 }
 
 function sameDestination(current: string, target: string) {
@@ -115,31 +139,19 @@ function normalizePlannedAction(action: BrowserTaskAction, currentUrl: string): 
       reason: action.reason || `Using the visible “${label}” control instead of an invalid navigation target`,
     };
   }
-  return {
-    type: "wait",
-    reason: "Re-inspecting the page because the planner omitted a valid navigation URL",
-  };
+  return { type: "wait", reason: "Re-inspecting the page because the planner omitted a valid navigation URL" };
 }
 
 function actionSignature(action: BrowserTaskAction) {
-  return [
-    action.type,
-    action.url || "",
-    action.label || "",
-    action.value || "",
-    action.direction || "",
-  ].map(value => String(value).trim().toLowerCase()).join("|");
+  return [action.type, action.url || "", action.label || "", action.value || "", action.direction || ""]
+    .map(value => String(value).trim().toLowerCase()).join("|");
 }
 
 function pageFingerprint(page: { url: string; title: string; text: string }) {
   return `${page.url}|${page.title}|${page.text.slice(0, 1600)}`;
 }
 
-function avoidActionLoop(
-  action: BrowserTaskAction,
-  page: { url: string; controls: Array<{ kind: string; label: string }> },
-  steps: BrowserTask["steps"],
-): BrowserTaskAction {
+function avoidActionLoop(action: BrowserTaskAction, page: { url: string; controls: Array<{ kind: string; label: string }> }, steps: BrowserTask["steps"]): BrowserTaskAction {
   const signature = actionSignature(action);
   const recentMatches = steps.slice(-5).filter(step => actionSignature(step.action) === signature).length;
   if (recentMatches < 2 && stagnantPageRounds < 2) return action;
@@ -151,48 +163,26 @@ function avoidActionLoop(
       const clickable = /button|submit/i.test(control.kind);
       return clickable && Boolean(label) && (label === wanted || /\b(?:search|go|find|next|continue)\b/i.test(label));
     });
-    if (submit) {
-      return {
-        type: "click",
-        label: submit.label,
-        reason: `Submitting with “${submit.label}” instead of repeating the same fill action`,
-      };
-    }
+    if (submit) return { type: "click", label: submit.label, reason: `Submitting with “${submit.label}” instead of repeating the same fill action` };
   }
 
-  if (action.type === "wait" && stagnantPageRounds < 4) {
-    return { type: "scroll", direction: "down", reason: "The page did not change, so Orbit is inspecting more content instead of waiting again" };
-  }
-
-  if (action.type === "navigate" && action.url && sameDestination(page.url, action.url) && stagnantPageRounds < 4) {
-    return { type: "scroll", direction: "down", reason: "Orbit is already at that destination, so it is inspecting the page instead of reopening it" };
-  }
-
-  if (action.type === "scroll" && recentMatches >= 2 && stagnantPageRounds < 4) {
-    return {
-      type: "scroll",
-      direction: action.direction === "up" ? "down" : "up",
-      reason: "Orbit detected repeated scrolling without progress and changed direction",
-    };
-  }
-
-  if (recentMatches >= 3 || stagnantPageRounds >= 4) {
-    return { type: "wait", reason: LOOP_RECOVERY_MARKER };
-  }
-
+  if (action.type === "wait" && stagnantPageRounds < 4) return { type: "scroll", direction: "down", reason: "The page did not change, so Orbit is inspecting more content instead of waiting again" };
+  if (action.type === "navigate" && action.url && sameDestination(page.url, action.url) && stagnantPageRounds < 4) return { type: "scroll", direction: "down", reason: "Orbit is already at that destination, so it is inspecting the page instead of reopening it" };
+  if (action.type === "scroll" && recentMatches >= 2 && stagnantPageRounds < 4) return { type: "scroll", direction: action.direction === "up" ? "down" : "up", reason: "Orbit detected repeated scrolling without progress and changed direction" };
+  if (recentMatches >= 3 || stagnantPageRounds >= 4) return { type: "wait", reason: LOOP_RECOVERY_MARKER };
   return action;
 }
 
 function transientGeminiFailure(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || "");
-  return /quota|rate.?limit|resource.?exhausted|429|too many requests|high demand|try again later|temporar(?:y|ily)|overload(?:ed)?|service unavailable|\b503\b|timeout|timed.?out|aborted|aborterror/i.test(message);
+  return /quota|rate.?limit|resource.?exhausted|429|too many requests|high demand|try again later|temporar(?:y|ily)|overload(?:ed)?|service(?:\s+is)?(?:\s+currently)?\s+unavailable|currently\s+unavailable|\b503\b|timeout|timed.?out|aborted|aborterror/i.test(message);
 }
 
 function retryDelayMs(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || "");
   const seconds = Number(message.match(/retry\s+in\s+(\d+(?:\.\d+)?)s/i)?.[1] || 0);
-  if (!Number.isFinite(seconds) || seconds <= 0) return 30_000;
-  return Math.min(35_000, Math.ceil(seconds * 1000) + 500);
+  if (!Number.isFinite(seconds) || seconds <= 0) return 12_000;
+  return Math.min(20_000, Math.ceil(seconds * 1000) + 500);
 }
 
 function parseBrowserAction(value: string): BrowserTaskAction {
@@ -276,11 +266,13 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
     loopRecoveryAttempts = 0;
   }
 
+  if (deterministicGoalSatisfied(goal, page.url, page.text)) {
+    return { type: "complete", reason: `Search results are open in Orbit Browser for “${searchTerms(goal)}”` };
+  }
+
   if (!usablePage(page.url, page.text)) {
     const goalUrl = initialGoalUrl(goal);
-    if (goalUrl && !sameDestination(page.url, goalUrl)) {
-      return { type: "navigate", url: goalUrl, reason: `Opening ${new URL(goalUrl).hostname} inside Orbit` };
-    }
+    if (goalUrl && !sameDestination(page.url, goalUrl)) return { type: "navigate", url: goalUrl, reason: `Opening ${new URL(goalUrl).hostname} inside Orbit` };
     throw new Error("The embedded page did not finish loading, so Orbit did not continue from model memory");
   }
 
@@ -288,9 +280,7 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
   emit(listener, "status", active.summary);
 
   const history = steps.slice(-6).map(step => `${step.action.type}: ${step.action.label || step.action.url || ""} -> ${step.outcome}`).join("\n");
-  const noProgress = stagnantPageRounds > 0
-    ? `\nProgress warning: the visible page has been materially unchanged for ${stagnantPageRounds} planning round(s). Do NOT repeat the same action; choose a different control/action that can advance the goal.`
-    : "";
+  const noProgress = stagnantPageRounds > 0 ? `\nProgress warning: the visible page has been materially unchanged for ${stagnantPageRounds} planning round(s). Do NOT repeat the same action; choose a different control/action that can advance the goal.` : "";
   const prompt = `You are Orbit's browser controller. Choose exactly one safe next browser action to advance the user's goal.\nGoal: ${goal}\nCurrent page: ${page.title} (${page.url})\nRecent steps:\n${history || "none"}${noProgress}\nVisible controls: ${JSON.stringify(page.controls.slice(0, 60))}\nVisible text: ${page.text.slice(0, 7000)}\nReturn JSON only: {"type":"navigate|click|fill|select|scroll|wait|complete|ask_user","url":"","label":"","value":"","direction":"down|up","reason":"short explanation"}. Use labels exactly as shown. For navigate, url MUST be an absolute http:// or https:// URL; if you do not have one, use click, fill, select, scroll, wait, or ask_user instead. Never repeat the same action from Recent steps when it did not change the page. Never choose send, submit, apply, purchase, pay, book, publish, post, delete, accept, or agree; use ask_user immediately before such an action. Use complete only when the goal is visibly satisfied by the current loaded page. Never answer from memory instead of using the browser. Never enter passwords, payment data, government IDs, or authentication codes.`;
   const normalized = normalizePlannedAction(await planBrowserStep(prompt, listener), page.url);
   let parsed = avoidActionLoop(normalized, page, steps);
@@ -313,13 +303,9 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
         if (!label || recentLabels.has(label.toLowerCase())) return false;
         return /button|a|link|submit/i.test(control.kind) && /\b(?:search|result|article|release|issues?|next|more|details?|read|view|open)\b/i.test(label);
       });
-      if (alternate) {
-        parsed = { type: "click", label: alternate.label, reason: `Loop recovery selected a different visible control: “${alternate.label}”` };
-      } else if (loopRecoveryAttempts < MAX_LOOP_RECOVERIES) {
-        parsed = { type: "scroll", direction: "down", reason: "Loop recovery is inspecting a new part of the page before replanning" };
-      } else {
-        throw new Error(`Orbit could not find a new safe browser path after ${MAX_LOOP_RECOVERIES} recovery attempts`);
-      }
+      if (alternate) parsed = { type: "click", label: alternate.label, reason: `Loop recovery selected a different visible control: “${alternate.label}”` };
+      else if (loopRecoveryAttempts < MAX_LOOP_RECOVERIES) parsed = { type: "scroll", direction: "down", reason: "Loop recovery is inspecting a new part of the page before replanning" };
+      else throw new Error(`Orbit could not find a new safe browser path after ${MAX_LOOP_RECOVERIES} recovery attempts`);
     } else {
       parsed = recovered;
       stagnantPageRounds = Math.max(0, stagnantPageRounds - 2);
@@ -365,12 +351,7 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
         return active;
       }
 
-      const action = await withTimeout(
-        nextAction(active.goal, active.steps, listener),
-        STEP_TIMEOUT_MS,
-        "The browser planner took too long on this step",
-      );
-
+      const action = await withTimeout(nextAction(active.goal, active.steps, listener), STEP_TIMEOUT_MS, "The browser planner took too long on this step");
       if (!active || active.id !== taskId) return active;
       if (cancelled) {
         active.status = "cancelled";
@@ -418,9 +399,11 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
     } else {
       active.status = "failed";
       const detail = error instanceof Error ? error.message : "an unknown browser-agent error occurred";
-      const friendly = /timeout|timed.?out|aborted|aborterror/i.test(detail)
-        ? "the browser planner timed out before it could verify the next step. The current page is still open, so retrying can continue from here."
-        : detail;
+      const friendly = /service(?:\s+is)?(?:\s+currently)?\s+unavailable|currently\s+unavailable|\b503\b/i.test(detail)
+        ? "the AI planner is temporarily unavailable. The Orbit Browser page is still open, and common navigation/search actions can continue without it."
+        : /timeout|timed.?out|aborted|aborterror/i.test(detail)
+          ? "the browser planner timed out before it could verify the next step. The current page is still open, so retrying can continue from here."
+          : detail;
       active.summary = `Orbit paused the embedded browser safely: ${friendly}`;
     }
     emit(listener, "status", active.summary);
@@ -432,7 +415,8 @@ export async function startBrowserTask(goal: string, listener: (event: BrowserTa
   if (!goal.trim()) throw new Error("Tell Orbit what you want the browser to accomplish");
   const local = await ollamaStatus();
   const geminiReady = geminiStatus().available;
-  if (!geminiReady && !local.available) throw new Error("Connect Gemini or start the local qwen3:4b model before starting an autonomous browser task");
+  const deterministic = Boolean(initialGoalUrl(goal));
+  if (!deterministic && !geminiReady && !local.available) throw new Error("Connect Gemini or start the local qwen3:4b model before starting an autonomous browser task");
   if (active?.status === "running") throw new Error("Orbit is already running a browser task. Stop it before starting another one.");
 
   cancelled = false;
@@ -445,7 +429,7 @@ export async function startBrowserTask(goal: string, listener: (event: BrowserTa
     goal: goal.trim(),
     status: "running",
     steps: [],
-    summary: "Opening Orbit's embedded browser",
+    summary: deterministic ? "Opening the requested page in Orbit Browser" : "Opening Orbit's embedded browser",
     url: await browser.currentUrl(),
     title: await browser.pageTitle(),
     planner: geminiReady ? "gemini" : "ollama",

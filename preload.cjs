@@ -1,9 +1,13 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 let embeddedBrowserVisible = false;
+let embeddedBrowserState = null;
 let browserTaskRunning = false;
+
 ipcRenderer.on("orbit:embedded-browser:state", (_event, payload) => {
   embeddedBrowserVisible = Boolean(payload?.visible);
+  embeddedBrowserState = payload || null;
+  renderOrbitBrowserChrome();
 });
 ipcRenderer.on("orbit:browser:task:event", (_event, payload) => {
   browserTaskRunning = payload?.task?.status === "running";
@@ -34,12 +38,116 @@ function normalizeOrbitCommand(command) {
     || value.match(/^(?:please\s+)?(?:use\s+)?(?:your\s+|orbit(?:'s)?\s+)?(?:autonomous\s+|cloud\s+)?browser(?:\s+agent)?\s*[,;:\-]?\s*(?:to\s+)?(.+)$/i);
   if (browserAgent) return `browser agent to ${browserAgent[1].trim()}`;
 
-  // Orbit's own embedded browser is the default web surface. The legacy
-  // external-browser path is used only when the user names an external browser.
   if (explicitlyRequestsExternalBrowser(value)) return value;
   if (!browserTaskRunning && looksLikeWebRequest(value)) return `browser agent to ${value}`;
   if (embeddedBrowserVisible && !browserTaskRunning && looksLikeBrowserFollowUp(value)) return `browser agent to ${value}`;
   return value;
+}
+
+function browserHost(url) {
+  try { return new URL(url).hostname.replace(/^www\./, "") || "New tab"; }
+  catch { return "New tab"; }
+}
+
+function installOrbitBrowserChrome() {
+  if (document.getElementById("orbit-browser-chrome-style")) return;
+  const style = document.createElement("style");
+  style.id = "orbit-browser-chrome-style";
+  style.textContent = `
+#orbit-browser-chrome{position:fixed;z-index:2147482000;top:10px;left:calc(276px + var(--orbit-agent-pane-width,460px) + 12px);right:12px;height:94px;display:none;grid-template-rows:42px 42px;gap:4px;padding:5px 7px;border:1px solid rgba(155,124,255,.24);border-radius:15px;background:linear-gradient(180deg,rgba(15,17,25,.98),rgba(8,10,16,.97));box-shadow:0 16px 46px rgba(0,0,0,.48),inset 0 1px rgba(255,255,255,.05);backdrop-filter:blur(20px);color:#e9ebf3;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;pointer-events:auto}
+#orbit-browser-chrome *{box-sizing:border-box}
+.orbit-browser-tab-row{display:flex;align-items:center;gap:5px;min-width:0}.orbit-browser-wordmark{display:flex;align-items:center;gap:7px;flex:none;padding:0 6px 0 2px}.orbit-browser-wordmark i{width:23px;height:23px;border-radius:8px;display:grid;place-items:center;background:radial-gradient(circle at 35% 30%,#fff,#a893ff 16%,#5640d0 58%,#16102e);box-shadow:0 0 18px rgba(126,96,255,.55);font:800 10px/1 sans-serif;font-style:normal}.orbit-browser-wordmark span{display:grid;line-height:1.05}.orbit-browser-wordmark b{font-size:9px;letter-spacing:.12em}.orbit-browser-wordmark small{font-size:7px;color:#666e82;letter-spacing:.08em}
+.orbit-browser-tabs{display:flex;align-items:center;gap:4px;min-width:0;overflow-x:auto;scrollbar-width:none;flex:1}.orbit-browser-tabs::-webkit-scrollbar{display:none}.orbit-browser-tab{display:flex;align-items:center;min-width:120px;max-width:190px;height:31px;border:1px solid transparent;border-radius:9px;background:#11141d;overflow:hidden;flex:0 1 180px}.orbit-browser-tab.active{border-color:rgba(155,124,255,.42);background:linear-gradient(180deg,#201a37,#151522);box-shadow:inset 0 1px rgba(255,255,255,.05)}.orbit-browser-tab>button:first-child{min-width:0;flex:1;height:100%;border:0;background:transparent;color:#858da0;padding:0 8px;text-align:left;cursor:pointer;display:grid;align-content:center;gap:1px}.orbit-browser-tab.active>button:first-child{color:#f1efff}.orbit-browser-tab b{font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:650}.orbit-browser-tab small{font-size:7px;color:#60687a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.orbit-browser-tab .orbit-tab-close{width:26px;height:100%;border:0;background:transparent;color:#687084;cursor:pointer;font-size:13px}.orbit-browser-tab .orbit-tab-close:hover{color:white;background:#ffffff0a}.orbit-browser-new-tab{width:29px;height:29px;flex:none;border:1px solid #ffffff0e;border-radius:9px;background:#11141c;color:#a9b0c1;cursor:pointer;font-size:17px;line-height:1}.orbit-browser-new-tab:hover{border-color:rgba(155,124,255,.35);color:white;background:#191629}
+.orbit-browser-nav{display:grid;grid-template-columns:auto auto auto minmax(80px,1fr) auto;gap:5px;align-items:center}.orbit-browser-nav>button{width:30px;height:30px;border:1px solid #ffffff0d;border-radius:9px;background:#0e1118;color:#7e8799;cursor:pointer;font-size:13px}.orbit-browser-nav>button:hover:not(:disabled){border-color:rgba(155,124,255,.3);color:white;background:#171525}.orbit-browser-nav>button:disabled{opacity:.3;cursor:default}.orbit-browser-address{height:30px;display:flex;align-items:center;gap:7px;min-width:0;padding:0 10px;border:1px solid #ffffff0d;border-radius:10px;background:#090c12;color:#8d95a7}.orbit-browser-address i{width:6px;height:6px;border-radius:50%;background:#59d794;box-shadow:0 0 9px #59d794;flex:none}.orbit-browser-address.loading i{background:#9b7cff;box-shadow:0 0 10px #9b7cff;animation:orbit-browser-pulse .8s infinite}.orbit-browser-address span{font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.orbit-browser-agent{height:27px;display:flex;align-items:center;gap:5px;padding:0 8px;border:1px solid rgba(155,124,255,.2);border-radius:999px;background:#151221;color:#a99bf0;font-size:7px;font-weight:800;letter-spacing:.08em;white-space:nowrap}.orbit-browser-agent i{width:5px;height:5px;border-radius:50%;background:#9b7cff;box-shadow:0 0 8px #9b7cff}@keyframes orbit-browser-pulse{50%{opacity:.35}}
+@media(max-width:1100px){#orbit-browser-chrome{left:calc(276px + var(--orbit-agent-pane-width,390px) + 8px);right:8px}.orbit-browser-wordmark span{display:none}.orbit-browser-tab{min-width:95px}.orbit-browser-agent{display:none}.orbit-browser-nav{grid-template-columns:auto auto auto minmax(70px,1fr)}}`;
+  document.documentElement.appendChild(style);
+
+  const root = document.createElement("div");
+  root.id = "orbit-browser-chrome";
+  root.setAttribute("aria-label", "Orbit Browser controls");
+  document.body.appendChild(root);
+}
+
+function button(text, title, handler, disabled = false) {
+  const node = document.createElement("button");
+  node.type = "button";
+  node.textContent = text;
+  node.title = title;
+  node.disabled = disabled;
+  node.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    void handler();
+  });
+  return node;
+}
+
+function renderOrbitBrowserChrome() {
+  const start = () => {
+    installOrbitBrowserChrome();
+    const root = document.getElementById("orbit-browser-chrome");
+    if (!root) return;
+    const state = embeddedBrowserState;
+    root.style.display = state?.visible ? "grid" : "none";
+    if (!state?.visible) return;
+
+    root.replaceChildren();
+    const tabRow = document.createElement("div");
+    tabRow.className = "orbit-browser-tab-row";
+    const wordmark = document.createElement("div");
+    wordmark.className = "orbit-browser-wordmark";
+    const orb = document.createElement("i"); orb.textContent = "O";
+    const words = document.createElement("span");
+    const name = document.createElement("b"); name.textContent = "ORBIT BROWSER";
+    const local = document.createElement("small"); local.textContent = "ISOLATED SESSION";
+    words.append(name, local); wordmark.append(orb, words); tabRow.appendChild(wordmark);
+
+    const tabs = document.createElement("div");
+    tabs.className = "orbit-browser-tabs";
+    for (const item of Array.isArray(state.tabs) ? state.tabs : []) {
+      const shell = document.createElement("div");
+      shell.className = `orbit-browser-tab${item.id === state.activeTabId ? " active" : ""}`;
+      const select = document.createElement("button");
+      select.type = "button";
+      const title = document.createElement("b"); title.textContent = item.title || browserHost(item.url);
+      const domain = document.createElement("small"); domain.textContent = browserHost(item.url);
+      select.append(title, domain);
+      select.addEventListener("click", () => void ipcRenderer.invoke("orbit:embedded-browser:tab:switch", item.id));
+      const close = button("×", "Close tab", () => ipcRenderer.invoke("orbit:embedded-browser:tab:close", item.id));
+      close.className = "orbit-tab-close";
+      shell.append(select, close);
+      tabs.appendChild(shell);
+    }
+    tabRow.appendChild(tabs);
+    const add = button("+", "New Orbit Browser tab", () => ipcRenderer.invoke("orbit:embedded-browser:tab:new"));
+    add.className = "orbit-browser-new-tab";
+    tabRow.appendChild(add);
+
+    const nav = document.createElement("div");
+    nav.className = "orbit-browser-nav";
+    nav.append(
+      button("‹", "Back", () => ipcRenderer.invoke("orbit:embedded-browser:back"), !state.canGoBack),
+      button("›", "Forward", () => ipcRenderer.invoke("orbit:embedded-browser:forward"), !state.canGoForward),
+      button("↻", "Reload", () => ipcRenderer.invoke("orbit:embedded-browser:reload")),
+    );
+    const address = document.createElement("div");
+    address.className = `orbit-browser-address${state.loading ? " loading" : ""}`;
+    const live = document.createElement("i");
+    const url = document.createElement("span");
+    url.textContent = state.url || "New Orbit tab";
+    address.append(live, url);
+    nav.appendChild(address);
+    const agent = document.createElement("div");
+    agent.className = "orbit-browser-agent";
+    const agentDot = document.createElement("i");
+    const agentLabel = document.createElement("span"); agentLabel.textContent = "AGENT CONTROLS ACTIVE TAB";
+    agent.append(agentDot, agentLabel);
+    nav.appendChild(agent);
+    root.append(tabRow, nav);
+  };
+
+  if (document.readyState === "loading") window.addEventListener("DOMContentLoaded", start, { once: true });
+  else start();
 }
 
 function installLongCommandPreview() {
@@ -67,26 +175,21 @@ function installLongCommandPreview() {
     if (text && text.textContent !== value) text.textContent = value;
   };
 
-  const syncAll = () => {
-    document.querySelectorAll(".command:not(.knowledge-search) input").forEach(syncInput);
-  };
-
+  const syncAll = () => document.querySelectorAll(".command:not(.knowledge-search) input").forEach(syncInput);
   const start = () => {
     syncAll();
     document.addEventListener("input", event => {
       const target = event.target;
       if (isCommandInput(target)) syncInput(target);
     }, true);
-    // React can update the controlled command value from voice events without a
-    // native input event, so keep the expanded command view synchronized too.
     window.setInterval(syncAll, 120);
   };
-
   if (document.readyState === "loading") window.addEventListener("DOMContentLoaded", start, { once: true });
   else start();
 }
 
 installLongCommandPreview();
+renderOrbitBrowserChrome();
 
 contextBridge.exposeInMainWorld("orbit", Object.freeze({
   policies: () => ipcRenderer.invoke("orbit:policies"),

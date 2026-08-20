@@ -21,6 +21,16 @@ test("YouTube play requests use deterministic Orbit Browser recovery", async () 
   assert.match(engine, /best matching YouTube result/i);
 });
 
+test("dedicated YouTube playback stays embedded and prefers earliest strong match", async () => {
+  const workflow = await source("src/main/browser-workflows.ts");
+  assert.match(workflow, /import \* as embedded from "\.\/embedded-browser\.js"/);
+  assert.match(workflow, /await embedded\.openUrl\(searchUrl\)/);
+  assert.match(workflow, /const strongEarly = candidates\.find/);
+  assert.match(workflow, /item\.coverage >= 1/);
+  assert.match(workflow, /await embedded\.clickByLabel\(chosen\.label\)/);
+  assert.match(workflow, /youtube\.com\\\/watch/);
+});
+
 test("open calculator bypasses browser context and launches native Calculator", async () => {
   const preload = await source("preload.cjs");
   assert.match(preload, /function nativeApplicationRequest/);
@@ -37,10 +47,21 @@ test("active YouTube context keeps vague trailer follow-ups inside Orbit Browser
   assert.match(preload, /function activeOrbitBrowserHost/);
   assert.match(preload, /function contextualOrbitBrowserFollowUp/);
   assert.match(preload, /function contextualizeOrbitBrowserCommand/);
+  assert.match(preload, /function youtubePlaybackCommand/);
   assert.match(preload, /play \$\{match\[1\]\.trim\(\)\} on YouTube/);
+  assert.match(preload, /const playback = !external \? youtubePlaybackCommand\(value\) : ""/);
+  assert.match(preload, /return ipcRenderer\.invoke\("orbit:command:plan", playback\)/);
   assert.match(preload, /const contextual = !external && contextualOrbitBrowserFollowUp\(value\)/);
   assert.match(preload, /looksLikeCareerBrowserRequest\(value\).*\|\| contextual/s);
-  assert.ok(preload.indexOf("if (explicitlyRequestsExternalBrowser(value)) return value") < preload.indexOf("const contextual = contextualOrbitBrowserFollowUp(value)"), "explicit Chrome/Safari requests must override Orbit Browser context");
+  assert.ok(preload.indexOf("if (explicitlyRequestsExternalBrowser(value)) return value") < preload.indexOf("const playback = youtubePlaybackCommand(value)"), "explicit Chrome/Safari requests must override embedded YouTube playback");
+});
+
+test("local development refreshes the native speech helper", async () => {
+  const [pkg, helper] = await Promise.all([source("package.json"), source("scripts/ensure-macos-native.mjs")]);
+  assert.match(pkg, /node scripts\/ensure-macos-native\.mjs/);
+  assert.match(helper, /OrbitSpeech\.swift/);
+  assert.match(helper, /release-sidecar\/orbit-speech/);
+  assert.match(helper, /build-macos-native\.sh/);
 });
 
 test("career/browser consequential actions remain approval gated", async () => {

@@ -20,6 +20,12 @@ function explicitlyRequestsExternalBrowser(value) {
   return /\b(?:use|using|with|through|in|via|open(?:\s+it|\s+this|\s+that)?\s+in)\s+(?:google\s+)?chrome\b|\b(?:use|using|with|through|in|via|open(?:\s+it|\s+this|\s+that)?\s+in)\s+safari\b|\b(?:use|using|with|through|in|via)\s+(?:firefox|edge|brave)\b/i.test(value.trim());
 }
 
+function nativeApplicationRequest(value) {
+  const text = String(value || "").trim();
+  if (/^(?:hey\s+orbit[,;:\s-]*)?(?:please\s+)?(?:open|launch|start)\s+(?:the\s+)?calculator(?:\s+app)?[.!?]*$/i.test(text)) return "Calculator";
+  return "";
+}
+
 function looksLikeCareerBrowserRequest(value) {
   const text = String(value || "").trim();
   if (!text) return false;
@@ -55,6 +61,7 @@ function normalizeOrbitCommand(command) {
     || value.match(/^(?:please\s+)?(?:use\s+)?(?:your\s+|orbit(?:'s)?\s+)?(?:autonomous\s+|cloud\s+)?browser(?:\s+agent)?\s*[,;:\-]?\s*(?:to\s+)?(.+)$/i);
   if (browserAgent) return `browser agent to ${browserAgent[1].trim()}`;
 
+  if (nativeApplicationRequest(value)) return value;
   if (explicitlyRequestsExternalBrowser(value)) return value;
   if (looksLikeCareerBrowserRequest(value) || wantsNewOrbitTab(value) || looksLikeWebRequest(value)) return `browser agent to ${value}`;
   if (embeddedBrowserVisible && looksLikeBrowserFollowUp(value)) return `browser agent to ${value}`;
@@ -63,6 +70,17 @@ function normalizeOrbitCommand(command) {
 
 async function planOrbitCommand(command) {
   const value = String(command || "").trim();
+  const nativeApplication = nativeApplicationRequest(value);
+  if (nativeApplication) {
+    if (browserTaskRunning) {
+      await ipcRenderer.invoke("orbit:browser:task:cancel").catch(() => null);
+      browserTaskRunning = false;
+      browserTaskState = null;
+    }
+    await ipcRenderer.invoke("orbit:app:launch", nativeApplication);
+    return { intent: "answer", confidence: 1, explanation: "Native application shortcut matched before browser routing", reply: `Opened ${nativeApplication}.`, query: value, source: "local" };
+  }
+
   const external = explicitlyRequestsExternalBrowser(value);
   const browserFollowUp = !external && (looksLikeCareerBrowserRequest(value) || wantsNewOrbitTab(value) || looksLikeWebRequest(value) || (embeddedBrowserVisible && looksLikeBrowserFollowUp(value)));
 

@@ -184,6 +184,18 @@ function usablePage(url: string, text: string) {
   return /^https?:\/\//i.test(url) && text.trim().length >= 20;
 }
 
+function githubSecondaryRateLimit(url: string, text: string) {
+  try {
+    const hostname = new URL(url).hostname;
+    if (!/(?:^|\.)github\.com$/i.test(hostname)) return false;
+  } catch {
+    return false;
+  }
+  const normalized = text.toLowerCase();
+  return normalized.includes("secondary rate limit")
+    || (normalized.includes("too many requests") && normalized.includes("please wait"));
+}
+
 function publicUrl(value: string) {
   const url = new URL(value);
   if (!["http:", "https:"].includes(url.protocol)) throw new Error("Orbit only opens HTTP or HTTPS pages");
@@ -334,6 +346,10 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
 
   active.url = page.url;
   active.title = page.title;
+
+  if (githubSecondaryRateLimit(page.url, page.text)) {
+    throw new Error("GITHUB_SECONDARY_RATE_LIMIT");
+  }
 
   const fingerprint = pageFingerprint(page);
   if (fingerprint === lastPageFingerprint) stagnantPageRounds += 1;
@@ -497,14 +513,17 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
       active.summary = "Browser task stopped";
     } else {
       const detail = error instanceof Error ? error.message : "an unknown browser-agent error occurred";
+      const githubRateLimited = detail === "GITHUB_SECONDARY_RATE_LIMIT" || /secondary rate limit|too many requests/i.test(detail);
       const providerUnavailable = /service(?:\s+is)?(?:\s+currently)?\s+unavailable|currently\s+unavailable|\b503\b|quota|rate.?limit|resource.?exhausted|429|high demand|overload/i.test(detail);
       const timedOut = /timeout|timed.?out|aborted|aborterror/i.test(detail);
-      active.status = providerUnavailable || timedOut ? "paused" : "failed";
-      const friendly = providerUnavailable
-        ? "the AI planner is temporarily unavailable. The Orbit Browser session is still open; native navigation, tab controls, and supported searches remain available."
-        : timedOut
-          ? "the AI planner timed out before it could verify the next reasoning step. The current Orbit Browser session remains open."
-          : detail;
+      active.status = githubRateLimited || providerUnavailable || timedOut ? "paused" : "failed";
+      const friendly = githubRateLimited
+        ? "GitHub temporarily rate-limited this Orbit Browser session. Orbit stopped retrying so it does not extend the block. Wait a few minutes, or sign in to GitHub inside Orbit Browser; the persistent Orbit session will keep that login."
+        : providerUnavailable
+          ? "the AI planner is temporarily unavailable. The Orbit Browser session is still open; native navigation, tab controls, and supported searches remain available."
+          : timedOut
+            ? "the AI planner timed out before it could verify the next reasoning step. The current Orbit Browser session remains open."
+            : detail;
       active.summary = `${active.status === "paused" ? "Orbit paused the browser workflow" : "Orbit paused the embedded browser safely"}: ${friendly}`;
     }
     emit(listener, "status", active.summary);

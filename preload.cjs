@@ -9,8 +9,21 @@ ipcRenderer.on("orbit:browser:task:event", (_event, payload) => {
   browserTaskRunning = payload?.task?.status === "running";
 });
 
+function explicitlyRequestsExternalBrowser(value) {
+  return /\b(?:use|using|with|through|in|via|open(?:\s+it|\s+this|\s+that)?\s+in)\s+(?:google\s+)?chrome\b|\b(?:use|using|with|through|in|via|open(?:\s+it|\s+this|\s+that)?\s+in)\s+safari\b|\b(?:use|using|with|through|in|via)\s+(?:firefox|edge|brave)\b/i.test(value.trim());
+}
+
+function looksLikeWebRequest(value) {
+  const text = value.trim();
+  if (!text) return false;
+  return /\b(?:open|visit|browse|go\s+to|navigate\s+to|search|look\s+up|find\s+online|check\s+online|google)\b/i.test(text)
+    && /\b(?:github|youtube|amazon|wikipedia|reddit|linkedin|google|website|site|web|page|repository|repo|release|issue|article|result|link)\b|\b[a-z0-9-]+\.(?:com|org|net|io|ai|dev|app|co|edu)\b/i.test(text)
+    || /\b(?:github|youtube|amazon|wikipedia|reddit|linkedin)\b/i.test(text)
+    || /\b[a-z0-9-]+\.(?:com|org|net|io|ai|dev|app|co|edu)\b/i.test(text);
+}
+
 function looksLikeBrowserFollowUp(value) {
-  return /^(?:now\s+)?(?:search(?:\s+for)?\b|look\s+for\b|find\s+(?:on\s+)?(?:this|the)\s+page\b|open\s+(?:the\s+)?(?:(?:first|second|third|fourth|fifth|next|previous|last|\d+(?:st|nd|rd|th))\s+)?(?:result|link|article|repository|repo|release|issue|page)\b|click\b|select\b|choose\b|scroll\b|go\s+(?:back|forward)\b|back\b|forward\b|reload\b|refresh\b|summarize\s+(?:this|the)\s+page\b|read\s+(?:this|the)\s+page\b|what\b.*\bpage\b|tell\s+me\s+(?:what|when|where|which|who|how)\b|compare\b)/i.test(value.trim());
+  return /^(?:now\s+)?(?:search(?:\s+for)?\b|look\s+for\b|find\s+(?:on\s+)?(?:this|the)\s+page\b|open\s+(?:the\s+)?(?:(?:first|second|third|fourth|fifth|next|previous|last|\d+(?:st|nd|rd|th))\s+)?(?:result|link|article|repository|repo|release|releases|issue|issues|page)\b|click\b|select\b|choose\b|scroll\b|go\s+(?:back|forward)\b|back\b|forward\b|reload\b|refresh\b|summarize\s+(?:this|the)\s+page\b|read\s+(?:this|the)\s+page\b|what\b.*\bpage\b|tell\s+me\s+(?:what|when|where|which|who|how)\b|compare\b)/i.test(value.trim());
 }
 
 function normalizeOrbitCommand(command) {
@@ -18,6 +31,11 @@ function normalizeOrbitCommand(command) {
   const browserAgent = value.match(/^(?:hey\s+)?orbit\s*[,;:\-]?\s*(?:please\s+)?(?:use\s+)?(?:your\s+|orbit(?:'s)?\s+)?(?:autonomous\s+|cloud\s+)?browser(?:\s+agent)?\s*[,;:\-]?\s*(?:to\s+)?(.+)$/i)
     || value.match(/^(?:please\s+)?(?:use\s+)?(?:your\s+|orbit(?:'s)?\s+)?(?:autonomous\s+|cloud\s+)?browser(?:\s+agent)?\s*[,;:\-]?\s*(?:to\s+)?(.+)$/i);
   if (browserAgent) return `browser agent to ${browserAgent[1].trim()}`;
+
+  // Orbit's own embedded browser is the default web surface. The legacy
+  // external-browser path is used only when the user names an external browser.
+  if (explicitlyRequestsExternalBrowser(value)) return value;
+  if (!browserTaskRunning && looksLikeWebRequest(value)) return `browser agent to ${value}`;
   if (embeddedBrowserVisible && !browserTaskRunning && looksLikeBrowserFollowUp(value)) return `browser agent to ${value}`;
   return value;
 }

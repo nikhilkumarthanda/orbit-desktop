@@ -1,4 +1,5 @@
 import { app } from "electron";
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import * as browser from "./embedded-browser.js";
@@ -171,7 +172,7 @@ const aliases: Array<[keyof CareerProfile, string[]]> = [
 
 export async function autofillCurrentApplication() {
   const profile = await careerProfile();
-  if (!Object.keys(profile).length) return { filled: [], needsReview: [], summary: "Your Orbit Career profile is empty. Say something like “Career profile: name …, email …, phone …, location …, LinkedIn …, GitHub …” first." };
+  if (!Object.keys(profile).length) return { filled: [], needsReview: [], summary: "Your Orbit Career profile is empty. Say something like “Save Career profile: name …, email …, phone …, location …, LinkedIn …, GitHub …” first." };
   const snapshot = await browser.actionSnapshot();
   const available = snapshot.controls.map(control => ({ ...control, lower: control.label.toLowerCase() }));
   const filled: string[] = [];
@@ -212,7 +213,7 @@ export async function trackCurrentApplication(status: CareerApplicationStatus = 
   const records = await applicationRecords();
   const existing = records.find(item => item.url === page.url);
   const record: CareerApplicationRecord = {
-    id: existing?.id || crypto.randomUUID(),
+    id: existing?.id || randomUUID(),
     url: page.url,
     title: page.title || existing?.title || "Job application",
     company: page.company || existing?.company || "",
@@ -246,12 +247,12 @@ export async function draftRecruiterOutreach(instruction = "") {
 
 export async function handleCareerCommand(instruction: string) {
   const command = instruction.trim();
-  if (/\b(?:career|application)\s+profile\b/i.test(command) && /\b(?:save|set|update|remember|my|name|email|phone|linkedin|github|location|portfolio)\b/i.test(command)) return updateCareerProfileFromInstruction(command);
   if (/\b(?:show|what(?:'s| is)|view)\b.*\b(?:career|application)\s+profile\b/i.test(command)) {
     const profile = await careerProfile();
     const visible = Object.entries(profile).map(([key, value]) => `${key}: ${value}`).join(" · ");
     return { profile, summary: visible ? `Orbit Career profile: ${visible}` : "Your Orbit Career profile is empty." };
   }
+  if (/\b(?:career|application)\s+profile\b/i.test(command) && /\b(?:save|set|update|remember|name|email|phone|linkedin|github|location|portfolio|current\s+title|current\s+company)\b/i.test(command)) return updateCareerProfileFromInstruction(command);
   if (/\b(?:inspect|review|analy[sz]e|read)\b.*\b(?:application|form)\b/i.test(command)) return inspectCurrentApplication();
   if (/\b(?:inspect|review|analy[sz]e|read|summari[sz]e)\b.*\b(?:job|role|posting|description)\b/i.test(command)) return inspectCurrentJob();
   if (/\b(?:autofill|auto-fill|fill)\b.*\b(?:application|form)\b/i.test(command)) return autofillCurrentApplication();
@@ -264,5 +265,5 @@ export async function handleCareerCommand(instruction: string) {
     const status: CareerApplicationStatus = /\boffer\b/i.test(command) ? "offer" : /\brejected\b/i.test(command) ? "rejected" : /\binterview\b/i.test(command) ? "interview" : /\bapplied\b/i.test(command) ? "applied" : /\bready\b/i.test(command) ? "ready_to_submit" : /\bprepar/i.test(command) ? "preparing" : "saved";
     return trackCurrentApplication(status);
   }
-  return { summary: "Career Mode is ready. I can inspect this job, inspect the application form, autofill reusable non-sensitive fields, draft recruiter outreach, save your Career profile, and track the application. Final submit/send/publish actions remain approval-gated." };
+  return { summary: "Career Mode is ready. I can inspect this job, inspect the application form, autofill reusable non-sensitive fields, draft recruiter outreach, save your Career profile, and track the application. Final submit/send/post/publish actions remain approval-gated." };
 }

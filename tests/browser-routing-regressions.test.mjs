@@ -13,6 +13,9 @@ test("YouTube play requests use deterministic Orbit Browser recovery", async () 
   assert.match(engine, /Waiting for YouTube to finish rendering/);
   assert.match(engine, /youtubeResultControl/);
   assert.match(engine, /youtubeWatchUrl/);
+  assert.match(engine, /function youtubeSearchMatches/);
+  assert.match(engine, /Correcting YouTube to the search results/);
+  assert.match(engine, /YouTube search results are still rendering/);
   assert.match(engine, /if \(play\) return youtubeWatchUrl\(pageUrl\)/);
   assert.match(engine, /targetUrl\.search/);
   assert.match(engine, /best matching YouTube result/i);

@@ -90,7 +90,12 @@ test("active YouTube context keeps playback and ordinal follow-ups inside Orbit 
   assert.match(preload, /play \$\{match\[1\]\.toLowerCase\(\)\} one on YouTube/);
   assert.match(preload, /function youtubePlaybackCommand/);
   assert.match(preload, /const ordinal = youtubeOrdinalPlaybackCommand\(text\)/);
+  assert.match(preload, /const explicitPlayback = text\.match/);
+  assert.match(preload, /\(\?:open\|play\|watch\)/);
+  assert.match(preload, /explicitPlayback\?\.\[1\]/);
+  assert.match(preload, /play \$\{explicitPlayback\[1\]\.trim\(\)\} on YouTube/);
   assert.match(preload, /function youtubePlaybackQuery/);
+  assert.match(preload, /\(\?:open\|play\|watch\).*\\s\+/);
   assert.match(preload, /play \$\{match\[1\]\.trim\(\)\} on YouTube/);
   assert.match(preload, /const playback = !external \? youtubePlaybackCommand\(value\) : ""/);
   assert.match(preload, /intent: "youtube_play"/);

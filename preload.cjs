@@ -56,9 +56,20 @@ function contextualizeOrbitBrowserCommand(value) {
   return text;
 }
 
+function youtubeOrdinalPlaybackCommand(value) {
+  const text = String(value || "").trim();
+  if (!text || explicitlyRequestsExternalBrowser(text)) return "";
+  if (!/(?:^|\.)youtube\.com$/i.test(activeOrbitBrowserHost())) return "";
+  const match = text.match(/^(?:go\s+back(?:\s*,?\s*(?:and\s+)?)?)?(?:open|play)\s+(?:the\s+)?(first|second|third|fourth|fifth|\d+(?:st|nd|rd|th)?)\s*(?:one|video|result)?[.!?]*$/i);
+  if (!match) return "";
+  return `play ${match[1].toLowerCase()} one on YouTube`;
+}
+
 function youtubePlaybackCommand(value) {
   const text = String(value || "").trim();
   if (!text || explicitlyRequestsExternalBrowser(text)) return "";
+  const ordinal = youtubeOrdinalPlaybackCommand(text);
+  if (ordinal) return ordinal;
   if (/\byoutube\b/i.test(text) && /\bplay\b/i.test(text)) return text;
   if (/(?:^|\.)youtube\.com$/i.test(activeOrbitBrowserHost()) && contextualOrbitBrowserFollowUp(text)) {
     const contextual = contextualizeOrbitBrowserCommand(text);

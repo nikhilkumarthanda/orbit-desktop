@@ -404,6 +404,37 @@ export async function actionSnapshot(): Promise<ActionSnapshot> {
   return snapshot;
 }
 
+export interface YouTubeVideoResult { title: string; url: string }
+
+export async function youtubeVideoResults(limit = 12): Promise<YouTubeVideoResult[]> {
+  await showEmbeddedBrowser();
+  const target = await contents();
+  const safeLimit = Math.max(1, Math.min(30, Math.floor(limit) || 12));
+  const results = await target.executeJavaScript(`(() => {
+    const clean = value => String(value || '').replace(/\\s+/g, ' ').trim();
+    const anchors = Array.from(document.querySelectorAll(
+      'ytd-search ytd-video-renderer a#video-title[href*="/watch?v="], ytd-search ytd-video-renderer a#video-title-link[href*="/watch?v="], ytd-search a#video-title[href*="/watch?v="]'
+    ));
+    const seen = new Set();
+    const results = [];
+    for (const anchor of anchors) {
+      const raw = anchor.getAttribute('href') || '';
+      let url;
+      try { url = new URL(raw, location.origin); } catch { continue; }
+      const videoId = url.searchParams.get('v');
+      if (!videoId || seen.has(videoId)) continue;
+      const title = clean(anchor.getAttribute('title') || anchor.textContent || anchor.getAttribute('aria-label'));
+      if (!title) continue;
+      seen.add(videoId);
+      results.push({ title: title.slice(0, 180), url: 'https://www.youtube.com/watch?v=' + encodeURIComponent(videoId) });
+      if (results.length >= ${safeLimit}) break;
+    }
+    return results;
+  })()`, true) as YouTubeVideoResult[];
+  emitState();
+  return Array.isArray(results) ? results : [];
+}
+
 export async function clickByLabel(label: string) {
   const target = await contents();
   const encoded = JSON.stringify(label.trim().toLowerCase());

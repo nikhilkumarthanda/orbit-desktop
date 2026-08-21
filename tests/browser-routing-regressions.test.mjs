@@ -21,19 +21,28 @@ test("YouTube play requests use deterministic Orbit Browser recovery", async () 
   assert.match(engine, /best matching YouTube result/i);
 });
 
-test("dedicated YouTube playback stays embedded and respects visible result order", async () => {
-  const workflow = await source("src/main/browser-workflows.ts");
+test("dedicated YouTube playback uses exact DOM-order video links and waits for ordinals", async () => {
+  const [workflow, embedded] = await Promise.all([
+    source("src/main/browser-workflows.ts"),
+    source("src/main/embedded-browser.ts"),
+  ]);
   assert.match(workflow, /import \* as embedded from "\.\/embedded-browser\.js"/);
   assert.match(workflow, /let lastYouTubeSearch = ""/);
   assert.match(workflow, /function ordinalFromQuery/);
-  assert.match(workflow, /function youtubeResultControls/);
+  assert.match(workflow, /waitForYouTubeResults\(index \+ 1\)/);
   assert.match(workflow, /const chosen = results\[0\]/);
   assert.match(workflow, /return openCurrentYouTubeResult\(ordinal\)/);
   assert.match(workflow, /await embedded\.goBack\(\)/);
   assert.match(workflow, /const chosen = results\[index\]/);
-  assert.match(workflow, /await embedded\.clickByLabel\(chosen\.label\)/);
+  assert.match(workflow, /await embedded\.openUrl\(chosen\.url\)/);
+  assert.doesNotMatch(workflow, /await embedded\.clickByLabel\(chosen\.(?:label|title)\)/);
   assert.match(workflow, /youtube\.com\\\/watch/);
-  assert.doesNotMatch(workflow, /function bestYouTubeResult|strongEarly/);
+  assert.match(embedded, /export interface YouTubeVideoResult/);
+  assert.match(embedded, /export async function youtubeVideoResults/);
+  assert.match(embedded, /ytd-search ytd-video-renderer a#video-title/);
+  assert.match(embedded, /searchParams\.get\('v'\)/);
+  assert.match(embedded, /results\.push\(\{ title: title\.slice\(0, 180\), url: 'https:\/\/www\.youtube\.com\/watch\?v='/);
+  assert.doesNotMatch(workflow, /function bestYouTubeResult|strongEarly|youtubeResultControls/);
 });
 
 test("open calculator bypasses browser context and launches native Calculator", async () => {

@@ -48,9 +48,12 @@ test("active YouTube context keeps vague trailer follow-ups inside Orbit Browser
   assert.match(preload, /function contextualOrbitBrowserFollowUp/);
   assert.match(preload, /function contextualizeOrbitBrowserCommand/);
   assert.match(preload, /function youtubePlaybackCommand/);
+  assert.match(preload, /function youtubePlaybackQuery/);
   assert.match(preload, /play \$\{match\[1\]\.trim\(\)\} on YouTube/);
   assert.match(preload, /const playback = !external \? youtubePlaybackCommand\(value\) : ""/);
-  assert.match(preload, /return ipcRenderer\.invoke\("orbit:command:plan", playback\)/);
+  assert.match(preload, /intent: "youtube_play"/);
+  assert.match(preload, /Direct embedded YouTube playback shortcut matched before browser-agent routing/);
+  assert.doesNotMatch(preload, /return ipcRenderer\.invoke\("orbit:command:plan", playback\)/);
   assert.match(preload, /const contextual = !external && contextualOrbitBrowserFollowUp\(value\)/);
   assert.match(preload, /looksLikeCareerBrowserRequest\(value\).*\|\| contextual/s);
   assert.ok(preload.indexOf("if (explicitlyRequestsExternalBrowser(value)) return value") < preload.indexOf("const playback = youtubePlaybackCommand(value)"), "explicit Chrome/Safari requests must override embedded YouTube playback");

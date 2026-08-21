@@ -33,7 +33,7 @@ test("dedicated YouTube playback stays embedded and respects visible result orde
   assert.match(workflow, /const chosen = results\[index\]/);
   assert.match(workflow, /await embedded\.clickByLabel\(chosen\.label\)/);
   assert.match(workflow, /youtube\.com\\\/watch/);
-  assert.doesNotMatch(workflow, /strongEarly|globally re-rank/i);
+  assert.doesNotMatch(workflow, /function bestYouTubeResult|strongEarly/);
 });
 
 test("open calculator bypasses browser context and launches native Calculator", async () => {

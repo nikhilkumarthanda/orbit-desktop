@@ -106,6 +106,16 @@ test("active YouTube context keeps playback and ordinal follow-ups inside Orbit 
   assert.ok(preload.indexOf("if (explicitlyRequestsExternalBrowser(value)) return value") < preload.indexOf("const playback = youtubePlaybackCommand(value)"), "explicit Chrome/Safari requests must override embedded YouTube playback");
 });
 
+test("compound YouTube back-and-search keeps the search clause", async () => {
+  const preload = await source("preload.cjs");
+  assert.match(preload, /function youtubeCompoundBackSearch/);
+  assert.match(preload, /(?:go\\s\+back\|back).*search/);
+  assert.match(preload, /const compoundYoutubeSearch = !external \? youtubeCompoundBackSearch\(value\) : ""/);
+  assert.match(preload, /orbit:embedded-browser:back/);
+  assert.match(preload, /search YouTube for \$\{compoundYoutubeSearch\}/);
+  assert.match(preload, /Compound YouTube back-and-search shortcut preserved both requested actions/);
+});
+
 test("local development refreshes the native speech helper", async () => {
   const [pkg, helper] = await Promise.all([source("package.json"), source("scripts/ensure-macos-native.mjs")]);
   assert.match(pkg, /node scripts\/ensure-macos-native\.mjs/);

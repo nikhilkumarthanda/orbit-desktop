@@ -88,6 +88,13 @@ function youtubePlaybackCommand(value) {
   if (!text || explicitlyRequestsExternalBrowser(text)) return "";
   const ordinal = youtubeOrdinalPlaybackCommand(text);
   if (ordinal) return ordinal;
+
+  // Natural playback language should bypass the generic browser planner. A user
+  // saying "open/watch X on YouTube" means play that video, not merely open the
+  // YouTube site. Normalize all of those verbs into the dedicated workflow.
+  const explicitPlayback = text.match(/^(?:hey\s+orbit[,;:\s-]*)?(?:please\s+)?(?:open|play|watch)\s+(.+?)\s+(?:on\s+)?youtube\s*[.!?]*$/i);
+  if (explicitPlayback?.[1]) return `play ${explicitPlayback[1].trim()} on YouTube`;
+
   if (/\byoutube\b/i.test(text) && /\bplay\b/i.test(text)) return text;
   if (/(?:^|\.)youtube\.com$/i.test(activeOrbitBrowserHost()) && contextualOrbitBrowserFollowUp(text)) {
     const contextual = contextualizeOrbitBrowserCommand(text);
@@ -101,7 +108,7 @@ function youtubePlaybackQuery(value) {
     .trim()
     .replace(/^(?:hey\s+orbit[,;:\s-]*)?/i, "")
     .replace(/^(?:please\s+)?/i, "")
-    .replace(/^play\s+/i, "")
+    .replace(/^(?:open|play|watch)\s+/i, "")
     .replace(/\s+(?:on\s+)?youtube\s*[.!?]*$/i, "")
     .trim();
 }

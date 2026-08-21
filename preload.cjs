@@ -33,6 +33,14 @@ function activeOrbitBrowserHost() {
   catch { return ""; }
 }
 
+function youtubeCompoundBackSearch(value) {
+  const text = String(value || "").trim();
+  if (!text || explicitlyRequestsExternalBrowser(text)) return "";
+  if (!/(?:^|\.)youtube\.com$/i.test(activeOrbitBrowserHost())) return "";
+  const match = text.match(/^(?:now\s+)?(?:go\s+back|back)\s*(?:,?\s*(?:and|then)\s+)\s*(?:search(?:\s+for)?|find|look\s+up)\s+(.+?)\s*[.!?]*$/i);
+  return match?.[1]?.trim() || "";
+}
+
 function contextualOrbitBrowserFollowUp(value) {
   const text = String(value || "").trim();
   if (!embeddedBrowserVisible || !text) return false;
@@ -191,6 +199,16 @@ async function planOrbitCommand(command) {
   }
 
   const external = explicitlyRequestsExternalBrowser(value);
+  const compoundYoutubeSearch = !external ? youtubeCompoundBackSearch(value) : "";
+  if (compoundYoutubeSearch) {
+    if (browserTaskRunning) {
+      await ipcRenderer.invoke("orbit:browser:task:cancel").catch(() => null);
+      browserTaskRunning = false;
+      browserTaskState = null;
+    }
+    await ipcRenderer.invoke("orbit:embedded-browser:back").catch(() => null);
+    return { intent: "browser_task", confidence: 1, explanation: "Compound YouTube back-and-search shortcut preserved both requested actions", query: `search YouTube for ${compoundYoutubeSearch}`, source: "local" };
+  }
   const technicalSite = !external ? technicalSiteBrowserGoal(value) : "";
   if (technicalSite) {
     if (browserTaskRunning) {

@@ -56,6 +56,22 @@ function contextualizeOrbitBrowserCommand(value) {
   return text;
 }
 
+function technicalSiteBrowserGoal(value) {
+  const text = String(value || "").trim();
+  if (!text || explicitlyRequestsExternalBrowser(text)) return "";
+  const stack = /\bstack\s*overflow\b/i.test(text);
+  const mdn = /\b(?:mdn|mozilla\s+developer\s+network)\b/i.test(text);
+  if (!stack && !mdn) return "";
+
+  const search = text.match(/\b(?:search(?:\s+for)?|find|look\s+up)\s+(.+?)\s*[.!?]*$/i);
+  if (stack) {
+    if (search?.[1]) return `open https://stackoverflow.com/search?q=${encodeURIComponent(search[1].trim())}`;
+    return "open https://stackoverflow.com";
+  }
+  if (search?.[1]) return `open https://developer.mozilla.org/en-US/search?q=${encodeURIComponent(search[1].trim())}`;
+  return "open https://developer.mozilla.org";
+}
+
 function youtubeOrdinalPlaybackCommand(value) {
   const text = String(value || "").trim();
   if (!text || explicitlyRequestsExternalBrowser(text)) return "";
@@ -100,8 +116,8 @@ function looksLikeWebRequest(value) {
   const text = value.trim();
   if (!text) return false;
   return /\b(?:open|visit|browse|go\s+to|navigate\s+to|search|look\s+up|find\s+online|check\s+online|google)\b/i.test(text)
-    && /\b(?:github|youtube|amazon|wikipedia|reddit|linkedin|jobright|greenhouse|lever|workday|google|website|site|web|page|repository|repo|release|issue|article|result|link|job|application)\b|\b[a-z0-9-]+\.(?:com|org|net|io|ai|dev|app|co|edu)\b/i.test(text)
-    || /\b(?:github|youtube|amazon|wikipedia|reddit|linkedin|jobright|greenhouse|lever|workday)\b/i.test(text)
+    && /\b(?:github|youtube|amazon|wikipedia|reddit|linkedin|jobright|greenhouse|lever|workday|stack\s*overflow|stackoverflow|mdn|mozilla\s+developer\s+network|google|website|site|web|page|repository|repo|release|issue|article|result|link|job|application)\b|\b[a-z0-9-]+\.(?:com|org|net|io|ai|dev|app|co|edu)\b/i.test(text)
+    || /\b(?:github|youtube|amazon|wikipedia|reddit|linkedin|jobright|greenhouse|lever|workday|stack\s*overflow|stackoverflow|mdn|mozilla\s+developer\s+network)\b/i.test(text)
     || /\b[a-z0-9-]+\.(?:com|org|net|io|ai|dev|app|co|edu)\b/i.test(text);
 }
 
@@ -125,6 +141,8 @@ function normalizeOrbitCommand(command) {
 
   if (nativeApplicationRequest(value)) return value;
   if (explicitlyRequestsExternalBrowser(value)) return value;
+  const technicalSite = technicalSiteBrowserGoal(value);
+  if (technicalSite) return `browser agent to ${technicalSite}`;
   const playback = youtubePlaybackCommand(value);
   if (playback) return playback;
   const contextual = contextualOrbitBrowserFollowUp(value);
@@ -147,6 +165,15 @@ async function planOrbitCommand(command) {
   }
 
   const external = explicitlyRequestsExternalBrowser(value);
+  const technicalSite = !external ? technicalSiteBrowserGoal(value) : "";
+  if (technicalSite) {
+    if (browserTaskRunning) {
+      await ipcRenderer.invoke("orbit:browser:task:cancel").catch(() => null);
+      browserTaskRunning = false;
+      browserTaskState = null;
+    }
+    return ipcRenderer.invoke("orbit:command:plan", `browser agent to ${technicalSite}`);
+  }
   const playback = !external ? youtubePlaybackCommand(value) : "";
   if (playback) {
     if (browserTaskRunning) {

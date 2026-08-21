@@ -27,7 +27,6 @@ test("dedicated YouTube playback uses exact DOM-order video links and waits for 
     source("src/main/embedded-browser.ts"),
   ]);
   assert.match(workflow, /import \* as embedded from "\.\/embedded-browser\.js"/);
-  assert.match(workflow, /let lastYouTubeSearch = ""/);
   assert.match(workflow, /function ordinalFromQuery/);
   assert.match(workflow, /waitForYouTubeResults\(index \+ 1\)/);
   assert.match(workflow, /const chosen = results\[0\]/);
@@ -42,7 +41,7 @@ test("dedicated YouTube playback uses exact DOM-order video links and waits for 
   assert.match(embedded, /ytd-search ytd-video-renderer a#video-title/);
   assert.match(embedded, /searchParams\.get\('v'\)/);
   assert.match(embedded, /results\.push\(\{ title: title\.slice\(0, 180\), url: 'https:\/\/www\.youtube\.com\/watch\?v='/);
-  assert.doesNotMatch(workflow, /function bestYouTubeResult|strongEarly|youtubeResultControls/);
+  assert.doesNotMatch(workflow, /function bestYouTubeResult|strongEarly|youtubeResultControls|lastYouTubeSearch/);
 });
 
 test("open calculator bypasses browser context and launches native Calculator", async () => {

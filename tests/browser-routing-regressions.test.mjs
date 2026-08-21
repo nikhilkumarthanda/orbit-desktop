@@ -69,6 +69,16 @@ test("external browsers require an explicit browser request", async () => {
   assert.match(preload, /(?:open\|launch\|start).*chrome.*safari.*firefox.*edge.*brave/s);
 });
 
+test("embedded browser layout prioritizes the web viewport and compacts Orbit home", async () => {
+  const embedded = await source("src/main/embedded-browser.ts");
+  assert.match(embedded, /preferredBrowserWidth = width >= 1450 \? 820/);
+  assert.match(embedded, /available \* 0\.34/);
+  assert.match(embedded, /html\.orbit-browser-open \.assistant-heading,/);
+  assert.match(embedded, /html\.orbit-browser-open \.assistant-core,/);
+  assert.match(embedded, /display: none !important/);
+  assert.match(embedded, /overflow: hidden !important/);
+});
+
 test("active YouTube context keeps playback and ordinal follow-ups inside Orbit Browser", async () => {
   const preload = await source("preload.cjs");
   assert.match(preload, /function activeOrbitBrowserHost/);

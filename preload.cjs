@@ -17,7 +17,9 @@ ipcRenderer.on("orbit:browser:task:event", (_event, payload) => {
 });
 
 function explicitlyRequestsExternalBrowser(value) {
-  return /\b(?:use|using|with|through|in|via|open(?:\s+it|\s+this|\s+that)?\s+in)\s+(?:google\s+)?chrome\b|\b(?:use|using|with|through|in|via|open(?:\s+it|\s+this|\s+that)?\s+in)\s+safari\b|\b(?:use|using|with|through|in|via)\s+(?:firefox|edge|brave)\b/i.test(value.trim());
+  const text = String(value || "").trim();
+  return /^(?:hey\s+orbit[,;:\s-]*)?(?:please\s+)?(?:open|launch|start)\s+(?:the\s+)?(?:google\s+)?(?:chrome|safari|firefox|edge|brave)(?:\s+browser)?[.!?]*$/i.test(text)
+    || /\b(?:use|using|with|through|in|via|open(?:\s+it|\s+this|\s+that)?\s+in)\s+(?:google\s+)?chrome\b|\b(?:use|using|with|through|in|via|open(?:\s+it|\s+this|\s+that)?\s+in)\s+safari\b|\b(?:use|using|with|through|in|via)\s+(?:firefox|edge|brave)\b/i.test(text);
 }
 
 function nativeApplicationRequest(value) {
@@ -59,7 +61,7 @@ function contextualizeOrbitBrowserCommand(value) {
 function technicalSiteBrowserGoal(value) {
   const text = String(value || "").trim();
   if (!text || explicitlyRequestsExternalBrowser(text)) return "";
-  const stack = /\bstack\s*overflow\b/i.test(text);
+  const stack = /\bstack\s*over\s*flow\b/i.test(text);
   const mdn = /\b(?:mdn|mozilla\s+developer\s+network)\b/i.test(text);
   if (!stack && !mdn) return "";
 
@@ -116,8 +118,8 @@ function looksLikeWebRequest(value) {
   const text = value.trim();
   if (!text) return false;
   return /\b(?:open|visit|browse|go\s+to|navigate\s+to|search|look\s+up|find\s+online|check\s+online|google)\b/i.test(text)
-    && /\b(?:github|youtube|amazon|wikipedia|reddit|linkedin|jobright|greenhouse|lever|workday|stack\s*overflow|stackoverflow|mdn|mozilla\s+developer\s+network|google|website|site|web|page|repository|repo|release|issue|article|result|link|job|application)\b|\b[a-z0-9-]+\.(?:com|org|net|io|ai|dev|app|co|edu)\b/i.test(text)
-    || /\b(?:github|youtube|amazon|wikipedia|reddit|linkedin|jobright|greenhouse|lever|workday|stack\s*overflow|stackoverflow|mdn|mozilla\s+developer\s+network)\b/i.test(text)
+    && /\b(?:github|youtube|amazon|wikipedia|reddit|linkedin|jobright|greenhouse|lever|workday|stack\s*over\s*flow|stackoverflow|mdn|mozilla\s+developer\s+network|google|website|site|web|page|repository|repo|release|issue|article|result|link|job|application)\b|\b[a-z0-9-]+\.(?:com|org|net|io|ai|dev|app|co|edu)\b/i.test(text)
+    || /\b(?:github|youtube|amazon|wikipedia|reddit|linkedin|jobright|greenhouse|lever|workday|stack\s*over\s*flow|stackoverflow|mdn|mozilla\s+developer\s+network)\b/i.test(text)
     || /\b[a-z0-9-]+\.(?:com|org|net|io|ai|dev|app|co|edu)\b/i.test(text);
 }
 
@@ -131,6 +133,23 @@ function wantsNewOrbitTab(value) {
   const text = String(value || "").trim();
   return /\b(?:open|create|start|add|use)\b[^.?!]{0,50}\bnew\s+(?:orbit\s+browser\s+)?tab\b/i.test(text)
     || /\b(?:in|into)\s+(?:a\s+)?new\s+(?:orbit\s+browser\s+)?tab\b/i.test(text);
+}
+
+function enforceOrbitBrowserDefault(value, plan) {
+  if (!plan || explicitlyRequestsExternalBrowser(value) || nativeApplicationRequest(value)) return plan;
+  const application = String(plan.application || "").toLowerCase();
+  const externalLaunch = plan.intent === "launch" && /(?:chrome|safari|firefox|edge|brave)/i.test(application);
+  if (plan.intent === "browser" || externalLaunch) {
+    const goal = plan.url ? `open ${plan.url}` : String(plan.query || value || "").trim();
+    return {
+      intent: "browser_task",
+      confidence: Math.max(.99, Number(plan.confidence) || 0),
+      explanation: "Orbit Browser is the default web surface unless an external browser is explicitly requested",
+      query: goal || String(value || "").trim(),
+      source: "local",
+    };
+  }
+  return plan;
 }
 
 function normalizeOrbitCommand(command) {
@@ -172,7 +191,7 @@ async function planOrbitCommand(command) {
       browserTaskRunning = false;
       browserTaskState = null;
     }
-    return ipcRenderer.invoke("orbit:command:plan", `browser agent to ${technicalSite}`);
+    return { intent: "browser_task", confidence: 1, explanation: "Direct embedded technical-site routing matched before legacy browser planning", query: technicalSite, source: "local" };
   }
   const playback = !external ? youtubePlaybackCommand(value) : "";
   if (playback) {
@@ -195,7 +214,8 @@ async function planOrbitCommand(command) {
     browserTaskState = null;
   }
 
-  return ipcRenderer.invoke("orbit:command:plan", normalizeOrbitCommand(value));
+  const planned = await ipcRenderer.invoke("orbit:command:plan", normalizeOrbitCommand(value));
+  return enforceOrbitBrowserDefault(value, planned);
 }
 
 function browserHost(url) {

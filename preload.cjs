@@ -67,6 +67,16 @@ function youtubePlaybackCommand(value) {
   return "";
 }
 
+function youtubePlaybackQuery(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^(?:hey\s+orbit[,;:\s-]*)?/i, "")
+    .replace(/^(?:please\s+)?/i, "")
+    .replace(/^play\s+/i, "")
+    .replace(/\s+(?:on\s+)?youtube\s*[.!?]*$/i, "")
+    .trim();
+}
+
 function looksLikeCareerBrowserRequest(value) {
   const text = String(value || "").trim();
   if (!text) return false;
@@ -133,7 +143,8 @@ async function planOrbitCommand(command) {
       browserTaskRunning = false;
       browserTaskState = null;
     }
-    return ipcRenderer.invoke("orbit:command:plan", playback);
+    const query = youtubePlaybackQuery(playback);
+    return { intent: "youtube_play", confidence: 1, explanation: "Direct embedded YouTube playback shortcut matched before browser-agent routing", query: query || playback, source: "local" };
   }
   const contextual = !external && contextualOrbitBrowserFollowUp(value);
   const browserFollowUp = !external && (looksLikeCareerBrowserRequest(value) || wantsNewOrbitTab(value) || looksLikeWebRequest(value) || contextual || (embeddedBrowserVisible && looksLikeBrowserFollowUp(value)));

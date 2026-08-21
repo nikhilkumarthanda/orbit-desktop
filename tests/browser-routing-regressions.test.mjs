@@ -47,6 +47,17 @@ test("open calculator bypasses browser context and launches native Calculator", 
   assert.ok(nativeIndex >= 0 && browserIndex >= 0 && nativeIndex < browserIndex, "native app routing must run before browser follow-up routing");
 });
 
+test("Stack Overflow and MDN searches route to deterministic Orbit Browser URLs", async () => {
+  const preload = await source("preload.cjs");
+  assert.match(preload, /function technicalSiteBrowserGoal/);
+  assert.match(preload, /stack\\s\*overflow/);
+  assert.match(preload, /https:\/\/stackoverflow\.com\/search\?q=/);
+  assert.match(preload, /https:\/\/developer\.mozilla\.org\/en-US\/search\?q=/);
+  assert.match(preload, /const technicalSite = !external \? technicalSiteBrowserGoal\(value\) : ""/);
+  assert.match(preload, /browser agent to \$\{technicalSite\}/);
+  assert.match(preload, /stack\\s\*overflow\|stackoverflow\|mdn\|mozilla\\s\+developer/);
+});
+
 test("active YouTube context keeps playback and ordinal follow-ups inside Orbit Browser", async () => {
   const preload = await source("preload.cjs");
   assert.match(preload, /function activeOrbitBrowserHost/);

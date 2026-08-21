@@ -7,7 +7,7 @@ const PANE_GAP = 12;
 const BROWSER_TOP = 114;
 const HOST_LAYOUT_CSS = `
 html.orbit-browser-open main {
-  grid-template-columns: ${SIDEBAR_WIDTH}px var(--orbit-agent-pane-width, 460px) minmax(0, 1fr) !important;
+  grid-template-columns: ${SIDEBAR_WIDTH}px var(--orbit-agent-pane-width, 410px) minmax(0, 1fr) !important;
 }
 html.orbit-browser-open .content {
   grid-column: 2 !important;
@@ -15,26 +15,45 @@ html.orbit-browser-open .content {
   max-width: none !important;
   min-width: 0 !important;
   margin: 0 !important;
-  padding: 32px 22px !important;
-  overflow-x: hidden !important;
+  padding: 18px 14px !important;
+  overflow: hidden !important;
 }
 html.orbit-browser-open .content.space-content {
   padding: 0 !important;
   overflow: hidden !important;
 }
 html.orbit-browser-open .assistant-shell {
-  width: calc(100% - 30px) !important;
-  padding: 42px 0 84px !important;
+  box-sizing: border-box !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  padding: 18px 14px 56px !important;
+  overflow: hidden !important;
 }
-html.orbit-browser-open .assistant-heading { max-width: 430px !important; }
-html.orbit-browser-open .assistant-heading h1 { font-size: clamp(30px, 3.2vw, 43px) !important; }
-html.orbit-browser-open .assistant-heading p { font-size: 11px !important; }
-html.orbit-browser-open .assistant-core { width: 168px !important; margin: 12px 0 9px !important; }
-html.orbit-browser-open .assistant-shell .space-interaction,
-html.orbit-browser-open .activity-strip { width: 100% !important; }
+html.orbit-browser-open .assistant-heading,
+html.orbit-browser-open .assistant-core,
 html.orbit-browser-open .quick-prompts,
-html.orbit-browser-open .space-stats { display: none !important; }
-html.orbit-browser-open .conversation-history { max-height: 190px !important; }
+html.orbit-browser-open .space-stats {
+  display: none !important;
+}
+html.orbit-browser-open .assistant-shell .space-interaction,
+html.orbit-browser-open .activity-strip,
+html.orbit-browser-open .conversation-history {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+}
+html.orbit-browser-open .conversation-history {
+  max-height: 280px !important;
+  overflow: auto !important;
+}
+html.orbit-browser-open .command,
+html.orbit-browser-open .command input,
+html.orbit-browser-open .orbit-command-preview {
+  max-width: 100% !important;
+  min-width: 0 !important;
+}
 `;
 
 const CURSOR_FACTORY_JS = `(() => {
@@ -86,10 +105,12 @@ function activeTab() {
 
 function paneGeometry(width: number) {
   const available = Math.max(0, width - SIDEBAR_WIDTH);
-  let agentWidth = Math.min(560, Math.max(390, Math.round(available * 0.4)));
-  const minimumBrowserWidth = 420;
-  if (available - agentWidth - PANE_GAP * 2 < minimumBrowserWidth) {
-    agentWidth = Math.max(340, available - minimumBrowserWidth - PANE_GAP * 2);
+  const minimumAgentWidth = 320;
+  const preferredAgentWidth = Math.min(430, Math.max(minimumAgentWidth, Math.round(available * 0.34)));
+  const preferredBrowserWidth = width >= 1450 ? 820 : width >= 1300 ? 720 : 620;
+  let agentWidth = preferredAgentWidth;
+  if (available - agentWidth - PANE_GAP * 2 < preferredBrowserWidth) {
+    agentWidth = Math.max(minimumAgentWidth, available - preferredBrowserWidth - PANE_GAP * 2);
   }
   const browserX = SIDEBAR_WIDTH + agentWidth + PANE_GAP;
   return { agentWidth, browserX, browserWidth: Math.max(320, width - browserX - PANE_GAP) };

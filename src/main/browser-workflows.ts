@@ -7,8 +7,6 @@ import * as embedded from "./embedded-browser.js";
 
 export interface WorkflowResult { summary: string; url: string }
 
-let lastYouTubeSearch = "";
-
 function sleep(milliseconds: number) {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
@@ -94,7 +92,6 @@ export async function youtubePlayFirst(query: string): Promise<WorkflowResult> {
   const ordinal = ordinalFromQuery(clean);
   if (ordinal !== null) return openCurrentYouTubeResult(ordinal);
 
-  lastYouTubeSearch = clean;
   const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(clean)}`;
   await embedded.showEmbeddedBrowser();
   await embedded.openUrl(searchUrl);

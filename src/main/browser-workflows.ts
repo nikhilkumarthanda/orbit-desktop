@@ -7,8 +7,6 @@ import * as embedded from "./embedded-browser.js";
 
 export interface WorkflowResult { summary: string; url: string }
 
-type YouTubeControl = { kind: string; label: string };
-
 let lastYouTubeSearch = "";
 
 function sleep(milliseconds: number) {
@@ -25,34 +23,26 @@ function ordinalFromQuery(query: string) {
   return Number.isFinite(numeric) ? Math.max(0, numeric - 1) : null;
 }
 
-function youtubeResultControls(query: string, controls: YouTubeControl[]) {
-  const stopWords = new Set(["the", "a", "an", "and", "or", "of", "to", "for", "on", "in", "official", "video", "youtube", "open", "play"]);
-  const tokens = query.toLowerCase().split(/[^a-z0-9]+/).filter(token => token.length > 1 && !stopWords.has(token));
-  const seen = new Set<string>();
-
-  return controls
-    .filter(control => /^(?:a|link)$/i.test(control.kind) && control.label.trim().length >= 5)
-    .filter(control => !/^(?:home|shorts|subscriptions|you|history|sign in|youtube|explore|trending|library|watch later|liked videos)$/i.test(control.label.trim()))
-    .filter(control => {
-      const label = control.label.toLowerCase();
-      if (tokens.length && !tokens.some(token => label.includes(token))) return false;
-      const key = label.replace(/\s+/g, " ").trim();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+async function waitForYouTubeResults(minimumCount = 1) {
+  let latest: embedded.YouTubeVideoResult[] = [];
+  const requested = Math.max(1, minimumCount);
+  for (let attempt = 0; attempt < 18; attempt++) {
+    const results = await embedded.youtubeVideoResults(Math.max(12, requested + 4)).catch(() => [] as embedded.YouTubeVideoResult[]);
+    if (results.length) latest = results;
+    if (results.length >= requested) return results;
+    await sleep(450 + Math.min(attempt, 7) * 120);
+  }
+  return latest;
 }
 
-async function waitForYouTubeResults(query: string) {
-  for (let attempt = 0; attempt < 16; attempt++) {
-    const snapshot = await embedded.actionSnapshot().catch(() => null);
-    if (snapshot) {
-      const results = youtubeResultControls(query, snapshot.controls);
-      if (results.length) return results;
-    }
-    await sleep(500 + Math.min(attempt, 6) * 120);
+async function waitForWatchPage() {
+  let watchUrl = "";
+  for (let attempt = 0; attempt < 14; attempt++) {
+    watchUrl = await embedded.currentUrl();
+    if (/youtube\.com\/watch\?v=/i.test(watchUrl)) return watchUrl;
+    await sleep(350);
   }
-  return [] as YouTubeControl[];
+  return watchUrl;
 }
 
 async function openCurrentYouTubeResult(index: number) {
@@ -64,8 +54,8 @@ async function openCurrentYouTubeResult(index: number) {
   // "first one".
   if (/youtube\.com\/watch\?v=/i.test(current)) {
     await embedded.goBack();
-    for (let attempt = 0; attempt < 16; attempt++) {
-      await sleep(350);
+    for (let attempt = 0; attempt < 18; attempt++) {
+      await sleep(300);
       current = await embedded.currentUrl();
       if (/youtube\.com\/results(?:\?|$)/i.test(current)) break;
     }
@@ -75,22 +65,24 @@ async function openCurrentYouTubeResult(index: number) {
     throw new Error("Orbit does not have a YouTube result list to choose from yet. Search for a video first.");
   }
 
-  const results = await waitForYouTubeResults(lastYouTubeSearch);
+  const results = await waitForYouTubeResults(index + 1);
   const chosen = results[index];
-  if (!chosen) throw new Error(`YouTube result ${index + 1} is not available on the current results page yet.`);
-
-  await embedded.clickByLabel(chosen.label);
-  let watchUrl = "";
-  for (let attempt = 0; attempt < 12; attempt++) {
-    watchUrl = await embedded.currentUrl();
-    if (/youtube\.com\/watch\?v=/i.test(watchUrl)) break;
-    await sleep(400);
+  if (!chosen) {
+    throw new Error(`YouTube result ${index + 1} is not available after waiting for the current results page to finish rendering.`);
   }
-  if (!/youtube\.com\/watch\?v=/i.test(watchUrl)) throw new Error(`Orbit selected YouTube result ${index + 1}, but its video page did not open.`);
+
+  // Navigate to the exact video href in YouTube DOM order. This avoids fuzzy
+  // label matching, duplicate labels, and early snapshots that only expose the
+  // first result while lower results are still hydrating.
+  await embedded.openUrl(chosen.url);
+  const watchUrl = await waitForWatchPage();
+  if (!/youtube\.com\/watch\?v=/i.test(watchUrl)) {
+    throw new Error(`Orbit selected YouTube result ${index + 1}, but its video page did not open.`);
+  }
 
   const title = await embedded.pageTitle();
   return {
-    summary: `Playing result ${index + 1}, "${title.replace(/\s*-\s*YouTube$/, "") || chosen.label}", on YouTube inside Orbit Browser, boss.`,
+    summary: `Playing result ${index + 1}, "${title.replace(/\s*-\s*YouTube$/, "") || chosen.title}", on YouTube inside Orbit Browser, boss.`,
     url: watchUrl,
   };
 }
@@ -108,30 +100,22 @@ export async function youtubePlayFirst(query: string): Promise<WorkflowResult> {
   await embedded.openUrl(searchUrl);
 
   // For a normal "open/play X video" request, respect YouTube's own ordering.
-  // Orbit opens the first organic-looking result that matches the search terms;
-  // it no longer globally re-ranks the page and jumps to result 3 or 4.
-  const results = await waitForYouTubeResults(clean);
+  // Orbit reads exact video links from the search DOM and opens result #1.
+  const results = await waitForYouTubeResults(1);
   const chosen = results[0];
   if (!chosen) {
     throw new Error(`YouTube search opened inside Orbit Browser, but no playable result for “${clean}” became available yet.`);
   }
 
-  await embedded.clickByLabel(chosen.label);
-
-  let watchUrl = "";
-  for (let attempt = 0; attempt < 12; attempt++) {
-    watchUrl = await embedded.currentUrl();
-    if (/youtube\.com\/watch\?v=/i.test(watchUrl)) break;
-    await sleep(450);
-  }
-
+  await embedded.openUrl(chosen.url);
+  const watchUrl = await waitForWatchPage();
   if (!/youtube\.com\/watch\?v=/i.test(watchUrl)) {
-    throw new Error(`Orbit found the first YouTube result, “${chosen.label}”, but the video page did not open.`);
+    throw new Error(`Orbit found the first YouTube result, “${chosen.title}”, but the video page did not open.`);
   }
 
   const title = await embedded.pageTitle();
   return {
-    summary: `Playing the first YouTube result, "${title.replace(/\s*-\s*YouTube$/, "") || chosen.label}", inside Orbit Browser, boss.`,
+    summary: `Playing the first YouTube result, "${title.replace(/\s*-\s*YouTube$/, "") || chosen.title}", inside Orbit Browser, boss.`,
     url: watchUrl,
   };
 }

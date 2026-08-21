@@ -21,14 +21,19 @@ test("YouTube play requests use deterministic Orbit Browser recovery", async () 
   assert.match(engine, /best matching YouTube result/i);
 });
 
-test("dedicated YouTube playback stays embedded and prefers earliest strong match", async () => {
+test("dedicated YouTube playback stays embedded and respects visible result order", async () => {
   const workflow = await source("src/main/browser-workflows.ts");
   assert.match(workflow, /import \* as embedded from "\.\/embedded-browser\.js"/);
-  assert.match(workflow, /await embedded\.openUrl\(searchUrl\)/);
-  assert.match(workflow, /const strongEarly = candidates\.find/);
-  assert.match(workflow, /item\.coverage >= 1/);
+  assert.match(workflow, /let lastYouTubeSearch = ""/);
+  assert.match(workflow, /function ordinalFromQuery/);
+  assert.match(workflow, /function youtubeResultControls/);
+  assert.match(workflow, /const chosen = results\[0\]/);
+  assert.match(workflow, /return openCurrentYouTubeResult\(ordinal\)/);
+  assert.match(workflow, /await embedded\.goBack\(\)/);
+  assert.match(workflow, /const chosen = results\[index\]/);
   assert.match(workflow, /await embedded\.clickByLabel\(chosen\.label\)/);
   assert.match(workflow, /youtube\.com\\\/watch/);
+  assert.doesNotMatch(workflow, /strongEarly|globally re-rank/i);
 });
 
 test("open calculator bypasses browser context and launches native Calculator", async () => {
@@ -42,12 +47,17 @@ test("open calculator bypasses browser context and launches native Calculator", 
   assert.ok(nativeIndex >= 0 && browserIndex >= 0 && nativeIndex < browserIndex, "native app routing must run before browser follow-up routing");
 });
 
-test("active YouTube context keeps vague trailer follow-ups inside Orbit Browser", async () => {
+test("active YouTube context keeps playback and ordinal follow-ups inside Orbit Browser", async () => {
   const preload = await source("preload.cjs");
   assert.match(preload, /function activeOrbitBrowserHost/);
   assert.match(preload, /function contextualOrbitBrowserFollowUp/);
   assert.match(preload, /function contextualizeOrbitBrowserCommand/);
+  assert.match(preload, /function youtubeOrdinalPlaybackCommand/);
+  assert.match(preload, /go\\s\+back/);
+  assert.match(preload, /first\|second\|third\|fourth\|fifth/);
+  assert.match(preload, /play \$\{match\[1\]\.toLowerCase\(\)\} one on YouTube/);
   assert.match(preload, /function youtubePlaybackCommand/);
+  assert.match(preload, /const ordinal = youtubeOrdinalPlaybackCommand\(text\)/);
   assert.match(preload, /function youtubePlaybackQuery/);
   assert.match(preload, /play \$\{match\[1\]\.trim\(\)\} on YouTube/);
   assert.match(preload, /const playback = !external \? youtubePlaybackCommand\(value\) : ""/);

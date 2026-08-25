@@ -32,6 +32,14 @@ function nativeApplicationRequest(value) {
   return "";
 }
 
+function isBrowserContinueRequest(value) {
+  return /^(?:hey\s+orbit[,;:\s-]*)?(?:please\s+)?(?:continue|resume|carry\s+on|keep\s+going|i(?:'m| am)\s+done|done|finished|completed|try\s+again)(?:\s+(?:the\s+)?(?:browser|task|workflow))?[.!?]*$/i.test(String(value || "").trim());
+}
+
+function isBrowserStopRequest(value) {
+  return /^(?:hey\s+orbit[,;:\s-]*)?(?:please\s+)?(?:stop|cancel|end)(?:\s+(?:the\s+)?(?:browser|browser\s+task|task|workflow))[.!?]*$/i.test(String(value || "").trim());
+}
+
 function activeOrbitBrowserHost() {
   try { return new URL(String(embeddedBrowserState?.url || "")).hostname.replace(/^www\./, "").toLowerCase(); }
   catch { return ""; }
@@ -101,9 +109,6 @@ function youtubePlaybackCommand(value) {
   const ordinal = youtubeOrdinalPlaybackCommand(text);
   if (ordinal) return ordinal;
 
-  // Natural playback language should bypass the generic browser planner. A user
-  // saying "open/watch X on YouTube" means play that video, not merely open the
-  // YouTube site. Normalize all of those verbs into the dedicated workflow.
   const explicitPlayback = text.match(/^(?:hey\s+orbit[,;:\s-]*)?(?:please\s+)?(?:open|play|watch)\s+(.+?)\s+(?:on\s+)?youtube\s*[.!?]*$/i);
   if (explicitPlayback?.[1]) return `play ${explicitPlayback[1].trim()} on YouTube`;
 
@@ -191,25 +196,75 @@ function normalizeOrbitCommand(command) {
 
 function waitingBrowserTaskPlan() {
   const input = browserTaskState?.pendingKind === "input";
-  const detail = browserTaskState?.summary || (input ? "Orbit needs information before it can continue." : "Orbit is waiting for approval before a consequential browser action.");
+  const paused = browserTaskState?.status === "paused";
+  const detail = browserTaskState?.summary || (paused ? "Orbit has a resumable browser task paused at its last checkpoint." : input ? "Orbit needs information before it can continue." : "Orbit is waiting for approval before a consequential browser action.");
   return {
     intent: "answer",
     confidence: 1,
-    explanation: "A waiting Orbit Browser task cannot be silently replaced",
-    reply: input
-      ? `${detail} Use the visible INPUT REQUIRED state to review the task, or stop the browser task before starting something else.`
-      : `${detail} Approve that exact action or stop the browser task before starting something else.`,
+    explanation: "A resumable Orbit Browser task cannot be silently replaced",
+    reply: paused
+      ? `${detail} Say “continue” to re-inspect the current page and resume, or stop the browser task before starting another browser workflow.`
+      : input
+        ? `${detail} Type or say the answer in Orbit. If you completed a password, MFA, CAPTCHA, or other manual-only step directly on the site, say “continue”.`
+        : `${detail} Approve that exact action or stop the browser task before starting something else.`,
     source: "local",
   };
 }
 
+function applyReturnedBrowserTask(task) {
+  if (!task) return;
+  browserTaskState = task;
+  browserTaskRunning = ["running", "waiting_for_confirmation", "paused"].includes(task.status);
+  renderOrbitBrowserChrome();
+  syncBrowserRuntimePlanner();
+}
+
 async function planOrbitCommand(command) {
   const value = String(command || "").trim();
+
+  if (browserTaskRunning && isBrowserStopRequest(value)) {
+    const task = await ipcRenderer.invoke("orbit:browser:task:cancel").catch(() => null);
+    applyReturnedBrowserTask(task);
+    browserTaskRunning = false;
+    return { intent: "answer", confidence: 1, explanation: "Explicit browser task stop matched", reply: "Stopped the current Orbit Browser task.", query: value, source: "local" };
+  }
+
+  if (browserTaskState?.status === "waiting_for_confirmation" && browserTaskState?.pendingKind === "input") {
+    if (isBrowserContinueRequest(value)) {
+      const task = await ipcRenderer.invoke("orbit:browser:task:continue").catch(() => null);
+      applyReturnedBrowserTask(task);
+      return { intent: "answer", confidence: 1, explanation: "Manual browser checkpoint resume matched", reply: task?.summary || "Re-inspecting the current page and continuing the browser task.", query: value, source: "local" };
+    }
+    const nativeApplication = nativeApplicationRequest(value);
+    if (nativeApplication) {
+      await ipcRenderer.invoke("orbit:app:launch", nativeApplication);
+      return { intent: "answer", confidence: 1, explanation: "Native application opened without replacing the waiting browser checkpoint", reply: `Opened ${nativeApplication}. The Orbit Browser task is still waiting for your answer.`, query: value, source: "local" };
+    }
+    if (explicitlyRequestsExternalBrowser(value) || looksLikeWebRequest(value) || looksLikeBrowserFollowUp(value)) return waitingBrowserTaskPlan();
+    const task = await ipcRenderer.invoke("orbit:browser:task:input", value).catch(() => null);
+    applyReturnedBrowserTask(task);
+    return { intent: "answer", confidence: 1, explanation: "Task-scoped browser input supplied", reply: task?.summary || "I recorded that answer for the paused browser task and re-inspected the current page.", query: value, source: "local" };
+  }
+
   if (browserTaskState?.status === "waiting_for_confirmation") return waitingBrowserTaskPlan();
+
+  if (browserTaskState?.status === "paused") {
+    if (isBrowserContinueRequest(value)) {
+      const task = await ipcRenderer.invoke("orbit:browser:task:continue").catch(() => null);
+      applyReturnedBrowserTask(task);
+      return { intent: "answer", confidence: 1, explanation: "Resumable browser checkpoint continued", reply: task?.summary || "Continuing from the last verified browser checkpoint.", query: value, source: "local" };
+    }
+    const nativeApplication = nativeApplicationRequest(value);
+    if (nativeApplication) {
+      await ipcRenderer.invoke("orbit:app:launch", nativeApplication);
+      return { intent: "answer", confidence: 1, explanation: "Native application opened without replacing the paused browser checkpoint", reply: `Opened ${nativeApplication}. Your paused Orbit Browser checkpoint is still preserved.`, query: value, source: "local" };
+    }
+    return waitingBrowserTaskPlan();
+  }
 
   const nativeApplication = nativeApplicationRequest(value);
   if (nativeApplication) {
-    if (browserTaskRunning) {
+    if (browserTaskState?.status === "running") {
       await ipcRenderer.invoke("orbit:browser:task:cancel").catch(() => null);
       browserTaskRunning = false;
       browserTaskState = null;
@@ -221,7 +276,7 @@ async function planOrbitCommand(command) {
   const external = explicitlyRequestsExternalBrowser(value);
   const compoundYoutubeSearch = !external ? youtubeCompoundBackSearch(value) : "";
   if (compoundYoutubeSearch) {
-    if (browserTaskRunning) {
+    if (browserTaskState?.status === "running") {
       await ipcRenderer.invoke("orbit:browser:task:cancel").catch(() => null);
       browserTaskRunning = false;
       browserTaskState = null;
@@ -231,7 +286,7 @@ async function planOrbitCommand(command) {
   }
   const technicalSite = !external ? technicalSiteBrowserGoal(value) : "";
   if (technicalSite) {
-    if (browserTaskRunning) {
+    if (browserTaskState?.status === "running") {
       await ipcRenderer.invoke("orbit:browser:task:cancel").catch(() => null);
       browserTaskRunning = false;
       browserTaskState = null;
@@ -240,7 +295,7 @@ async function planOrbitCommand(command) {
   }
   const playback = !external ? youtubePlaybackCommand(value) : "";
   if (playback) {
-    if (browserTaskRunning) {
+    if (browserTaskState?.status === "running") {
       await ipcRenderer.invoke("orbit:browser:task:cancel").catch(() => null);
       browserTaskRunning = false;
       browserTaskState = null;
@@ -251,9 +306,7 @@ async function planOrbitCommand(command) {
   const contextual = !external && contextualOrbitBrowserFollowUp(value);
   const browserFollowUp = !external && (looksLikeCareerBrowserRequest(value) || wantsNewOrbitTab(value) || looksLikeWebRequest(value) || contextual || (embeddedBrowserVisible && looksLikeBrowserFollowUp(value)));
 
-  // A fresh browser command retargets the agent runtime. Native tab creation is
-  // executed by the browser-task engine so one user request creates one tab only.
-  if (browserFollowUp && browserTaskRunning) {
+  if (browserFollowUp && browserTaskState?.status === "running") {
     await ipcRenderer.invoke("orbit:browser:task:cancel").catch(() => null);
     browserTaskRunning = false;
     browserTaskState = null;
@@ -312,7 +365,7 @@ function installOrbitBrowserChrome() {
 .orbit-browser-tab-row{display:flex;align-items:center;gap:5px;min-width:0}.orbit-browser-wordmark{display:flex;align-items:center;gap:7px;flex:none;padding:0 6px 0 2px}.orbit-browser-wordmark i{width:23px;height:23px;border-radius:8px;display:grid;place-items:center;background:radial-gradient(circle at 35% 30%,#fff,#a893ff 16%,#5640d0 58%,#16102e);box-shadow:0 0 18px rgba(126,96,255,.55);font:800 10px/1 sans-serif;font-style:normal}.orbit-browser-wordmark span{display:grid;line-height:1.05}.orbit-browser-wordmark b{font-size:9px;letter-spacing:.12em}.orbit-browser-wordmark small{font-size:7px;color:#666e82;letter-spacing:.08em}
 .orbit-browser-tabs{display:flex;align-items:center;gap:4px;min-width:0;overflow-x:auto;scrollbar-width:none;flex:1}.orbit-browser-tabs::-webkit-scrollbar{display:none}.orbit-browser-tab{display:flex;align-items:center;min-width:120px;max-width:190px;height:31px;border:1px solid transparent;border-radius:9px;background:#11141d;overflow:hidden;flex:0 1 180px}.orbit-browser-tab.active{border-color:rgba(155,124,255,.42);background:linear-gradient(180deg,#201a37,#151522);box-shadow:inset 0 1px rgba(255,255,255,.05)}.orbit-browser-tab>button:first-child{min-width:0;flex:1;height:100%;border:0;background:transparent;color:#858da0;padding:0 8px;text-align:left;cursor:pointer;display:grid;align-content:center;gap:1px}.orbit-browser-tab.active>button:first-child{color:#f1efff}.orbit-browser-tab b{font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:650}.orbit-browser-tab small{font-size:7px;color:#60687a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.orbit-browser-tab .orbit-tab-close{width:26px;height:100%;border:0;background:transparent;color:#687084;cursor:pointer;font-size:13px}.orbit-browser-tab .orbit-tab-close:hover{color:white;background:#ffffff0a}.orbit-browser-new-tab{width:29px;height:29px;flex:none;border:1px solid #ffffff0e;border-radius:9px;background:#11141c;color:#a9b0c1;cursor:pointer;font-size:17px;line-height:1}.orbit-browser-new-tab:hover{border-color:rgba(155,124,255,.35);color:white;background:#191629}
 .orbit-browser-focus{display:flex;align-items:center;gap:3px;flex:none}.orbit-browser-focus button{height:27px;border:1px solid #ffffff0e;border-radius:8px;background:#0e1118;color:#858da0;padding:0 7px;font-size:6px;font-weight:800;letter-spacing:.07em;cursor:pointer;white-space:nowrap}.orbit-browser-focus button:hover{border-color:rgba(155,124,255,.35);color:#f4f0ff;background:#171525}
-.orbit-browser-nav{display:grid;grid-template-columns:auto auto auto minmax(80px,1fr) auto;gap:5px;align-items:center}.orbit-browser-nav>button{width:30px;height:30px;border:1px solid #ffffff0d;border-radius:9px;background:#0e1118;color:#7e8799;cursor:pointer;font-size:13px}.orbit-browser-nav>button:hover:not(:disabled){border-color:rgba(155,124,255,.3);color:white;background:#171525}.orbit-browser-nav>button:disabled{opacity:.3;cursor:default}.orbit-browser-address{height:30px;display:flex;align-items:center;gap:7px;min-width:0;padding:0 10px;border:1px solid #ffffff0d;border-radius:10px;background:#090c12;color:#8d95a7}.orbit-browser-address i{width:6px;height:6px;border-radius:50%;background:#59d794;box-shadow:0 0 9px #59d794;flex:none}.orbit-browser-address.loading i{background:#9b7cff;box-shadow:0 0 10px #9b7cff;animation:orbit-browser-pulse .8s infinite}.orbit-browser-address span{font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.orbit-browser-agent,.orbit-browser-input-required{height:27px;display:flex;align-items:center;gap:5px;padding:0 8px;border:1px solid rgba(155,124,255,.2);border-radius:999px;background:#151221;color:#a99bf0;font-size:7px;font-weight:800;letter-spacing:.08em;white-space:nowrap}.orbit-browser-agent i{width:5px;height:5px;border-radius:50%;background:#9b7cff;box-shadow:0 0 8px #9b7cff}.orbit-browser-input-required{border-color:rgba(255,188,92,.4);background:rgba(138,85,22,.2);color:#ffd99a}.orbit-browser-nav>.orbit-browser-approve{width:auto;min-width:92px;height:29px;padding:0 10px;border-color:rgba(96,224,157,.42);background:rgba(36,126,81,.22);color:#9ff0c4;font-size:7px;font-weight:850;letter-spacing:.08em;white-space:nowrap}.orbit-browser-nav>.orbit-browser-approve:hover{border-color:rgba(96,224,157,.72);background:rgba(36,126,81,.34);color:#d9ffe9}@keyframes orbit-browser-pulse{50%{opacity:.35}}
+.orbit-browser-nav{display:grid;grid-template-columns:auto auto auto minmax(80px,1fr) auto;gap:5px;align-items:center}.orbit-browser-nav>button{width:30px;height:30px;border:1px solid #ffffff0d;border-radius:9px;background:#0e1118;color:#7e8799;cursor:pointer;font-size:13px}.orbit-browser-nav>button:hover:not(:disabled){border-color:rgba(155,124,255,.3);color:white;background:#171525}.orbit-browser-nav>button:disabled{opacity:.3;cursor:default}.orbit-browser-address{height:30px;display:flex;align-items:center;gap:7px;min-width:0;padding:0 10px;border:1px solid #ffffff0d;border-radius:10px;background:#090c12;color:#8d95a7}.orbit-browser-address i{width:6px;height:6px;border-radius:50%;background:#59d794;box-shadow:0 0 9px #59d794;flex:none}.orbit-browser-address.loading i{background:#9b7cff;box-shadow:0 0 10px #9b7cff;animation:orbit-browser-pulse .8s infinite}.orbit-browser-address span{font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.orbit-browser-agent,.orbit-browser-input-required{height:27px;display:flex;align-items:center;gap:5px;padding:0 8px;border:1px solid rgba(155,124,255,.2);border-radius:999px;background:#151221;color:#a99bf0;font-size:7px;font-weight:800;letter-spacing:.08em;white-space:nowrap}.orbit-browser-agent i{width:5px;height:5px;border-radius:50%;background:#9b7cff;box-shadow:0 0 8px #9b7cff}.orbit-browser-input-required{border-color:rgba(255,188,92,.4);background:rgba(138,85,22,.2);color:#ffd99a;cursor:pointer}.orbit-browser-input-required:hover{border-color:rgba(255,188,92,.7);background:rgba(138,85,22,.32);color:#fff0d1}.orbit-browser-nav>.orbit-browser-approve,.orbit-browser-nav>.orbit-browser-continue{width:auto;min-width:92px;height:29px;padding:0 10px;font-size:7px;font-weight:850;letter-spacing:.08em;white-space:nowrap}.orbit-browser-nav>.orbit-browser-approve{border-color:rgba(96,224,157,.42);background:rgba(36,126,81,.22);color:#9ff0c4}.orbit-browser-nav>.orbit-browser-approve:hover{border-color:rgba(96,224,157,.72);background:rgba(36,126,81,.34);color:#d9ffe9}.orbit-browser-nav>.orbit-browser-continue{border-color:rgba(155,124,255,.42);background:rgba(78,56,151,.25);color:#c8bdff}.orbit-browser-nav>.orbit-browser-continue:hover{border-color:rgba(155,124,255,.72);background:rgba(78,56,151,.4);color:#fff}@keyframes orbit-browser-pulse{50%{opacity:.35}}
 @media(max-width:1100px){#orbit-browser-chrome{left:calc(276px + var(--orbit-agent-pane-width,390px) + 8px);right:8px}#orbit-browser-divider{left:calc(276px + var(--orbit-agent-pane-width,390px) + 4px)}.orbit-browser-wordmark span{display:none}.orbit-browser-tab{min-width:95px}.orbit-browser-agent{display:none}.orbit-browser-focus button{padding:0 5px;font-size:0}.orbit-browser-focus button::first-letter{font-size:7px}.orbit-browser-nav{grid-template-columns:auto auto auto minmax(70px,1fr)}}`;
   document.documentElement.appendChild(style);
 
@@ -372,6 +425,16 @@ function button(text, title, handler, disabled = false) {
     void handler();
   });
   return node;
+}
+
+function focusOrbitCommandInput() {
+  const input = document.querySelector(".command:not(.knowledge-search) input");
+  if (input && typeof input.focus === "function") {
+    input.focus();
+    return true;
+  }
+  void ipcRenderer.invoke("orbit:embedded-browser:focus:orbit").catch(() => null);
+  return false;
 }
 
 function renderOrbitBrowserChrome() {
@@ -444,19 +507,29 @@ function renderOrbitBrowserChrome() {
     if (browserTaskState?.status === "waiting_for_confirmation") {
       const pending = browserTaskState.pendingAction?.label || browserTaskState.pendingAction?.reason || browserTaskState.summary || "the next browser step";
       if (browserTaskState.pendingKind === "input") {
-        const input = document.createElement("div");
+        const input = button("INPUT REQUIRED", "Type or say your answer in Orbit. For password/MFA/CAPTCHA, complete it manually on the site and say continue.", () => {
+          void ipcRenderer.invoke("orbit:embedded-browser:focus:orbit").catch(() => null);
+          window.setTimeout(focusOrbitCommandInput, 40);
+        });
         input.className = "orbit-browser-input-required";
-        input.textContent = "INPUT REQUIRED";
-        input.title = browserTaskState.summary || pending;
+        input.title = `${browserTaskState.summary || pending}\n\nType or say the answer in Orbit. For manual-only secrets/codes/CAPTCHA, complete the site yourself and say “continue”.`;
         nav.appendChild(input);
       } else {
         const approve = button("APPROVE NEXT", `Approve: ${pending}`, async () => {
           if (!window.confirm(`Approve only this next Orbit Browser action?\n\n${pending}`)) return;
-          await ipcRenderer.invoke("orbit:browser:task:resume", true);
+          const task = await ipcRenderer.invoke("orbit:browser:task:resume", true);
+          applyReturnedBrowserTask(task);
         });
         approve.className = "orbit-browser-approve";
         nav.appendChild(approve);
       }
+    } else if (browserTaskState?.status === "paused") {
+      const resume = button("CONTINUE", browserTaskState.summary || "Resume from the last verified browser checkpoint", async () => {
+        const task = await ipcRenderer.invoke("orbit:browser:task:continue").catch(() => null);
+        applyReturnedBrowserTask(task);
+      });
+      resume.className = "orbit-browser-continue";
+      nav.appendChild(resume);
     } else {
       const agent = document.createElement("div");
       agent.className = "orbit-browser-agent";
@@ -561,6 +634,8 @@ contextBridge.exposeInMainWorld("orbit", Object.freeze({
   findOnPage: query => ipcRenderer.invoke("orbit:browser:find", query),
   startBrowserTask: goal => ipcRenderer.invoke("orbit:browser:task:start", goal),
   resumeBrowserTask: confirmed => ipcRenderer.invoke("orbit:browser:task:resume", confirmed),
+  submitBrowserTaskInput: answer => ipcRenderer.invoke("orbit:browser:task:input", answer),
+  continueBrowserTask: () => ipcRenderer.invoke("orbit:browser:task:continue"),
   cancelBrowserTask: () => ipcRenderer.invoke("orbit:browser:task:cancel"),
   browserTaskStatus: () => ipcRenderer.invoke("orbit:browser:task:status"),
   onBrowserTask: callback => { const listener = (_event, payload) => callback(payload); ipcRenderer.on("orbit:browser:task:event", listener); return () => ipcRenderer.removeListener("orbit:browser:task:event", listener); },

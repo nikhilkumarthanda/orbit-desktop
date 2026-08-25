@@ -87,6 +87,18 @@ test("embedded browser layout prioritizes the web viewport and compacts Orbit ho
   assert.match(embedded, /overflow: hidden !important/);
 });
 
+test("embedded browser waits for Orbit layout before revealing native WebContentsView", async () => {
+  const embedded = await source("src/main/embedded-browser.ts");
+  assert.match(embedded, /let layoutGeneration = 0/);
+  assert.match(embedded, /tab\.view\.setVisible\(false\)/);
+  assert.match(embedded, /await syncHostLayout\(\)/);
+  assert.match(embedded, /generation !== layoutGeneration/);
+  assert.match(embedded, /browserWidth = Math\.max\(0, width - browserX - PANE_GAP\)/);
+  assert.match(embedded, /browserFits = geometry\.browserWidth >= MINIMUM_BROWSER_WIDTH/);
+  assert.match(embedded, /document\.documentElement\.getBoundingClientRect\(\)/);
+  assert.doesNotMatch(embedded, /browserWidth:\s*Math\.max\(320/);
+});
+
 test("active YouTube context keeps playback and ordinal follow-ups inside Orbit Browser", async () => {
   const preload = await source("preload.cjs");
   assert.match(preload, /function activeOrbitBrowserHost/);

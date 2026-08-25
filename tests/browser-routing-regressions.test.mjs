@@ -152,13 +152,12 @@ test("career/browser consequential actions remain approval gated", async () => {
   assert.match(preload, /orbit:browser:task:resume/);
 });
 
-test("browser approvals are exact, single-use, and never turn generic ask_user into a click", async () => {
+test("browser approvals are exact, single-use, and never turn generic input into approval", async () => {
   const engine = await source("src/main/browser-task-engine.ts");
   assert.match(engine, /let approvedConsequentialLabel = ""/);
   assert.match(engine, /approvedConsequentialLabel !== actionLabel/);
   assert.match(engine, /approvedConsequentialLabel = ""/);
-  assert.match(engine, /ask_user action MUST put the exact visible consequential control text in label/);
-  assert.match(engine, /do not treat a generic approval as the user's answer/);
+  assert.match(engine, /Final submission, sending a message, connecting, posting\/publishing/);
   assert.match(engine, /active\.pendingKind === "input"/);
   assert.match(engine, /Approval alone cannot supply the missing information/);
   assert.match(engine, /User approved only the exact next consequential control/);
@@ -183,12 +182,41 @@ test("Phase 2 browser panes are resizable, focusable, native-labeled, and preser
   assert.match(preload, /FOCUS BROWSER/);
   assert.match(preload, /INPUT REQUIRED/);
   assert.match(preload, /function waitingBrowserTaskPlan/);
-  assert.match(preload, /A waiting Orbit Browser task cannot be silently replaced/);
+  assert.match(preload, /A resumable Orbit Browser task cannot be silently replaced/);
   assert.match(preload, /planner === "native" \? "NATIVE"/);
-  assert.match(engine, /\["running", "waiting_for_confirmation"\]\.includes\(active\.status\)/);
+  assert.match(engine, /\["running", "waiting_for_confirmation", "paused"\]\.includes\(active\.status\)/);
   assert.match(engine, /pendingKind: "approval"/);
   assert.match(engine, /active\.pendingKind = result\.pendingKind \|\| "input"/);
   assert.match(engine, /planner: deterministic \? "native"/);
   assert.match(contracts, /BrowserPlanner = "native"\|"gemini"\|"ollama"/);
   assert.match(contracts, /BrowserPendingKind = "approval"\|"input"/);
+});
+
+test("Phase 3 resumes task-scoped input and manual checkpoints without capturing secrets", async () => {
+  const [engine, preload] = await Promise.all([
+    source("src/main/browser-task-engine.ts"),
+    source("preload.cjs"),
+  ]);
+  assert.match(engine, /const manualOnlyInput =/);
+  assert.match(engine, /password\|passcode/);
+  assert.match(engine, /captcha/);
+  assert.match(engine, /let resumeInputContext:/);
+  assert.match(engine, /export async function submitBrowserTaskInput/);
+  assert.match(engine, /explicit task-scoped answer/);
+  assert.match(engine, /the value is not stored in Orbit profile or memory/);
+  assert.match(engine, /User-provided resume context \(task-scoped only\)/);
+  assert.match(engine, /Use this answer only for a clearly matching visible field\/control/);
+  assert.match(engine, /Never enter passwords, payment data, government IDs, SSNs/);
+  assert.match(engine, /export async function continueBrowserTask/);
+  assert.match(engine, /Manual step acknowledged\. Re-inspecting the current page before continuing/);
+  assert.match(engine, /orbit:browser:task:input/);
+  assert.match(engine, /orbit:browser:task:continue/);
+  assert.match(preload, /function isBrowserContinueRequest/);
+  assert.match(preload, /orbit:browser:task:input/);
+  assert.match(preload, /orbit:browser:task:continue/);
+  assert.match(preload, /Task-scoped browser input supplied/);
+  assert.match(preload, /Resumable browser checkpoint continued/);
+  assert.match(preload, /Type or say the answer in Orbit/);
+  assert.match(preload, /className = "orbit-browser-continue"/);
+  assert.match(preload, /CONTINUE/);
 });

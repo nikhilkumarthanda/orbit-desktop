@@ -151,3 +151,17 @@ test("career/browser consequential actions remain approval gated", async () => {
   assert.match(preload, /APPROVE NEXT/);
   assert.match(preload, /orbit:browser:task:resume/);
 });
+
+test("browser approvals are exact, single-use, and never turn generic ask_user into a click", async () => {
+  const engine = await source("src/main/browser-task-engine.ts");
+  assert.match(engine, /let approvedConsequentialLabel = ""/);
+  assert.match(engine, /approvedConsequentialLabel !== label/);
+  assert.match(engine, /approvedConsequentialLabel = ""/);
+  assert.match(engine, /ask_user action MUST put the exact visible consequential control text in label/);
+  assert.match(engine, /do not treat a generic approval as the user's answer/);
+  assert.match(engine, /if \(pending\.type === "ask_user"\)/);
+  assert.match(engine, /!label \|\| !riskyLabels\.test\(label\)/);
+  assert.match(engine, /generic approval cannot safely supply that information/);
+  assert.match(engine, /User approved only the exact next consequential control/);
+  assert.match(engine, /Orbit will re-check the page before executing it/);
+});

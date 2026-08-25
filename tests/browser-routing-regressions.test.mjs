@@ -35,7 +35,7 @@ test("dedicated YouTube playback uses exact DOM-order video links and waits for 
   assert.match(workflow, /const chosen = results\[index\]/);
   assert.match(workflow, /await embedded\.openUrl\(chosen\.url\)/);
   assert.doesNotMatch(workflow, /await embedded\.clickByLabel\(chosen\.(?:label|title)\)/);
-  assert.match(workflow, /youtube\.com\\\/watch/);
+  assert.match(workflow, /waitForWatchPage/);
   assert.match(embedded, /export interface YouTubeVideoResult/);
   assert.match(embedded, /export async function youtubeVideoResults/);
   assert.match(embedded, /ytd-search ytd-video-renderer a#video-title/);

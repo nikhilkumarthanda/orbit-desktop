@@ -7,6 +7,7 @@ const PANE_GAP = 12;
 const BROWSER_TOP = 114;
 const MINIMUM_BROWSER_WIDTH = 220;
 const MINIMUM_BROWSER_HEIGHT = 180;
+const MAXIMUM_AGENT_WIDTH = 720;
 const HOST_LAYOUT_CSS = `
 html.orbit-browser-open main {
   grid-template-columns: ${SIDEBAR_WIDTH}px var(--orbit-agent-pane-width, 410px) minmax(0, 1fr) !important;
@@ -83,6 +84,7 @@ let host: BrowserWindow | null = null;
 let resizeListener: (() => void) | null = null;
 let layoutCssKey: string | null = null;
 let layoutGeneration = 0;
+let preferredAgentWidth: number | null = null;
 let visible = false;
 
 function publicUrl(value: string) {
@@ -109,17 +111,23 @@ function activeTab() {
 function paneGeometry(width: number) {
   const available = Math.max(0, width - SIDEBAR_WIDTH);
   const minimumAgentWidth = 300;
-  const preferredAgentWidth = Math.min(430, Math.max(minimumAgentWidth, Math.round(available * 0.34)));
+  const automaticAgentWidth = Math.min(430, Math.max(minimumAgentWidth, Math.round(available * 0.34)));
   const preferredBrowserWidth = width >= 1450 ? 820 : width >= 1300 ? 720 : 620;
-  let agentWidth = preferredAgentWidth;
+  let agentWidth = preferredAgentWidth == null
+    ? automaticAgentWidth
+    : Math.max(minimumAgentWidth, Math.min(MAXIMUM_AGENT_WIDTH, Math.round(preferredAgentWidth)));
 
-  if (available - agentWidth - PANE_GAP * 2 < preferredBrowserWidth) {
+  if (preferredAgentWidth == null && available - agentWidth - PANE_GAP * 2 < preferredBrowserWidth) {
     agentWidth = Math.max(minimumAgentWidth, available - preferredBrowserWidth - PANE_GAP * 2);
   }
 
-  // When the window is narrow, protect Orbit first. Never enforce a browser
-  // minimum by extending the native WebContentsView beyond the host viewport.
-  if (available < minimumAgentWidth + MINIMUM_BROWSER_WIDTH + PANE_GAP * 2) {
+  const roomyEnough = available >= minimumAgentWidth + MINIMUM_BROWSER_WIDTH + PANE_GAP * 2;
+  if (roomyEnough) {
+    const maximumAgentWidth = Math.max(minimumAgentWidth, available - MINIMUM_BROWSER_WIDTH - PANE_GAP * 2);
+    agentWidth = Math.min(agentWidth, maximumAgentWidth);
+  } else {
+    // When the window is narrow, protect Orbit first. Never enforce a browser
+    // minimum by extending the native WebContentsView beyond the host viewport.
     agentWidth = Math.min(minimumAgentWidth, Math.max(0, available - PANE_GAP * 2));
   }
 
@@ -315,6 +323,37 @@ export function hideEmbeddedBrowser() {
   ++layoutGeneration;
   for (const tab of tabs) tab.view.setVisible(false);
   void syncHostLayout(false);
+  emitState();
+  return embeddedBrowserState();
+}
+
+export async function setAgentPaneWidth(width: number) {
+  const requested = Number(width);
+  if (!Number.isFinite(requested)) return embeddedBrowserState();
+  preferredAgentWidth = Math.max(300, Math.min(MAXIMUM_AGENT_WIDTH, Math.round(requested)));
+  await ensureHost();
+  await layout();
+  emitState();
+  return embeddedBrowserState();
+}
+
+export async function focusOrbitPane() {
+  await ensureHost();
+  if (!host || host.isDestroyed()) return embeddedBrowserState();
+  host.show();
+  host.focus();
+  host.webContents.focus();
+  emitState();
+  return embeddedBrowserState();
+}
+
+export async function focusBrowserPane() {
+  await ensureTab();
+  visible = true;
+  await layout();
+  const current = activeTab();
+  if (host && !host.isDestroyed()) host.focus();
+  if (current && !current.view.webContents.isDestroyed()) current.view.webContents.focus();
   emitState();
   return embeddedBrowserState();
 }
@@ -610,6 +649,9 @@ function registerBrowserChromeIpc() {
     ["orbit:embedded-browser:back", () => goBack()],
     ["orbit:embedded-browser:forward", () => goForward()],
     ["orbit:embedded-browser:reload", () => reload()],
+    ["orbit:embedded-browser:pane:set", (_event, width: number) => setAgentPaneWidth(Number(width))],
+    ["orbit:embedded-browser:focus:orbit", () => focusOrbitPane()],
+    ["orbit:embedded-browser:focus:browser", () => focusBrowserPane()],
   ];
   for (const [channel, handler] of registrations) {
     ipcMain.removeHandler(channel);

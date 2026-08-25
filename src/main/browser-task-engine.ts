@@ -1,3 +1,4 @@
+import { ipcMain } from "electron";
 import { randomUUID } from "node:crypto";
 import * as browser from "./embedded-browser.js";
 import { handleCareerCommand } from "./career-agent.js";
@@ -6,6 +7,7 @@ import { ollamaStatus, planBrowserActionWithOllama } from "./ollama.js";
 import type { BrowserTask, BrowserTaskAction, BrowserTaskEvent, EmbeddedBrowserState } from "../shared/contracts.js";
 
 const riskyLabels = /\b(?:send|submit(?:\s+application)?|purchase|buy|pay|book|publish|post|delete|remove|confirm order|place order|accept|agree|connect)\b/i;
+const manualOnlyInput = /\b(?:password|passcode|one[- ]?time(?:\s+password|\s+code)?|otp|mfa|2fa|verification code|auth(?:entication)? code|captcha|social security|ssn|government id|passport(?: number)?|driver'?s license(?: number)?)\b/i;
 const MAX_STEPS = 20;
 const STEP_TIMEOUT_MS = 105_000;
 const ACTION_TIMEOUT_MS = 25_000;
@@ -29,6 +31,7 @@ let lastPageFingerprint = "";
 let stagnantPageRounds = 0;
 let loopRecoveryAttempts = 0;
 let approvedConsequentialLabel = "";
+let resumeInputContext: { question: string; answer: string } | null = null;
 
 function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string) {
   return new Promise<T>((resolve, reject) => {
@@ -432,9 +435,12 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
   emit(listener, "status", active.summary);
   const history = steps.slice(-6).map(step => `${step.action.type}: ${step.action.label || step.action.url || step.action.tabId || ""} -> ${step.outcome}`).join("\n");
   const noProgress = stagnantPageRounds > 0 ? `\nProgress warning: the visible page has been materially unchanged for ${stagnantPageRounds} planning round(s). Do NOT repeat the same action; choose a different control/action that can advance the goal.` : "";
+  const userResume = resumeInputContext
+    ? `\nUser-provided resume context (task-scoped only): pending question/field=${JSON.stringify(resumeInputContext.question)}; explicit answer=${JSON.stringify(resumeInputContext.answer)}. Use this answer only for a clearly matching visible field/control. Do not reinterpret it as an answer to any different legal, compensation, demographic, identity, consent, or authentication question.`
+    : "";
   const latestState = browser.embeddedBrowserState() as EmbeddedBrowserState;
   const tabContext = latestState.tabs.map((tab, index) => ({ index, id: tab.id, active: tab.id === latestState.activeTabId, title: tab.title, url: tab.url }));
-  const prompt = `You are Orbit's browser controller. Orbit Browser is a native multi-tab browser. Choose exactly one safe next action to advance the user's goal.\nGoal: ${goal}\nActive page: ${page.title} (${page.url})\nOrbit Browser tabs: ${JSON.stringify(tabContext)}\nRecent steps:\n${history || "none"}${noProgress}\nVisible controls: ${JSON.stringify(page.controls.slice(0, 60))}\nVisible text: ${page.text.slice(0, 7000)}\nReturn JSON only: {"type":"navigate|new_tab|switch_tab|close_tab|back|forward|reload|click|fill|select|scroll|wait|complete|ask_user","url":"","label":"","value":"","direction":"down|up","tabId":"","tabIndex":0,"reason":"short explanation"}. Prefer native tab/navigation actions when they match the user's request. Opening an Apply or Easy Apply flow is allowed without confirmation because it does not submit an application. Final submission, sending a message, connecting, posting/publishing, purchasing, paying, deleting, accepting, agreeing, or other consequential external actions MUST use ask_user immediately before the action, and that ask_user action MUST put the exact visible consequential control text in label. If recent steps say the user approved the exact next consequential control, you may click only that exact same label once; if the page or label changed, ask again. Never guess or fill work authorization, sponsorship, visa, citizenship, salary/compensation, demographic/EEO, disability, veteran, identity, authentication, signature, or attestation fields; use ask_user for those and do not treat a generic approval as the user's answer. For navigate/new_tab with a URL, url MUST be an absolute http:// or https:// URL. Use tabId from Orbit Browser tabs when switching or closing a specific tab. Use labels exactly as shown for page controls. Never repeat a failed action. Use complete only when the goal is visibly satisfied. Never answer from memory instead of using the browser. Never enter passwords, payment data, government IDs, or authentication codes.`;
+  const prompt = `You are Orbit's browser controller. Orbit Browser is a native multi-tab browser. Choose exactly one safe next action to advance the user's goal.\nGoal: ${goal}\nActive page: ${page.title} (${page.url})\nOrbit Browser tabs: ${JSON.stringify(tabContext)}\nRecent steps:\n${history || "none"}${noProgress}${userResume}\nVisible controls: ${JSON.stringify(page.controls.slice(0, 60))}\nVisible text: ${page.text.slice(0, 7000)}\nReturn JSON only: {"type":"navigate|new_tab|switch_tab|close_tab|back|forward|reload|click|fill|select|scroll|wait|complete|ask_user","url":"","label":"","value":"","direction":"down|up","tabId":"","tabIndex":0,"reason":"short explanation"}. Prefer native tab/navigation actions when they match the user's request. Opening an Apply or Easy Apply flow is allowed without confirmation because it does not submit an application. Final submission, sending a message, connecting, posting/publishing, purchasing, paying, deleting, accepting, agreeing, or other consequential external actions MUST use ask_user immediately before the action, and that ask_user action MUST put the exact visible consequential control text in label. If recent steps say the user approved the exact next consequential control, you may click only that exact same label once; if the page or label changed, ask again. Never guess work authorization, sponsorship, visa, citizenship, salary/compensation, demographic/EEO, disability, veteran, identity, consent, signature, or attestation answers. If task-scoped user resume context explicitly supplies an answer to one of those non-secret fields, you may fill/select exactly that answer only when the visible field clearly matches the pending question; otherwise use ask_user. Never enter passwords, payment data, government IDs, SSNs, passport/license numbers, authentication/MFA/OTP codes, or CAPTCHA responses; ask the user to complete those manually, then re-inspect after they say continue. For navigate/new_tab with a URL, url MUST be an absolute http:// or https:// URL. Use tabId from Orbit Browser tabs when switching or closing a specific tab. Use labels exactly as shown for page controls. Never repeat a failed action. Use complete only when the goal is visibly satisfied. Never answer from memory instead of using the browser.`;
   const normalized = normalizePlannedAction(await planBrowserStep(prompt, listener), page.url);
   let parsed = avoidActionLoop(normalized, page, steps);
   if (parsed.type === "wait" && parsed.reason === LOOP_RECOVERY_MARKER) {
@@ -500,6 +506,7 @@ async function act(action: BrowserTaskAction): Promise<{ pause: boolean; outcome
   else if (action.type === "select") await browser.selectByLabel(action.label || "", action.value || "");
   else if (action.type === "scroll") await browser.scroll(action.direction === "up" ? "up" : "down");
   else if (action.type === "wait") await new Promise(resolve => setTimeout(resolve, 1200));
+  if (resumeInputContext && ["fill", "select"].includes(action.type)) resumeInputContext = null;
   return { pause: false, outcome: action.reason || `${action.type} completed` };
 }
 
@@ -507,7 +514,7 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
   if (!active || active.id !== taskId) return active;
   const startedAt = Date.now();
   active.status = "running";
-  active.summary = "Starting Orbit Browser workflow";
+  active.summary = active.steps.length ? "Resuming Orbit Browser workflow from the current page" : "Starting Orbit Browser workflow";
   emit(listener, "status", active.summary);
   try {
     for (let round = active.steps.length; round < MAX_STEPS; round++) {
@@ -517,7 +524,7 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
       const action = await withTimeout(nextAction(active.goal, active.steps, listener), STEP_TIMEOUT_MS, "The browser planner took too long on this step");
       if (!active || active.id !== taskId) return active;
       if (cancelled) { active.status = "cancelled"; active.summary = "Browser task stopped before the next action"; emit(listener, "status", active.summary); return active; }
-      if (action.type === "complete") { active.status = "completed"; active.summary = action.reason || "Browser task completed"; emit(listener, "status", active.summary); return active; }
+      if (action.type === "complete") { active.status = "completed"; active.summary = action.reason || "Browser task completed"; resumeInputContext = null; emit(listener, "status", active.summary); return active; }
       active.summary = action.reason || `Executing ${action.type}`;
       emit(listener, "status", active.summary);
       const result = await withTimeout(act(action), ACTION_TIMEOUT_MS, `The ${action.type} action took too long`);
@@ -525,6 +532,7 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
       active.url = await browser.currentUrl();
       active.title = await browser.pageTitle();
       if (result.pause) {
+        if (result.pendingKind === "input" && resumeInputContext) resumeInputContext = null;
         active.status = "waiting_for_confirmation";
         active.pendingAction = action;
         active.pendingKind = result.pendingKind || "input";
@@ -562,16 +570,20 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
 export async function startBrowserTask(goal: string, listener: (event: BrowserTaskEvent) => void) {
   const cleanGoal = goal.trim();
   if (!cleanGoal) throw new Error("Tell Orbit what you want the browser to accomplish");
-  if (active && ["running", "waiting_for_confirmation"].includes(active.status)) {
+  if (active && ["running", "waiting_for_confirmation", "paused"].includes(active.status)) {
     const waiting = active.status === "waiting_for_confirmation";
+    const paused = active.status === "paused";
     throw new Error(waiting
-      ? "Orbit is waiting for approval or input in the current browser task. Approve it or stop the browser task before starting another one."
-      : "Orbit is already running a browser task. Stop it before starting another one.");
+      ? "Orbit is waiting for approval or input in the current browser task. Resolve it or stop the browser task before starting another one."
+      : paused
+        ? "Orbit has a resumable browser task paused at its last checkpoint. Continue it or stop it before starting another browser task."
+        : "Orbit is already running a browser task. Stop it before starting another one.");
   }
 
   if (directCareerCommand(cleanGoal)) {
     cancelled = false;
     approvedConsequentialLabel = "";
+    resumeInputContext = null;
     const result = await handleCareerCommand(cleanGoal);
     const state = browser.embeddedBrowserState();
     active = {
@@ -588,6 +600,7 @@ export async function startBrowserTask(goal: string, listener: (event: BrowserTa
   if (!deterministic && !geminiReady && !local?.available) throw new Error("Connect Gemini or start the local qwen3:4b model before starting a browser task that requires AI reasoning");
   cancelled = false;
   approvedConsequentialLabel = "";
+  resumeInputContext = null;
   lastPageFingerprint = "";
   stagnantPageRounds = 0;
   loopRecoveryAttempts = 0;
@@ -610,7 +623,7 @@ export async function resumeBrowserTask(confirmed: boolean, listener: (event: Br
   if (!pending) throw new Error("Orbit needs you to take over for this step");
 
   if (active.pendingKind === "input") {
-    active.summary = pending.reason || "Orbit needs your input or manual takeover for this step. Approval alone cannot supply the missing information.";
+    active.summary = pending.reason || "Orbit needs your answer or manual takeover for this step. Approval alone cannot supply the missing information.";
     emit(listener, "status", active.summary);
     return active;
   }
@@ -654,9 +667,79 @@ export async function resumeBrowserTask(confirmed: boolean, listener: (event: Br
   throw new Error("Orbit needs you to take over for this step");
 }
 
+export async function submitBrowserTaskInput(answer: string, listener: (event: BrowserTaskEvent) => void) {
+  if (!active) throw new Error("No browser task is waiting for input");
+  if (active.status !== "waiting_for_confirmation" || active.pendingKind !== "input") return active;
+  const pending = active.pendingAction;
+  if (!pending) throw new Error("Orbit no longer has a pending browser question to answer");
+  const cleanAnswer = String(answer || "").trim().slice(0, 1_000);
+  if (!cleanAnswer) {
+    active.summary = "Orbit is still waiting for your answer. Nothing was changed.";
+    emit(listener, "status", active.summary);
+    return active;
+  }
+  const question = String(pending.label || pending.reason || active.summary || "the pending browser question").trim().slice(0, 300);
+  const manualOnly = manualOnlyInput.test(`${question} ${pending.reason || ""}`);
+  if (manualOnly) {
+    active.summary = `For “${question}”, enter the secret or verification information manually in the website. Orbit will not capture or type it. When the page is ready, say “continue”.`;
+    emit(listener, "status", active.summary);
+    return active;
+  }
+
+  resumeInputContext = { question, answer: cleanAnswer };
+  active.steps.push({ at: new Date().toISOString(), action: pending, outcome: `User supplied an explicit task-scoped answer for “${question}”; the value is not stored in Orbit profile or memory.` });
+  active.pendingAction = undefined;
+  active.pendingKind = undefined;
+  active.status = "running";
+  active.summary = `Got it. Re-checking the current page and applying that answer only to “${question}” if the field still matches.`;
+  cancelled = false;
+  const taskId = active.id;
+  emit(listener, "step", `Task-scoped input received · Step ${active.steps.length} verified`);
+  void run(taskId, listener);
+  return active;
+}
+
+export async function continueBrowserTask(listener: (event: BrowserTaskEvent) => void) {
+  if (!active) throw new Error("There is no browser task to continue");
+  if (active.status === "waiting_for_confirmation") {
+    const pending = active.pendingAction;
+    const question = String(pending?.label || pending?.reason || active.summary || "");
+    if (active.pendingKind === "input" && manualOnlyInput.test(`${question} ${pending?.reason || ""}`)) {
+      active.steps.push({ at: new Date().toISOString(), action: pending || { type: "wait", reason: "Manual browser takeover" }, outcome: "User completed the manual-only browser step; Orbit did not capture the secret, code, identifier, or CAPTCHA response." });
+      active.pendingAction = undefined;
+      active.pendingKind = undefined;
+      resumeInputContext = null;
+      active.status = "running";
+      active.summary = "Manual step acknowledged. Re-inspecting the current page before continuing.";
+    } else {
+      active.summary = active.pendingKind === "approval"
+        ? "Orbit is waiting for approval of the exact consequential action. Use APPROVE NEXT or stop the task."
+        : "Orbit is still waiting for your answer to the pending question.";
+      emit(listener, "status", active.summary);
+      return active;
+    }
+  } else if (active.status === "paused") {
+    active.status = "running";
+    active.summary = "Continuing from the last verified Orbit Browser checkpoint and re-inspecting the current page.";
+  } else if (active.status !== "running") {
+    return active;
+  }
+
+  cancelled = false;
+  lastPageFingerprint = "";
+  stagnantPageRounds = 0;
+  loopRecoveryAttempts = 0;
+  await browser.showEmbeddedBrowser();
+  const taskId = active.id;
+  emit(listener, "status", active.summary);
+  void run(taskId, listener);
+  return active;
+}
+
 export function cancelBrowserTask() {
   cancelled = true;
   approvedConsequentialLabel = "";
+  resumeInputContext = null;
   if (active && !["completed", "failed", "cancelled"].includes(active.status)) {
     active.status = "cancelled";
     active.summary = "Browser task stopped";
@@ -668,3 +751,12 @@ export function cancelBrowserTask() {
 }
 
 export function browserTaskStatus() { return active; }
+
+function registerPhaseThreeBrowserIpc() {
+  ipcMain.removeHandler("orbit:browser:task:input");
+  ipcMain.removeHandler("orbit:browser:task:continue");
+  ipcMain.handle("orbit:browser:task:input", (event, answer: string) => submitBrowserTaskInput(String(answer || ""), payload => event.sender.send("orbit:browser:task:event", payload)));
+  ipcMain.handle("orbit:browser:task:continue", event => continueBrowserTask(payload => event.sender.send("orbit:browser:task:event", payload)));
+}
+
+registerPhaseThreeBrowserIpc();

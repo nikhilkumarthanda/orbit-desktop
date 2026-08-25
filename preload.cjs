@@ -1,19 +1,23 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
+const BROWSER_PANE_STORAGE_KEY = "orbit-browser-agent-pane-width";
 let embeddedBrowserVisible = false;
 let embeddedBrowserState = null;
 let browserTaskRunning = false;
 let browserTaskState = null;
+let panePreferenceApplied = false;
 
 ipcRenderer.on("orbit:embedded-browser:state", (_event, payload) => {
   embeddedBrowserVisible = Boolean(payload?.visible);
   embeddedBrowserState = payload || null;
   renderOrbitBrowserChrome();
+  syncBrowserRuntimePlanner();
 });
 ipcRenderer.on("orbit:browser:task:event", (_event, payload) => {
   browserTaskState = payload?.task || null;
   browserTaskRunning = ["running", "waiting_for_confirmation", "paused"].includes(browserTaskState?.status);
   renderOrbitBrowserChrome();
+  syncBrowserRuntimePlanner();
 });
 
 function explicitlyRequestsExternalBrowser(value) {
@@ -185,8 +189,24 @@ function normalizeOrbitCommand(command) {
   return value;
 }
 
+function waitingBrowserTaskPlan() {
+  const input = browserTaskState?.pendingKind === "input";
+  const detail = browserTaskState?.summary || (input ? "Orbit needs information before it can continue." : "Orbit is waiting for approval before a consequential browser action.");
+  return {
+    intent: "answer",
+    confidence: 1,
+    explanation: "A waiting Orbit Browser task cannot be silently replaced",
+    reply: input
+      ? `${detail} Use the visible INPUT REQUIRED state to review the task, or stop the browser task before starting something else.`
+      : `${detail} Approve that exact action or stop the browser task before starting something else.`,
+    source: "local",
+  };
+}
+
 async function planOrbitCommand(command) {
   const value = String(command || "").trim();
+  if (browserTaskState?.status === "waiting_for_confirmation") return waitingBrowserTaskPlan();
+
   const nativeApplication = nativeApplicationRequest(value);
   if (nativeApplication) {
     if (browserTaskRunning) {
@@ -248,6 +268,37 @@ function browserHost(url) {
   catch { return "New tab"; }
 }
 
+function clampPaneWidth(value) {
+  return Math.max(300, Math.min(720, Math.round(Number(value) || 410)));
+}
+
+function storedPaneWidth() {
+  try {
+    const value = Number(window.localStorage.getItem(BROWSER_PANE_STORAGE_KEY));
+    return Number.isFinite(value) && value > 0 ? clampPaneWidth(value) : null;
+  } catch { return null; }
+}
+
+function applyStoredPaneWidth() {
+  if (panePreferenceApplied) return;
+  panePreferenceApplied = true;
+  const saved = storedPaneWidth();
+  if (saved) void ipcRenderer.invoke("orbit:embedded-browser:pane:set", saved).catch(() => null);
+}
+
+function syncBrowserRuntimePlanner() {
+  const apply = () => {
+    const node = document.querySelector(".browser-runtime-bar .browser-runtime-planner");
+    if (!node || !browserTaskState?.planner) return;
+    const planner = browserTaskState.planner;
+    node.textContent = planner === "native" ? "NATIVE" : planner === "ollama" ? "LOCAL OLLAMA" : "GEMINI";
+    node.classList.toggle("local", planner === "ollama" || planner === "native");
+    node.classList.toggle("native", planner === "native");
+  };
+  if (document.readyState === "loading") return;
+  window.requestAnimationFrame(() => { apply(); window.setTimeout(apply, 0); });
+}
+
 function installOrbitBrowserChrome() {
   if (document.getElementById("orbit-browser-chrome-style")) return;
   const style = document.createElement("style");
@@ -255,16 +306,58 @@ function installOrbitBrowserChrome() {
   style.textContent = `
 #orbit-browser-chrome{position:fixed;z-index:2147482000;top:10px;left:calc(276px + var(--orbit-agent-pane-width,460px) + 12px);right:12px;height:94px;display:none;grid-template-rows:42px 42px;gap:4px;padding:5px 7px;border:1px solid rgba(155,124,255,.24);border-radius:15px;background:linear-gradient(180deg,rgba(15,17,25,.98),rgba(8,10,16,.97));box-shadow:0 16px 46px rgba(0,0,0,.48),inset 0 1px rgba(255,255,255,.05);backdrop-filter:blur(20px);color:#e9ebf3;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;pointer-events:auto}
 #orbit-browser-chrome *{box-sizing:border-box}
+#orbit-browser-divider{position:fixed;z-index:2147482500;top:108px;bottom:12px;left:calc(276px + var(--orbit-agent-pane-width,460px) + 6px);width:12px;transform:translateX(-50%);display:none;cursor:col-resize;touch-action:none;user-select:none}
+#orbit-browser-divider::before{content:"";position:absolute;left:5px;top:8px;bottom:8px;width:2px;border-radius:999px;background:rgba(155,124,255,.22);box-shadow:0 0 0 1px rgba(255,255,255,.025);transition:background .16s,box-shadow .16s}
+#orbit-browser-divider:hover::before,#orbit-browser-divider.dragging::before{background:#9b7cff;box-shadow:0 0 14px rgba(155,124,255,.75)}
 .orbit-browser-tab-row{display:flex;align-items:center;gap:5px;min-width:0}.orbit-browser-wordmark{display:flex;align-items:center;gap:7px;flex:none;padding:0 6px 0 2px}.orbit-browser-wordmark i{width:23px;height:23px;border-radius:8px;display:grid;place-items:center;background:radial-gradient(circle at 35% 30%,#fff,#a893ff 16%,#5640d0 58%,#16102e);box-shadow:0 0 18px rgba(126,96,255,.55);font:800 10px/1 sans-serif;font-style:normal}.orbit-browser-wordmark span{display:grid;line-height:1.05}.orbit-browser-wordmark b{font-size:9px;letter-spacing:.12em}.orbit-browser-wordmark small{font-size:7px;color:#666e82;letter-spacing:.08em}
 .orbit-browser-tabs{display:flex;align-items:center;gap:4px;min-width:0;overflow-x:auto;scrollbar-width:none;flex:1}.orbit-browser-tabs::-webkit-scrollbar{display:none}.orbit-browser-tab{display:flex;align-items:center;min-width:120px;max-width:190px;height:31px;border:1px solid transparent;border-radius:9px;background:#11141d;overflow:hidden;flex:0 1 180px}.orbit-browser-tab.active{border-color:rgba(155,124,255,.42);background:linear-gradient(180deg,#201a37,#151522);box-shadow:inset 0 1px rgba(255,255,255,.05)}.orbit-browser-tab>button:first-child{min-width:0;flex:1;height:100%;border:0;background:transparent;color:#858da0;padding:0 8px;text-align:left;cursor:pointer;display:grid;align-content:center;gap:1px}.orbit-browser-tab.active>button:first-child{color:#f1efff}.orbit-browser-tab b{font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:650}.orbit-browser-tab small{font-size:7px;color:#60687a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.orbit-browser-tab .orbit-tab-close{width:26px;height:100%;border:0;background:transparent;color:#687084;cursor:pointer;font-size:13px}.orbit-browser-tab .orbit-tab-close:hover{color:white;background:#ffffff0a}.orbit-browser-new-tab{width:29px;height:29px;flex:none;border:1px solid #ffffff0e;border-radius:9px;background:#11141c;color:#a9b0c1;cursor:pointer;font-size:17px;line-height:1}.orbit-browser-new-tab:hover{border-color:rgba(155,124,255,.35);color:white;background:#191629}
-.orbit-browser-nav{display:grid;grid-template-columns:auto auto auto minmax(80px,1fr) auto;gap:5px;align-items:center}.orbit-browser-nav>button{width:30px;height:30px;border:1px solid #ffffff0d;border-radius:9px;background:#0e1118;color:#7e8799;cursor:pointer;font-size:13px}.orbit-browser-nav>button:hover:not(:disabled){border-color:rgba(155,124,255,.3);color:white;background:#171525}.orbit-browser-nav>button:disabled{opacity:.3;cursor:default}.orbit-browser-address{height:30px;display:flex;align-items:center;gap:7px;min-width:0;padding:0 10px;border:1px solid #ffffff0d;border-radius:10px;background:#090c12;color:#8d95a7}.orbit-browser-address i{width:6px;height:6px;border-radius:50%;background:#59d794;box-shadow:0 0 9px #59d794;flex:none}.orbit-browser-address.loading i{background:#9b7cff;box-shadow:0 0 10px #9b7cff;animation:orbit-browser-pulse .8s infinite}.orbit-browser-address span{font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.orbit-browser-agent{height:27px;display:flex;align-items:center;gap:5px;padding:0 8px;border:1px solid rgba(155,124,255,.2);border-radius:999px;background:#151221;color:#a99bf0;font-size:7px;font-weight:800;letter-spacing:.08em;white-space:nowrap}.orbit-browser-agent i{width:5px;height:5px;border-radius:50%;background:#9b7cff;box-shadow:0 0 8px #9b7cff}.orbit-browser-nav>.orbit-browser-approve{width:auto;min-width:92px;height:29px;padding:0 10px;border-color:rgba(96,224,157,.42);background:rgba(36,126,81,.22);color:#9ff0c4;font-size:7px;font-weight:850;letter-spacing:.08em;white-space:nowrap}.orbit-browser-nav>.orbit-browser-approve:hover{border-color:rgba(96,224,157,.72);background:rgba(36,126,81,.34);color:#d9ffe9}@keyframes orbit-browser-pulse{50%{opacity:.35}}
-@media(max-width:1100px){#orbit-browser-chrome{left:calc(276px + var(--orbit-agent-pane-width,390px) + 8px);right:8px}.orbit-browser-wordmark span{display:none}.orbit-browser-tab{min-width:95px}.orbit-browser-agent{display:none}.orbit-browser-nav{grid-template-columns:auto auto auto minmax(70px,1fr)}}`;
+.orbit-browser-focus{display:flex;align-items:center;gap:3px;flex:none}.orbit-browser-focus button{height:27px;border:1px solid #ffffff0e;border-radius:8px;background:#0e1118;color:#858da0;padding:0 7px;font-size:6px;font-weight:800;letter-spacing:.07em;cursor:pointer;white-space:nowrap}.orbit-browser-focus button:hover{border-color:rgba(155,124,255,.35);color:#f4f0ff;background:#171525}
+.orbit-browser-nav{display:grid;grid-template-columns:auto auto auto minmax(80px,1fr) auto;gap:5px;align-items:center}.orbit-browser-nav>button{width:30px;height:30px;border:1px solid #ffffff0d;border-radius:9px;background:#0e1118;color:#7e8799;cursor:pointer;font-size:13px}.orbit-browser-nav>button:hover:not(:disabled){border-color:rgba(155,124,255,.3);color:white;background:#171525}.orbit-browser-nav>button:disabled{opacity:.3;cursor:default}.orbit-browser-address{height:30px;display:flex;align-items:center;gap:7px;min-width:0;padding:0 10px;border:1px solid #ffffff0d;border-radius:10px;background:#090c12;color:#8d95a7}.orbit-browser-address i{width:6px;height:6px;border-radius:50%;background:#59d794;box-shadow:0 0 9px #59d794;flex:none}.orbit-browser-address.loading i{background:#9b7cff;box-shadow:0 0 10px #9b7cff;animation:orbit-browser-pulse .8s infinite}.orbit-browser-address span{font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.orbit-browser-agent,.orbit-browser-input-required{height:27px;display:flex;align-items:center;gap:5px;padding:0 8px;border:1px solid rgba(155,124,255,.2);border-radius:999px;background:#151221;color:#a99bf0;font-size:7px;font-weight:800;letter-spacing:.08em;white-space:nowrap}.orbit-browser-agent i{width:5px;height:5px;border-radius:50%;background:#9b7cff;box-shadow:0 0 8px #9b7cff}.orbit-browser-input-required{border-color:rgba(255,188,92,.4);background:rgba(138,85,22,.2);color:#ffd99a}.orbit-browser-nav>.orbit-browser-approve{width:auto;min-width:92px;height:29px;padding:0 10px;border-color:rgba(96,224,157,.42);background:rgba(36,126,81,.22);color:#9ff0c4;font-size:7px;font-weight:850;letter-spacing:.08em;white-space:nowrap}.orbit-browser-nav>.orbit-browser-approve:hover{border-color:rgba(96,224,157,.72);background:rgba(36,126,81,.34);color:#d9ffe9}@keyframes orbit-browser-pulse{50%{opacity:.35}}
+@media(max-width:1100px){#orbit-browser-chrome{left:calc(276px + var(--orbit-agent-pane-width,390px) + 8px);right:8px}#orbit-browser-divider{left:calc(276px + var(--orbit-agent-pane-width,390px) + 4px)}.orbit-browser-wordmark span{display:none}.orbit-browser-tab{min-width:95px}.orbit-browser-agent{display:none}.orbit-browser-focus button{padding:0 5px;font-size:0}.orbit-browser-focus button::first-letter{font-size:7px}.orbit-browser-nav{grid-template-columns:auto auto auto minmax(70px,1fr)}}`;
   document.documentElement.appendChild(style);
 
   const root = document.createElement("div");
   root.id = "orbit-browser-chrome";
   root.setAttribute("aria-label", "Orbit Browser controls");
-  document.body.appendChild(root);
+
+  const divider = document.createElement("div");
+  divider.id = "orbit-browser-divider";
+  divider.setAttribute("role", "separator");
+  divider.setAttribute("aria-label", "Resize Orbit and Browser panes");
+  divider.setAttribute("aria-orientation", "vertical");
+  divider.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const cssWidth = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--orbit-agent-pane-width"));
+    const startWidth = Number.isFinite(cssWidth) ? cssWidth : storedPaneWidth() || 410;
+    let pendingWidth = clampPaneWidth(startWidth);
+    let frame = 0;
+    const flush = () => {
+      frame = 0;
+      const next = clampPaneWidth(pendingWidth);
+      document.documentElement.style.setProperty("--orbit-agent-pane-width", `${next}px`);
+      try { window.localStorage.setItem(BROWSER_PANE_STORAGE_KEY, String(next)); } catch {}
+      void ipcRenderer.invoke("orbit:embedded-browser:pane:set", next).catch(() => null);
+    };
+    const move = moveEvent => {
+      pendingWidth = startWidth + moveEvent.clientX - startX;
+      if (!frame) frame = window.requestAnimationFrame(flush);
+    };
+    const finish = () => {
+      if (frame) { window.cancelAnimationFrame(frame); flush(); }
+      divider.classList.remove("dragging");
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", finish, true);
+      window.removeEventListener("pointercancel", finish, true);
+    };
+    divider.classList.add("dragging");
+    window.addEventListener("pointermove", move, true);
+    window.addEventListener("pointerup", finish, true);
+    window.addEventListener("pointercancel", finish, true);
+  });
+
+  document.body.append(root, divider);
 }
 
 function button(text, title, handler, disabled = false) {
@@ -285,10 +378,13 @@ function renderOrbitBrowserChrome() {
   const start = () => {
     installOrbitBrowserChrome();
     const root = document.getElementById("orbit-browser-chrome");
+    const divider = document.getElementById("orbit-browser-divider");
     if (!root) return;
     const state = embeddedBrowserState;
     root.style.display = state?.visible ? "grid" : "none";
+    if (divider) divider.style.display = state?.visible ? "block" : "none";
     if (!state?.visible) return;
+    applyStoredPaneWidth();
 
     root.replaceChildren();
     const tabRow = document.createElement("div");
@@ -322,6 +418,14 @@ function renderOrbitBrowserChrome() {
     add.className = "orbit-browser-new-tab";
     tabRow.appendChild(add);
 
+    const focus = document.createElement("div");
+    focus.className = "orbit-browser-focus";
+    focus.append(
+      button("FOCUS ORBIT", "Focus Orbit assistant pane", () => ipcRenderer.invoke("orbit:embedded-browser:focus:orbit")),
+      button("FOCUS BROWSER", "Focus active Orbit Browser tab", () => ipcRenderer.invoke("orbit:embedded-browser:focus:browser")),
+    );
+    tabRow.appendChild(focus);
+
     const nav = document.createElement("div");
     nav.className = "orbit-browser-nav";
     nav.append(
@@ -338,22 +442,38 @@ function renderOrbitBrowserChrome() {
     nav.appendChild(address);
 
     if (browserTaskState?.status === "waiting_for_confirmation") {
-      const pending = browserTaskState.pendingAction?.label || browserTaskState.pendingAction?.reason || browserTaskState.summary || "the next consequential action";
-      const approve = button("APPROVE NEXT", `Approve: ${pending}`, async () => {
-        if (!window.confirm(`Approve only this next Orbit Browser action?\n\n${pending}`)) return;
-        await ipcRenderer.invoke("orbit:browser:task:resume", true);
-      });
-      approve.className = "orbit-browser-approve";
-      nav.appendChild(approve);
+      const pending = browserTaskState.pendingAction?.label || browserTaskState.pendingAction?.reason || browserTaskState.summary || "the next browser step";
+      if (browserTaskState.pendingKind === "input") {
+        const input = document.createElement("div");
+        input.className = "orbit-browser-input-required";
+        input.textContent = "INPUT REQUIRED";
+        input.title = browserTaskState.summary || pending;
+        nav.appendChild(input);
+      } else {
+        const approve = button("APPROVE NEXT", `Approve: ${pending}`, async () => {
+          if (!window.confirm(`Approve only this next Orbit Browser action?\n\n${pending}`)) return;
+          await ipcRenderer.invoke("orbit:browser:task:resume", true);
+        });
+        approve.className = "orbit-browser-approve";
+        nav.appendChild(approve);
+      }
     } else {
       const agent = document.createElement("div");
       agent.className = "orbit-browser-agent";
       const agentDot = document.createElement("i");
-      const agentLabel = document.createElement("span"); agentLabel.textContent = "AGENT CONTROLS ACTIVE TAB";
+      const agentLabel = document.createElement("span");
+      agentLabel.textContent = browserTaskState?.planner === "native"
+        ? "NATIVE CONTROLS ACTIVE"
+        : browserTaskState?.planner === "ollama"
+          ? "LOCAL OLLAMA ACTIVE"
+          : browserTaskState?.planner === "gemini"
+            ? "GEMINI AGENT ACTIVE"
+            : "AGENT CONTROLS ACTIVE TAB";
       agent.append(agentDot, agentLabel);
       nav.appendChild(agent);
     }
     root.append(tabRow, nav);
+    syncBrowserRuntimePlanner();
   };
 
   if (document.readyState === "loading") window.addEventListener("DOMContentLoaded", start, { once: true });

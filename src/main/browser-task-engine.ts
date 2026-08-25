@@ -28,6 +28,7 @@ let cancelled = false;
 let lastPageFingerprint = "";
 let stagnantPageRounds = 0;
 let loopRecoveryAttempts = 0;
+let approvedConsequentialLabel = "";
 
 function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string) {
   return new Promise<T>((resolve, reject) => {
@@ -433,7 +434,7 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
   const noProgress = stagnantPageRounds > 0 ? `\nProgress warning: the visible page has been materially unchanged for ${stagnantPageRounds} planning round(s). Do NOT repeat the same action; choose a different control/action that can advance the goal.` : "";
   const latestState = browser.embeddedBrowserState() as EmbeddedBrowserState;
   const tabContext = latestState.tabs.map((tab, index) => ({ index, id: tab.id, active: tab.id === latestState.activeTabId, title: tab.title, url: tab.url }));
-  const prompt = `You are Orbit's browser controller. Orbit Browser is a native multi-tab browser. Choose exactly one safe next action to advance the user's goal.\nGoal: ${goal}\nActive page: ${page.title} (${page.url})\nOrbit Browser tabs: ${JSON.stringify(tabContext)}\nRecent steps:\n${history || "none"}${noProgress}\nVisible controls: ${JSON.stringify(page.controls.slice(0, 60))}\nVisible text: ${page.text.slice(0, 7000)}\nReturn JSON only: {"type":"navigate|new_tab|switch_tab|close_tab|back|forward|reload|click|fill|select|scroll|wait|complete|ask_user","url":"","label":"","value":"","direction":"down|up","tabId":"","tabIndex":0,"reason":"short explanation"}. Prefer native tab/navigation actions when they match the user's request. Opening an Apply or Easy Apply flow is allowed without confirmation because it does not submit an application. Final submission, sending a message, connecting, posting/publishing, purchasing, paying, deleting, accepting, agreeing, or other consequential external actions MUST use ask_user immediately before the action. Never guess or fill work authorization, sponsorship, visa, citizenship, salary/compensation, demographic/EEO, disability, veteran, identity, authentication, signature, or attestation fields; use ask_user for those. For navigate/new_tab with a URL, url MUST be an absolute http:// or https:// URL. Use tabId from Orbit Browser tabs when switching or closing a specific tab. Use labels exactly as shown for page controls. Never repeat a failed action. Use complete only when the goal is visibly satisfied. Never answer from memory instead of using the browser. Never enter passwords, payment data, government IDs, or authentication codes.`;
+  const prompt = `You are Orbit's browser controller. Orbit Browser is a native multi-tab browser. Choose exactly one safe next action to advance the user's goal.\nGoal: ${goal}\nActive page: ${page.title} (${page.url})\nOrbit Browser tabs: ${JSON.stringify(tabContext)}\nRecent steps:\n${history || "none"}${noProgress}\nVisible controls: ${JSON.stringify(page.controls.slice(0, 60))}\nVisible text: ${page.text.slice(0, 7000)}\nReturn JSON only: {"type":"navigate|new_tab|switch_tab|close_tab|back|forward|reload|click|fill|select|scroll|wait|complete|ask_user","url":"","label":"","value":"","direction":"down|up","tabId":"","tabIndex":0,"reason":"short explanation"}. Prefer native tab/navigation actions when they match the user's request. Opening an Apply or Easy Apply flow is allowed without confirmation because it does not submit an application. Final submission, sending a message, connecting, posting/publishing, purchasing, paying, deleting, accepting, agreeing, or other consequential external actions MUST use ask_user immediately before the action, and that ask_user action MUST put the exact visible consequential control text in label. If recent steps say the user approved the exact next consequential control, you may click only that exact same label once; if the page or label changed, ask again. Never guess or fill work authorization, sponsorship, visa, citizenship, salary/compensation, demographic/EEO, disability, veteran, identity, authentication, signature, or attestation fields; use ask_user for those and do not treat a generic approval as the user's answer. For navigate/new_tab with a URL, url MUST be an absolute http:// or https:// URL. Use tabId from Orbit Browser tabs when switching or closing a specific tab. Use labels exactly as shown for page controls. Never repeat a failed action. Use complete only when the goal is visibly satisfied. Never answer from memory instead of using the browser. Never enter passwords, payment data, government IDs, or authentication codes.`;
   const normalized = normalizePlannedAction(await planBrowserStep(prompt, listener), page.url);
   let parsed = avoidActionLoop(normalized, page, steps);
   if (parsed.type === "wait" && parsed.reason === LOOP_RECOVERY_MARKER) {
@@ -464,7 +465,12 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
 }
 
 async function act(action: BrowserTaskAction) {
-  if ((action.type === "click" && riskyLabels.test(action.label || "")) || action.type === "ask_user") return { pause: true, outcome: action.reason || `Approval required before ${action.label || "continuing"}` };
+  if (action.type === "ask_user") return { pause: true, outcome: action.reason || `Approval or user input required before ${action.label || "continuing"}` };
+  if (action.type === "click" && riskyLabels.test(action.label || "")) {
+    const label = String(action.label || "").trim().toLowerCase();
+    if (!approvedConsequentialLabel || approvedConsequentialLabel !== label) return { pause: true, outcome: action.reason || `Approval required before ${action.label || "continuing"}` };
+    approvedConsequentialLabel = "";
+  }
   if (action.type === "navigate") await browser.openUrl(publicUrl(action.url || ""));
   else if (action.type === "new_tab") await browser.newTab(action.url ? publicUrl(action.url) : undefined);
   else if (action.type === "switch_tab") {
@@ -546,6 +552,7 @@ export async function startBrowserTask(goal: string, listener: (event: BrowserTa
 
   if (directCareerCommand(cleanGoal)) {
     cancelled = false;
+    approvedConsequentialLabel = "";
     const result = await handleCareerCommand(cleanGoal);
     const state = browser.embeddedBrowserState();
     active = {
@@ -561,6 +568,7 @@ export async function startBrowserTask(goal: string, listener: (event: BrowserTa
   const local = deterministic ? null : await ollamaStatus();
   if (!deterministic && !geminiReady && !local?.available) throw new Error("Connect Gemini or start the local qwen3:4b model before starting a browser task that requires AI reasoning");
   cancelled = false;
+  approvedConsequentialLabel = "";
   lastPageFingerprint = "";
   stagnantPageRounds = 0;
   loopRecoveryAttempts = 0;
@@ -580,21 +588,48 @@ export async function resumeBrowserTask(confirmed: boolean, listener: (event: Br
   if (active.status !== "waiting_for_confirmation") return active;
   if (!confirmed) return active;
   const pending = active.pendingAction;
-  if (!pending || !pending.label || !["click", "ask_user"].includes(pending.type)) throw new Error("Orbit needs you to take over for this step");
-  await withTimeout(browser.clickByLabel(pending.label), ACTION_TIMEOUT_MS, "The confirmed browser action took too long");
-  active.steps.push({ at: new Date().toISOString(), action: pending, outcome: "Confirmed by user and completed" });
-  active.pendingAction = undefined;
-  active.status = "running";
-  active.summary = "Confirmed. Continuing the Orbit Browser workflow";
-  cancelled = false;
-  const taskId = active.id;
-  emit(listener, "step", `Confirmed action completed · Step ${active.steps.length} verified`);
-  void run(taskId, listener);
-  return active;
+  if (!pending) throw new Error("Orbit needs you to take over for this step");
+
+  if (pending.type === "click") {
+    const label = String(pending.label || "").trim();
+    if (!label) throw new Error("Orbit cannot safely resume a confirmed click without an exact visible control label");
+    await withTimeout(browser.clickByLabel(label), ACTION_TIMEOUT_MS, "The confirmed browser action took too long");
+    active.steps.push({ at: new Date().toISOString(), action: pending, outcome: "Exact pending action confirmed by user and completed" });
+    active.pendingAction = undefined;
+    active.status = "running";
+    active.summary = "Confirmed exact action. Continuing the Orbit Browser workflow";
+    cancelled = false;
+    const taskId = active.id;
+    emit(listener, "step", `Confirmed exact action completed · Step ${active.steps.length} verified`);
+    void run(taskId, listener);
+    return active;
+  }
+
+  if (pending.type === "ask_user") {
+    const label = String(pending.label || "").trim();
+    if (!label || !riskyLabels.test(label)) {
+      active.summary = pending.reason || "Orbit needs your answer or manual takeover for this step; a generic approval cannot safely supply that information.";
+      emit(listener, "status", active.summary);
+      return active;
+    }
+    approvedConsequentialLabel = label.toLowerCase();
+    active.steps.push({ at: new Date().toISOString(), action: pending, outcome: `User approved only the exact next consequential control “${label}”` });
+    active.pendingAction = undefined;
+    active.status = "running";
+    active.summary = `Approved only “${label}”. Orbit will re-check the page before executing it.`;
+    cancelled = false;
+    const taskId = active.id;
+    emit(listener, "step", `One-action approval recorded · Step ${active.steps.length} verified`);
+    void run(taskId, listener);
+    return active;
+  }
+
+  throw new Error("Orbit needs you to take over for this step");
 }
 
 export function cancelBrowserTask() {
   cancelled = true;
+  approvedConsequentialLabel = "";
   if (active && !["completed", "failed", "cancelled"].includes(active.status)) { active.status = "cancelled"; active.summary = "Browser task stopped"; }
   browser.hideEmbeddedBrowser();
   return active;

@@ -155,13 +155,40 @@ test("career/browser consequential actions remain approval gated", async () => {
 test("browser approvals are exact, single-use, and never turn generic ask_user into a click", async () => {
   const engine = await source("src/main/browser-task-engine.ts");
   assert.match(engine, /let approvedConsequentialLabel = ""/);
-  assert.match(engine, /approvedConsequentialLabel !== label/);
+  assert.match(engine, /approvedConsequentialLabel !== actionLabel/);
   assert.match(engine, /approvedConsequentialLabel = ""/);
   assert.match(engine, /ask_user action MUST put the exact visible consequential control text in label/);
   assert.match(engine, /do not treat a generic approval as the user's answer/);
-  assert.match(engine, /if \(pending\.type === "ask_user"\)/);
-  assert.match(engine, /!label \|\| !riskyLabels\.test\(label\)/);
-  assert.match(engine, /generic approval cannot safely supply that information/);
+  assert.match(engine, /active\.pendingKind === "input"/);
+  assert.match(engine, /Approval alone cannot supply the missing information/);
   assert.match(engine, /User approved only the exact next consequential control/);
   assert.match(engine, /Orbit will re-check the page before executing it/);
+});
+
+test("Phase 2 browser panes are resizable, focusable, native-labeled, and preserve waiting tasks", async () => {
+  const [embedded, preload, engine, contracts] = await Promise.all([
+    source("src/main/embedded-browser.ts"),
+    source("preload.cjs"),
+    source("src/main/browser-task-engine.ts"),
+    source("src/shared/contracts.ts"),
+  ]);
+  assert.match(embedded, /let preferredAgentWidth: number \| null = null/);
+  assert.match(embedded, /export async function setAgentPaneWidth/);
+  assert.match(embedded, /orbit:embedded-browser:pane:set/);
+  assert.match(embedded, /orbit:embedded-browser:focus:orbit/);
+  assert.match(embedded, /orbit:embedded-browser:focus:browser/);
+  assert.match(preload, /orbit-browser-agent-pane-width/);
+  assert.match(preload, /orbit-browser-divider/);
+  assert.match(preload, /FOCUS ORBIT/);
+  assert.match(preload, /FOCUS BROWSER/);
+  assert.match(preload, /INPUT REQUIRED/);
+  assert.match(preload, /function waitingBrowserTaskPlan/);
+  assert.match(preload, /A waiting Orbit Browser task cannot be silently replaced/);
+  assert.match(preload, /planner === "native" \? "NATIVE"/);
+  assert.match(engine, /\["running", "waiting_for_confirmation"\]\.includes\(active\.status\)/);
+  assert.match(engine, /pendingKind: "approval"/);
+  assert.match(engine, /active\.pendingKind = result\.pendingKind \|\| "input"/);
+  assert.match(engine, /planner: deterministic \? "native"/);
+  assert.match(contracts, /BrowserPlanner = "native"\|"gemini"\|"ollama"/);
+  assert.match(contracts, /BrowserPendingKind = "approval"\|"input"/);
 });

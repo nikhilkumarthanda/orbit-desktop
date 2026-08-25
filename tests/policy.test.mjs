@@ -116,7 +116,7 @@ test("Orbit Space keeps voice controls in sidebar flow", async () => {
 test("command lifecycle always clears working state even when speech hangs", async () => {
   const renderer = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/renderer/src.tsx", import.meta.url), "utf8"));
   assert.match(renderer, /await withTimeout\(action\(\),30_000/);
-  assert.match(renderer, /finally\{if\(\(run===undefined\|\|run===runRef\.current\)\)&&!browserActiveRef\.current\)\{setBusy\(false\)/);
+  assert.match(renderer, /finally\{if\(\(run===undefined\|\|run===runRef\.current\)\&&!browserActiveRef\.current\)\{setBusy\(false\)/);
   assert.match(renderer, /void withTimeout\(window\.orbit\.speak\([^)]*\),5_000/);
   assert.match(renderer, /if\(!busy&&status==="Working on it…"\)setStatus/);
 });
@@ -363,9 +363,6 @@ test("Orbit Play is local, permission-visible, allowlisted, and has an emergency
   assert.doesNotMatch(renderer, /className="play-grain"/);
   assert.doesNotMatch(playStyles, /\.play-vignette|\.play-grain/);
   assert.doesNotMatch(playStyles, /\.orbit-play\.is-active:hover header p/);
-  // The only `.orbit-play:hover` rule allowed is the known-safe defensive reset (forces
-  // transform/filter/opacity back to their identity values) — exactly one occurrence, and it
-  // must be that exact reset, not some other hover rule that could newly darken the view.
   assert.equal((playStyles.match(/\.orbit-play:hover/g) ?? []).length, 1);
   assert.match(playStyles, /\.orbit-play:hover,\.orbit-play:focus-within\{transform:none;filter:none;opacity:1\}/);
   assert.doesNotMatch(playStyles, /\.content(\.play-content)?:hover/);

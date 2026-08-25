@@ -464,11 +464,18 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
   return parsed;
 }
 
-async function act(action: BrowserTaskAction) {
-  if (action.type === "ask_user") return { pause: true, outcome: action.reason || `Approval or user input required before ${action.label || "continuing"}` };
+async function act(action: BrowserTaskAction): Promise<{ pause: boolean; outcome: string; pendingKind?: "approval"|"input" }> {
+  const actionLabel = String(action.label || "").trim().toLowerCase();
+  if (approvedConsequentialLabel && !(action.type === "click" && actionLabel === approvedConsequentialLabel)) {
+    approvedConsequentialLabel = "";
+  }
+
+  if (action.type === "ask_user") {
+    const pendingKind = actionLabel && riskyLabels.test(actionLabel) ? "approval" : "input";
+    return { pause: true, pendingKind, outcome: action.reason || (pendingKind === "approval" ? `Approval required before ${action.label || "continuing"}` : "Orbit needs your input before it can safely continue") };
+  }
   if (action.type === "click" && riskyLabels.test(action.label || "")) {
-    const label = String(action.label || "").trim().toLowerCase();
-    if (!approvedConsequentialLabel || approvedConsequentialLabel !== label) return { pause: true, outcome: action.reason || `Approval required before ${action.label || "continuing"}` };
+    if (!approvedConsequentialLabel || approvedConsequentialLabel !== actionLabel) return { pause: true, pendingKind: "approval", outcome: action.reason || `Approval required before ${action.label || "continuing"}` };
     approvedConsequentialLabel = "";
   }
   if (action.type === "navigate") await browser.openUrl(publicUrl(action.url || ""));
@@ -517,7 +524,14 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
       active.steps.push({ at: new Date().toISOString(), action, outcome: result.outcome });
       active.url = await browser.currentUrl();
       active.title = await browser.pageTitle();
-      if (result.pause) { active.status = "waiting_for_confirmation"; active.pendingAction = action; active.summary = result.outcome; emit(listener, "status", active.summary); return active; }
+      if (result.pause) {
+        active.status = "waiting_for_confirmation";
+        active.pendingAction = action;
+        active.pendingKind = result.pendingKind || "input";
+        active.summary = result.outcome;
+        emit(listener, "status", active.summary);
+        return active;
+      }
       emit(listener, "step", `${result.outcome} · Step ${active.steps.length} verified`);
     }
     if (active && active.id === taskId) { active.status = "paused"; active.summary = `Orbit reached the ${MAX_STEPS}-step safety limit. Review the Orbit Browser before continuing.`; emit(listener, "status", active.summary); }
@@ -548,7 +562,12 @@ async function run(taskId: string, listener: (event: BrowserTaskEvent) => void) 
 export async function startBrowserTask(goal: string, listener: (event: BrowserTaskEvent) => void) {
   const cleanGoal = goal.trim();
   if (!cleanGoal) throw new Error("Tell Orbit what you want the browser to accomplish");
-  if (active?.status === "running") throw new Error("Orbit is already running a browser task. Stop it before starting another one.");
+  if (active && ["running", "waiting_for_confirmation"].includes(active.status)) {
+    const waiting = active.status === "waiting_for_confirmation";
+    throw new Error(waiting
+      ? "Orbit is waiting for approval or input in the current browser task. Approve it or stop the browser task before starting another one."
+      : "Orbit is already running a browser task. Stop it before starting another one.");
+  }
 
   if (directCareerCommand(cleanGoal)) {
     cancelled = false;
@@ -575,7 +594,7 @@ export async function startBrowserTask(goal: string, listener: (event: BrowserTa
   await browser.showEmbeddedBrowser();
   active = {
     id: randomUUID(), goal: cleanGoal, status: "running", steps: [], summary: deterministic ? "Using Orbit Browser's native controls" : "Opening Orbit Browser",
-    url: await browser.currentUrl(), title: await browser.pageTitle(), planner: geminiReady ? "gemini" : local?.available ? "ollama" : undefined,
+    url: await browser.currentUrl(), title: await browser.pageTitle(), planner: deterministic ? "native" : geminiReady ? "gemini" : local?.available ? "ollama" : undefined,
   };
   const taskId = active.id;
   emit(listener, "status", active.summary);
@@ -590,12 +609,19 @@ export async function resumeBrowserTask(confirmed: boolean, listener: (event: Br
   const pending = active.pendingAction;
   if (!pending) throw new Error("Orbit needs you to take over for this step");
 
+  if (active.pendingKind === "input") {
+    active.summary = pending.reason || "Orbit needs your input or manual takeover for this step. Approval alone cannot supply the missing information.";
+    emit(listener, "status", active.summary);
+    return active;
+  }
+
   if (pending.type === "click") {
     const label = String(pending.label || "").trim();
     if (!label) throw new Error("Orbit cannot safely resume a confirmed click without an exact visible control label");
     await withTimeout(browser.clickByLabel(label), ACTION_TIMEOUT_MS, "The confirmed browser action took too long");
     active.steps.push({ at: new Date().toISOString(), action: pending, outcome: "Exact pending action confirmed by user and completed" });
     active.pendingAction = undefined;
+    active.pendingKind = undefined;
     active.status = "running";
     active.summary = "Confirmed exact action. Continuing the Orbit Browser workflow";
     cancelled = false;
@@ -615,6 +641,7 @@ export async function resumeBrowserTask(confirmed: boolean, listener: (event: Br
     approvedConsequentialLabel = label.toLowerCase();
     active.steps.push({ at: new Date().toISOString(), action: pending, outcome: `User approved only the exact next consequential control “${label}”` });
     active.pendingAction = undefined;
+    active.pendingKind = undefined;
     active.status = "running";
     active.summary = `Approved only “${label}”. Orbit will re-check the page before executing it.`;
     cancelled = false;
@@ -630,7 +657,12 @@ export async function resumeBrowserTask(confirmed: boolean, listener: (event: Br
 export function cancelBrowserTask() {
   cancelled = true;
   approvedConsequentialLabel = "";
-  if (active && !["completed", "failed", "cancelled"].includes(active.status)) { active.status = "cancelled"; active.summary = "Browser task stopped"; }
+  if (active && !["completed", "failed", "cancelled"].includes(active.status)) {
+    active.status = "cancelled";
+    active.summary = "Browser task stopped";
+    active.pendingAction = undefined;
+    active.pendingKind = undefined;
+  }
   browser.hideEmbeddedBrowser();
   return active;
 }

@@ -5,6 +5,8 @@ const PARTITION = "persist:orbit-agent";
 const SIDEBAR_WIDTH = 276;
 const PANE_GAP = 12;
 const BROWSER_TOP = 114;
+const MINIMUM_BROWSER_WIDTH = 220;
+const MINIMUM_BROWSER_HEIGHT = 180;
 const HOST_LAYOUT_CSS = `
 html.orbit-browser-open main {
   grid-template-columns: ${SIDEBAR_WIDTH}px var(--orbit-agent-pane-width, 410px) minmax(0, 1fr) !important;
@@ -80,6 +82,7 @@ let activeTabId = "";
 let host: BrowserWindow | null = null;
 let resizeListener: (() => void) | null = null;
 let layoutCssKey: string | null = null;
+let layoutGeneration = 0;
 let visible = false;
 
 function publicUrl(value: string) {
@@ -105,39 +108,62 @@ function activeTab() {
 
 function paneGeometry(width: number) {
   const available = Math.max(0, width - SIDEBAR_WIDTH);
-  const minimumAgentWidth = 320;
+  const minimumAgentWidth = 300;
   const preferredAgentWidth = Math.min(430, Math.max(minimumAgentWidth, Math.round(available * 0.34)));
   const preferredBrowserWidth = width >= 1450 ? 820 : width >= 1300 ? 720 : 620;
   let agentWidth = preferredAgentWidth;
+
   if (available - agentWidth - PANE_GAP * 2 < preferredBrowserWidth) {
     agentWidth = Math.max(minimumAgentWidth, available - preferredBrowserWidth - PANE_GAP * 2);
   }
-  const browserX = SIDEBAR_WIDTH + agentWidth + PANE_GAP;
-  return { agentWidth, browserX, browserWidth: Math.max(320, width - browserX - PANE_GAP) };
+
+  // When the window is narrow, protect Orbit first. Never enforce a browser
+  // minimum by extending the native WebContentsView beyond the host viewport.
+  if (available < minimumAgentWidth + MINIMUM_BROWSER_WIDTH + PANE_GAP * 2) {
+    agentWidth = Math.min(minimumAgentWidth, Math.max(0, available - PANE_GAP * 2));
+  }
+
+  const browserX = Math.min(width, SIDEBAR_WIDTH + agentWidth + PANE_GAP);
+  const browserWidth = Math.max(0, width - browserX - PANE_GAP);
+  return { agentWidth, browserX, browserWidth };
 }
 
-function syncHostLayout(open = visible) {
+async function syncHostLayout(open = visible) {
   if (!host || host.isDestroyed()) return;
   const { agentWidth } = paneGeometry(host.getContentBounds().width);
   const script = open
-    ? `document.documentElement.classList.add('orbit-browser-open'); document.documentElement.style.setProperty('--orbit-agent-pane-width', '${agentWidth}px');`
-    : `document.documentElement.classList.remove('orbit-browser-open'); document.documentElement.style.removeProperty('--orbit-agent-pane-width');`;
-  void host.webContents.executeJavaScript(script).catch(() => {});
+    ? `document.documentElement.classList.add('orbit-browser-open'); document.documentElement.style.setProperty('--orbit-agent-pane-width', '${agentWidth}px'); document.documentElement.getBoundingClientRect(); true;`
+    : `document.documentElement.classList.remove('orbit-browser-open'); document.documentElement.style.removeProperty('--orbit-agent-pane-width'); document.documentElement.getBoundingClientRect(); true;`;
+  await host.webContents.executeJavaScript(script).catch(() => false);
 }
 
-function layout() {
+async function layout() {
+  const generation = ++layoutGeneration;
   if (!host || host.isDestroyed()) return;
+
   const bounds = host.getContentBounds();
   const geometry = paneGeometry(bounds.width);
-  syncHostLayout();
+  const browserHeight = Math.max(0, bounds.height - BROWSER_TOP - PANE_GAP);
+
+  // WebContentsView is a native surface and always sits above the renderer.
+  // Hide it while Orbit's DOM switches layouts so there is no frame where the
+  // browser can cover the assistant/sidebar with stale bounds.
   for (const tab of tabs) {
+    tab.view.setVisible(false);
     tab.view.setBounds({
       x: geometry.browserX,
       y: BROWSER_TOP,
-      width: geometry.browserWidth,
-      height: Math.max(280, bounds.height - BROWSER_TOP - PANE_GAP),
+      width: Math.max(1, geometry.browserWidth),
+      height: Math.max(1, browserHeight),
     });
-    tab.view.setVisible(visible && tab.id === activeTabId);
+  }
+
+  await syncHostLayout();
+  if (generation !== layoutGeneration || !host || host.isDestroyed()) return;
+
+  const browserFits = geometry.browserWidth >= MINIMUM_BROWSER_WIDTH && browserHeight >= MINIMUM_BROWSER_HEIGHT;
+  for (const tab of tabs) {
+    tab.view.setVisible(visible && browserFits && tab.id === activeTabId);
   }
 }
 
@@ -182,6 +208,7 @@ async function installAgentCursor(target: WebContents) {
 }
 
 function closeAllTabs() {
+  ++layoutGeneration;
   if (host && !host.isDestroyed()) {
     for (const tab of tabs) {
       try { host.contentView.removeChildView(tab.view); } catch {}
@@ -204,7 +231,7 @@ async function ensureHost() {
 
   host = nextHost;
   layoutCssKey = await host.webContents.insertCSS(HOST_LAYOUT_CSS).catch(() => null);
-  resizeListener = () => layout();
+  resizeListener = () => { void layout(); };
   host.on("resize", resizeListener);
 
   const attachedHost = host;
@@ -260,12 +287,10 @@ async function createTab(url?: string) {
   });
   contents.on("render-process-gone", () => emitState());
 
-  layout();
+  await layout();
   if (url) await contents.loadURL(publicUrl(url));
-  if (visible) {
-    tabView.setVisible(true);
-    void installAgentCursor(contents);
-  }
+  await layout();
+  if (visible) void installAgentCursor(contents);
   emitState();
   return tab;
 }
@@ -278,8 +303,7 @@ async function ensureTab() {
 export async function showEmbeddedBrowser() {
   await ensureTab();
   visible = true;
-  syncHostLayout(true);
-  layout();
+  await layout();
   const current = activeTab();
   if (current) void installAgentCursor(current.view.webContents);
   emitState();
@@ -288,8 +312,9 @@ export async function showEmbeddedBrowser() {
 
 export function hideEmbeddedBrowser() {
   visible = false;
+  ++layoutGeneration;
   for (const tab of tabs) tab.view.setVisible(false);
-  syncHostLayout(false);
+  void syncHostLayout(false);
   emitState();
   return embeddedBrowserState();
 }
@@ -297,9 +322,8 @@ export function hideEmbeddedBrowser() {
 export async function newTab(url?: string) {
   await ensureHost();
   visible = true;
-  syncHostLayout(true);
   await createTab(url);
-  layout();
+  await layout();
   emitState();
   return embeddedBrowserState();
 }
@@ -310,8 +334,7 @@ export async function switchTab(id: string) {
   if (!target) return embeddedBrowserState();
   activeTabId = target.id;
   visible = true;
-  syncHostLayout(true);
-  layout();
+  await layout();
   void installAgentCursor(target.view.webContents);
   emitState();
   return embeddedBrowserState();
@@ -329,11 +352,8 @@ export async function closeTab(id: string) {
     const replacement = tabs[Math.min(index, tabs.length - 1)] || tabs.at(-1) || null;
     activeTabId = replacement?.id || "";
   }
-  if (!tabs.length) {
-    visible = false;
-    syncHostLayout(false);
-  }
-  layout();
+  if (!tabs.length) visible = false;
+  await layout();
   emitState();
   return embeddedBrowserState();
 }

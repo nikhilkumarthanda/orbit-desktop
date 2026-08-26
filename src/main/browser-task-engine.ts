@@ -33,6 +33,19 @@ let loopRecoveryAttempts = 0;
 let approvedConsequentialLabel = "";
 let resumeInputContext: { question: string; answer: string } | null = null;
 let careerProfileSetup: { originalGoal: string; currentField: CareerProfileSetupField } | null = null;
+type DirectCareerResult = {
+  summary?: string;
+  requiresProfileSetup?: boolean;
+  nextProfileField?: CareerProfileSetupField;
+  requiresApproval?: boolean;
+  approvalLabel?: string;
+  requiresInput?: boolean;
+  inputLabel?: string;
+  requiresManualTakeover?: boolean;
+  manualLabel?: string;
+  checkpoint?: unknown;
+};
+let careerWorkflowResume: { originalGoal: string; mode: "input"|"manual"|"approval"; fieldLabel?: string } | null = null;
 
 function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string) {
   return new Promise<T>((resolve, reject) => {
@@ -49,6 +62,61 @@ function emit(listener: (event: BrowserTaskEvent) => void, type: BrowserTaskEven
   listener({ type, task: active, message });
 }
 
+function applyCareerResult(result: DirectCareerResult, originalGoal: string, listener: (event: BrowserTaskEvent) => void) {
+  if (!active) throw new Error("Orbit lost the active Career task");
+  active.pendingAction = undefined;
+  active.pendingKind = undefined;
+  active.summary = String(result.summary || "Career Mode action completed");
+
+  if (result.requiresProfileSetup && result.nextProfileField) {
+    careerWorkflowResume = null;
+    careerProfileSetup = { originalGoal, currentField: result.nextProfileField };
+    active.status = "waiting_for_confirmation";
+    active.pendingKind = "input";
+    active.pendingAction = {
+      type: "ask_user",
+      label: `Career profile: ${careerProfileSetupFieldLabel(result.nextProfileField)}`,
+      reason: active.summary || careerProfileSetupQuestion(result.nextProfileField),
+    };
+  } else if (result.requiresApproval && result.approvalLabel) {
+    careerProfileSetup = null;
+    careerWorkflowResume = { originalGoal, mode: "approval" };
+    active.status = "waiting_for_confirmation";
+    active.pendingKind = "approval";
+    active.pendingAction = {
+      type: "click",
+      label: result.approvalLabel,
+      reason: active.summary,
+    };
+  } else if (result.requiresManualTakeover && result.manualLabel) {
+    careerProfileSetup = null;
+    careerWorkflowResume = { originalGoal, mode: "manual", fieldLabel: result.manualLabel };
+    active.status = "waiting_for_confirmation";
+    active.pendingKind = "input";
+    active.pendingAction = {
+      type: "ask_user",
+      label: result.manualLabel,
+      reason: active.summary,
+    };
+  } else if (result.requiresInput && result.inputLabel) {
+    careerProfileSetup = null;
+    careerWorkflowResume = { originalGoal, mode: "input", fieldLabel: result.inputLabel };
+    active.status = "waiting_for_confirmation";
+    active.pendingKind = "input";
+    active.pendingAction = {
+      type: "ask_user",
+      label: result.inputLabel,
+      reason: active.summary,
+    };
+  } else {
+    careerProfileSetup = null;
+    careerWorkflowResume = null;
+    active.status = "completed";
+  }
+  emit(listener, "status", active.summary);
+  return active;
+}
+
 function setPlanner(planner: "gemini"|"ollama", listener?: (event: BrowserTaskEvent) => void) {
   if (!active) return;
   const changed = active.planner !== planner;
@@ -61,6 +129,24 @@ function activeLinkedInJobsContext() {
     const url = new URL(String(browser.embeddedBrowserState().url || ""));
     return /(?:^|\.)linkedin\.com$/i.test(url.hostname) && url.pathname.startsWith("/jobs");
   } catch { return false; }
+}
+
+function linkedinJobViewUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    return /(?:^|\.)linkedin\.com$/i.test(parsed.hostname) && /\/jobs\/view\/\d+/.test(parsed.pathname);
+  } catch { return false; }
+}
+
+function linkedinResultOrdinal(goal: string) {
+  if (!activeLinkedInJobsContext() && !/\blinkedin\b/i.test(goal)) return null;
+  const match = goal.match(/\b(?:open|show|view)\s+(?:the\s+)?(first|second|third|fourth|fifth|\d+(?:st|nd|rd|th)?)\s+(?:one|job|role|result)?\b/i);
+  if (!match) return null;
+  const named: Record<string, number> = { first: 0, second: 1, third: 2, fourth: 3, fifth: 4 };
+  const token = match[1].toLowerCase();
+  if (token in named) return named[token];
+  const number = Number.parseInt(token, 10);
+  return Number.isFinite(number) ? Math.max(0, number - 1) : null;
 }
 
 function linkedinJobKeywords(goal: string) {
@@ -151,6 +237,9 @@ function directCareerCommand(goal: string) {
   return /\b(?:career|application)\s+profile\b/i.test(text)
     || /\b(?:inspect|review|analy[sz]e|read|summari[sz]e)\b.*\b(?:job|role|posting|description|application|form)\b/i.test(text)
     || /\b(?:autofill|auto-fill|fill)\b.*\b(?:application|form)\b/i.test(text)
+    || /\b(?:start|open|begin)\b.*\b(?:easy\s+apply|application)\b|\bapply\s+(?:to\s+)?(?:this|the)\s+(?:job|role)\b/i.test(text)
+    || /\b(?:upload|attach|add)\b.*\b(?:resume|cv)\b/i.test(text)
+    || /\b(?:continue|next|advance|proceed|save\s+and\s+continue)\b.*\b(?:application|form|step)\b/i.test(text)
     || /\b(?:draft|write|create)\b.*\b(?:recruiter|hiring manager|outreach|connection note|linkedin message)\b/i.test(text)
     || /\b(?:show|list|mark|track|save)\b.*\b(?:applications?|job tracker|career tracker|applied|application|job)\b/i.test(text);
 }
@@ -465,6 +554,19 @@ async function nextAction(goal: string, steps: BrowserTask["steps"], listener: (
     if (result) return { type: "click", label: result.label, reason: `Opening the best matching YouTube result for “${playQuery}”` };
   }
 
+  const linkedInOrdinal = linkedinResultOrdinal(goal);
+  if (linkedInOrdinal !== null) {
+    if (linkedinJobViewUrl(page.url)) return { type: "complete", reason: `Opened LinkedIn job result ${linkedInOrdinal + 1} while preserving the filtered search in browser history` };
+    if (activeLinkedInJobsContext()) {
+      const results = await browser.linkedinJobResults(Math.max(10, linkedInOrdinal + 1));
+      const chosen = results[linkedInOrdinal];
+      if (chosen) return { type: "navigate", url: chosen.url, reason: `Opening LinkedIn job result ${linkedInOrdinal + 1}: ${chosen.title}` };
+      const attempts = steps.filter(step => /LinkedIn job results are still rendering/.test(step.outcome || step.action.reason || "")).length;
+      if (attempts < 2) return { type: "wait", reason: "LinkedIn job results are still rendering; Orbit is preserving the current filters and re-inspecting the list" };
+      throw new Error(`LinkedIn did not expose job result ${linkedInOrdinal + 1} after bounded re-inspection`);
+    }
+  }
+
   const fingerprint = pageFingerprint(page);
   if (fingerprint === lastPageFingerprint) stagnantPageRounds += 1;
   else { lastPageFingerprint = fingerprint; stagnantPageRounds = 0; loopRecoveryAttempts = 0; }
@@ -639,24 +741,14 @@ export async function startBrowserTask(goal: string, listener: (event: BrowserTa
     approvedConsequentialLabel = "";
     resumeInputContext = null;
     careerProfileSetup = null;
-    const result = await handleCareerCommand(cleanGoal) as { summary?: string; requiresProfileSetup?: boolean; nextProfileField?: CareerProfileSetupField };
+    careerWorkflowResume = null;
+    const result = await handleCareerCommand(cleanGoal) as DirectCareerResult;
     const state = browser.embeddedBrowserState();
-    const needsProfileSetup = Boolean(result.requiresProfileSetup && result.nextProfileField);
     active = {
-      id: randomUUID(), goal: cleanGoal, status: needsProfileSetup ? "waiting_for_confirmation" : "completed", steps: [], summary: String(result.summary || "Career Mode action completed"),
-      url: state.url || "", title: state.title || "Orbit Career Mode",
+      id: randomUUID(), goal: cleanGoal, status: "running", steps: [], summary: String(result.summary || "Career Mode action completed"),
+      url: state.url || "", title: state.title || "Orbit Career Mode", planner: "native",
     };
-    if (needsProfileSetup && result.nextProfileField) {
-      careerProfileSetup = { originalGoal: cleanGoal, currentField: result.nextProfileField };
-      active.pendingKind = "input";
-      active.pendingAction = {
-        type: "ask_user",
-        label: `Career profile: ${careerProfileSetupFieldLabel(result.nextProfileField)}`,
-        reason: active.summary,
-      };
-    }
-    emit(listener, "status", active.summary);
-    return active;
+    return applyCareerResult(result, cleanGoal, listener);
   }
 
   const geminiReady = geminiStatus().available;
@@ -667,6 +759,7 @@ export async function startBrowserTask(goal: string, listener: (event: BrowserTa
   approvedConsequentialLabel = "";
   resumeInputContext = null;
   careerProfileSetup = null;
+  careerWorkflowResume = null;
   lastPageFingerprint = "";
   stagnantPageRounds = 0;
   loopRecoveryAttempts = 0;
@@ -701,11 +794,18 @@ export async function resumeBrowserTask(confirmed: boolean, listener: (event: Br
     active.steps.push({ at: new Date().toISOString(), action: pending, outcome: "Exact pending action confirmed by user and completed" });
     active.pendingAction = undefined;
     active.pendingKind = undefined;
+    cancelled = false;
+    emit(listener, "step", `Confirmed exact action completed · Step ${active.steps.length} verified`);
+    if (careerWorkflowResume?.mode === "approval") {
+      careerWorkflowResume = null;
+      active.status = "completed";
+      active.summary = `Approved and completed only “${label}”. Orbit stopped after the exact final Career action.`;
+      emit(listener, "status", active.summary);
+      return active;
+    }
     active.status = "running";
     active.summary = "Confirmed exact action. Continuing the Orbit Browser workflow";
-    cancelled = false;
     const taskId = active.id;
-    emit(listener, "step", `Confirmed exact action completed · Step ${active.steps.length} verified`);
     void run(taskId, listener);
     return active;
   }
@@ -783,23 +883,32 @@ export async function submitBrowserTaskInput(answer: string, listener: (event: B
     active.summary = "Career profile setup complete. Resuming the Career task you originally requested.";
     emit(listener, "step", "Career profile setup complete · resuming original Career task");
 
-    const resumed = await handleCareerCommand(originalGoal) as { summary?: string; requiresProfileSetup?: boolean; nextProfileField?: CareerProfileSetupField };
-    if (resumed.requiresProfileSetup && resumed.nextProfileField) {
-      careerProfileSetup = { originalGoal, currentField: resumed.nextProfileField };
-      active.status = "waiting_for_confirmation";
-      active.pendingKind = "input";
-      active.pendingAction = {
-        type: "ask_user",
-        label: `Career profile: ${careerProfileSetupFieldLabel(resumed.nextProfileField)}`,
-        reason: String(resumed.summary || careerProfileSetupQuestion(resumed.nextProfileField)),
-      };
-      active.summary = String(resumed.summary || careerProfileSetupQuestion(resumed.nextProfileField));
-    } else {
-      active.status = "completed";
-      active.summary = `Career profile setup complete. ${String(resumed.summary || "The original Career task is complete.")}`;
+    const resumed = await handleCareerCommand(originalGoal) as DirectCareerResult;
+    resumed.summary = `Career profile setup complete. ${String(resumed.summary || "The original Career task is complete.")}`;
+    return applyCareerResult(resumed, originalGoal, listener);
+  }
+
+  if (careerWorkflowResume?.mode === "input") {
+    const workflow = careerWorkflowResume;
+    const fieldLabel = workflow.fieldLabel || String(pending.label || "").trim();
+    const page = await browser.actionSnapshot();
+    const control = page.controls.find(item => item.label.trim().toLowerCase() === fieldLabel.toLowerCase())
+      || page.controls.find(item => item.label.toLowerCase().includes(fieldLabel.toLowerCase()));
+    try {
+      if (control && ["select", "combobox"].includes(control.kind.toLowerCase())) await browser.selectByLabel(control.label, cleanAnswer);
+      else await browser.fillByLabel(control?.label || fieldLabel, cleanAnswer);
+    } catch (error) {
+      active.summary = `Orbit could not safely apply that answer to “${fieldLabel}”. ${error instanceof Error ? error.message : String(error)}`;
+      emit(listener, "status", active.summary);
+      return active;
     }
-    emit(listener, "status", active.summary);
-    return active;
+    active.steps.push({ at: new Date().toISOString(), action: pending, outcome: `User supplied an explicit task-scoped answer for “${fieldLabel}”; Orbit applied only that value and did not save it to the Career profile.` });
+    active.pendingAction = undefined;
+    active.pendingKind = undefined;
+    const originalGoal = workflow.originalGoal;
+    careerWorkflowResume = null;
+    const resumed = await handleCareerCommand(originalGoal) as DirectCareerResult;
+    return applyCareerResult(resumed, originalGoal, listener);
   }
 
   const question = String(pending.label || pending.reason || active.summary || "the pending browser question").trim().slice(0, 300);
@@ -832,6 +941,19 @@ export async function continueBrowserTask(listener: (event: BrowserTaskEvent) =>
       active.summary = `Orbit is still setting up your reusable Career profile. ${careerProfileSetupQuestion(careerProfileSetup.currentField)}`;
       emit(listener, "status", active.summary);
       return active;
+    }
+    if (careerWorkflowResume?.mode === "manual" && active.pendingKind === "input") {
+      const workflow = careerWorkflowResume;
+      active.steps.push({ at: new Date().toISOString(), action: pending || { type: "wait", reason: "Manual Career takeover" }, outcome: "User completed the manual Career application checkpoint directly on the site; Orbit did not capture the secret, code, or CAPTCHA response." });
+      active.pendingAction = undefined;
+      active.pendingKind = undefined;
+      resumeInputContext = null;
+      careerWorkflowResume = null;
+      active.status = "running";
+      active.summary = "Manual Career checkpoint acknowledged. Re-inspecting the same application workflow.";
+      emit(listener, "step", `Manual Career checkpoint complete · Step ${active.steps.length} verified`);
+      const resumed = await handleCareerCommand(workflow.originalGoal) as DirectCareerResult;
+      return applyCareerResult(resumed, workflow.originalGoal, listener);
     }
     if (active.pendingKind === "input" && manualOnlyInput.test(`${question} ${pending?.reason || ""}`)) {
       active.steps.push({ at: new Date().toISOString(), action: pending || { type: "wait", reason: "Manual browser takeover" }, outcome: "User completed the manual-only browser step; Orbit did not capture the secret, code, identifier, or CAPTCHA response." });
@@ -870,6 +992,7 @@ export function cancelBrowserTask() {
   approvedConsequentialLabel = "";
   resumeInputContext = null;
   careerProfileSetup = null;
+  careerWorkflowResume = null;
   if (active && !["completed", "failed", "cancelled"].includes(active.status)) {
     active.status = "cancelled";
     active.summary = "Browser task stopped";

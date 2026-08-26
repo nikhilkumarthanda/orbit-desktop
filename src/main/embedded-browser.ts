@@ -1,5 +1,6 @@
-import { BrowserWindow, WebContentsView, ipcMain, type WebContents } from "electron";
+import { BrowserWindow, WebContentsView, dialog, ipcMain, type WebContents } from "electron";
 import { randomUUID } from "node:crypto";
+import { basename } from "node:path";
 import { planVisualBrowserTarget } from "./gemini.js";
 
 const PARTITION = "persist:orbit-agent";
@@ -471,10 +472,14 @@ export async function actionSnapshot(): Promise<ActionSnapshot> {
       return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
     };
     const controls = Array.from(document.querySelectorAll('button,a[href],input,textarea,select,[role="button"],[role="link"],[role="combobox"],[role="option"]'))
-      .filter(visible)
-      .slice(0, 100)
+      .filter(element => visible(element) || element.matches('input[type="file"]'))
+      .slice(0, 120)
       .map(element => {
-        const label = clean(element.getAttribute('aria-label') || element.getAttribute('placeholder') || element.textContent || element.getAttribute('name') || element.getAttribute('value'));
+        const id = element.id || '';
+        const explicit = id ? document.querySelector('label[for="' + CSS.escape(id) + '"]')?.textContent : '';
+        const wrapped = element.closest('label')?.textContent || '';
+        const nearby = element.matches('input[type="file"]') ? (element.parentElement?.textContent || '') : '';
+        const label = clean(element.getAttribute('aria-label') || element.getAttribute('placeholder') || explicit || wrapped || element.textContent || element.getAttribute('name') || element.getAttribute('value') || nearby);
         const tag = element.tagName.toLowerCase();
         const kind = tag === 'input' ? (element.getAttribute('type') || 'input') : (element.getAttribute('role') || tag);
         const rect = element.getBoundingClientRect();
@@ -680,6 +685,37 @@ export async function youtubeVideoResults(limit = 12): Promise<YouTubeVideoResul
   return Array.isArray(results) ? results : [];
 }
 
+export interface LinkedInJobResult { title: string; url: string; jobId: string }
+
+export async function linkedinJobResults(limit = 25): Promise<LinkedInJobResult[]> {
+  await showEmbeddedBrowser();
+  const target = await contents();
+  const safeLimit = Math.max(1, Math.min(50, Math.floor(limit) || 25));
+  const results = await target.executeJavaScript(`(() => {
+    const clean = value => String(value || '').replace(/\\s+/g, ' ').trim();
+    const anchors = Array.from(document.querySelectorAll('a[href*="/jobs/view/"]'));
+    const seen = new Set();
+    const output = [];
+    for (const anchor of anchors) {
+      const raw = anchor.getAttribute('href') || '';
+      let url;
+      try { url = new URL(raw, location.origin); } catch { continue; }
+      const match = url.pathname.match(/\\/jobs\\/view\\/(\\d+)/);
+      const jobId = match?.[1] || url.searchParams.get('currentJobId') || '';
+      if (!jobId || seen.has(jobId)) continue;
+      const card = anchor.closest('li,[data-job-id],.jobs-search-results__list-item,.job-card-container') || anchor;
+      const title = clean(anchor.getAttribute('aria-label') || anchor.textContent || card.querySelector?.('strong,.job-card-list__title,.artdeco-entity-lockup__title')?.textContent || '');
+      if (!title || /^(?:view|show|apply|save)$/i.test(title)) continue;
+      seen.add(jobId);
+      output.push({ title: title.slice(0, 180), url: 'https://www.linkedin.com/jobs/view/' + encodeURIComponent(jobId) + '/', jobId });
+      if (output.length >= ${safeLimit}) break;
+    }
+    return output;
+  })()`, true) as LinkedInJobResult[];
+  emitState();
+  return Array.isArray(results) ? results : [];
+}
+
 export async function clickByLabel(label: string) {
   setAgentActivity("reading_dom");
   const target = await contents();
@@ -843,6 +879,68 @@ export async function selectByLabel(label: string, value: string) {
     if (actual && (actual === value.trim().toLowerCase() || actual.includes(value.trim().toLowerCase()))) { setAgentActivity("idle"); return; }
   }
   await visualSelect(label, value);
+}
+
+export async function chooseAndAttachFileByLabel(label = "resume") {
+  const target = await contents();
+  const wanted = label.trim() || "resume";
+  const token = `orbit-file-${randomUUID()}`;
+  const match = await target.executeJavaScript(`(() => {
+    const wanted = ${JSON.stringify(wanted.toLowerCase())};
+    const token = ${JSON.stringify(token)};
+    const clean = value => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+    const fields = Array.from(document.querySelectorAll('input[type="file"]'));
+    const ranked = fields.map((element, index) => {
+      const id = element.id || '';
+      const explicit = id ? document.querySelector('label[for="' + CSS.escape(id) + '"]')?.textContent : '';
+      const wrapped = element.closest('label')?.textContent || '';
+      const nearby = element.parentElement?.textContent || '';
+      const text = clean(element.getAttribute('aria-label') || explicit || wrapped || element.getAttribute('name') || nearby || ('file upload ' + (index + 1)));
+      const score = text === wanted ? 5 : text.includes(wanted) ? 4 : wanted.includes(text) ? 3 : /resume|curriculum vitae|\\bcv\\b/.test(text) && /resume|curriculum vitae|\\bcv\\b/.test(wanted) ? 2 : fields.length === 1 ? 1 : 0;
+      return { element, text, score, accept: String(element.getAttribute('accept') || '') };
+    }).filter(item => item.score > 0).sort((a, b) => b.score - a.score);
+    const picked = ranked[0];
+    if (!picked) return null;
+    picked.element.setAttribute('data-orbit-file-token', token);
+    return { token, label: picked.text || wanted, accept: picked.accept };
+  })()`, true) as { token: string; label: string; accept: string } | null;
+  if (!match) throw new Error(`Orbit could not find a file input matching “${wanted}”`);
+
+  const picked = await dialog.showOpenDialog({
+    title: `Choose ${/resume|cv/i.test(wanted) ? "resume" : "file"} to attach`,
+    properties: ["openFile"],
+    filters: [{ name: "Resume documents", extensions: ["pdf", "doc", "docx"] }],
+  });
+  if (picked.canceled || !picked.filePaths[0]) return { attached: false, cancelled: true, label: match.label, fileName: "" };
+
+  const filePath = picked.filePaths[0];
+  const attachedHere = !target.debugger.isAttached();
+  try {
+    if (attachedHere) target.debugger.attach("1.3");
+    const documentNode = await target.debugger.sendCommand("DOM.getDocument", { depth: 2, pierce: true }) as { root?: { nodeId?: number } };
+    const rootNodeId = Number(documentNode.root?.nodeId || 0);
+    if (!rootNodeId) throw new Error("Orbit could not inspect the application file input");
+    const query = await target.debugger.sendCommand("DOM.querySelector", {
+      nodeId: rootNodeId,
+      selector: `[data-orbit-file-token="${match.token.replace(/"/g, '\\"')}"]`,
+    }) as { nodeId?: number };
+    const nodeId = Number(query.nodeId || 0);
+    if (!nodeId) throw new Error("The application file input changed before Orbit could attach the selected file");
+    await target.debugger.sendCommand("DOM.setFileInputFiles", { files: [filePath], nodeId });
+  } finally {
+    if (attachedHere && target.debugger.isAttached()) target.debugger.detach();
+  }
+
+  const fileName = basename(filePath);
+  const verified = await target.executeJavaScript(`(() => {
+    const field = document.querySelector('[data-orbit-file-token="${match.token.replace(/"/g, '\\"')}"]');
+    if (!field) return '';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+    return String(field.files?.[0]?.name || '');
+  })()`, true) as string;
+  if (verified !== fileName) throw new Error("Orbit attached the selected file but could not verify the application received it");
+  return { attached: true, cancelled: false, label: match.label, fileName };
 }
 
 export async function scroll(direction: "up" | "down" = "down", amount = 800) {

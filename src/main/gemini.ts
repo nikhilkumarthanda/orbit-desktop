@@ -115,6 +115,8 @@ export async function answerWithGemini(input: { query: string; history: Conversa
   return answer;
 }
 
+export type VisualBrowserTargetKind = "click" | "field" | "option";
+
 export type VisualBrowserTarget = {
   x: number;
   y: number;
@@ -126,6 +128,7 @@ export type VisualBrowserTarget = {
 export async function planVisualBrowserTarget(input: {
   goal: string;
   requestedLabel: string;
+  targetKind?: VisualBrowserTargetKind;
   imageBase64: string;
   page: {
     title: string;
@@ -138,6 +141,7 @@ export async function planVisualBrowserTarget(input: {
   const { viewport } = input.page;
   if (!input.imageBase64 || viewport.width < 1 || viewport.height < 1) throw new Error("Orbit does not have a usable browser screenshot for visual targeting");
 
+  const targetKind = input.targetKind || "click";
   const controlSummary = input.page.controls.slice(0, 60).map((control, index) => {
     const rect = Number.isFinite(control.x) && Number.isFinite(control.y)
       ? ` @(${Math.round(control.x || 0)},${Math.round(control.y || 0)},${Math.round(control.width || 0)}x${Math.round(control.height || 0)})`
@@ -145,7 +149,13 @@ export async function planVisualBrowserTarget(input: {
     return `${index + 1}. ${control.kind}: ${control.label}${rect}`;
   }).join("\n");
 
-  const prompt = `You are Orbit's visual browser targeter. Return JSON only.\n\nGoal: ${input.goal}\nRequested control: ${input.requestedLabel}\nPage title: ${input.page.title}\nURL: ${input.page.url}\nViewport: ${viewport.width}x${viewport.height} CSS pixels; screenshot coordinates use the same viewport coordinate system.\nScroll: ${viewport.scrollX}, ${viewport.scrollY}\n\nVisible DOM controls (may be incomplete):\n${controlSummary || "No reliable DOM controls were found."}\n\nVisible page text excerpt:\n${input.page.text.slice(0, 3500)}\n\nLook at the screenshot and identify exactly one currently visible clickable target that best matches the requested control. Do not guess hidden or off-screen controls. Do not choose Submit, Send, Post, Publish, Purchase, Pay, Delete, Remove, Connect, Accept, Agree, or any other consequential action unless the requested control explicitly names that same action. If the requested target is ambiguous or not visibly identifiable, return confidence below 0.65. Coordinates must be the center of the target in CSS viewport pixels.\n\nReturn exactly: {"x":number,"y":number,"confidence":number,"description":"short visible target description","reason":"short reason"}`;
+  const targetInstruction = targetKind === "field"
+    ? "Identify exactly one currently visible editable text/input field matching the requested field. The coordinate must be safely inside the editable area, not on its label, helper text, or a nearby button."
+    : targetKind === "option"
+      ? "Identify exactly one currently visible dropdown/menu/list option matching the requested option. The coordinate must be safely inside that option row."
+      : "Identify exactly one currently visible clickable target that best matches the requested control.";
+
+  const prompt = `You are Orbit's visual browser targeter. Return JSON only.\n\nGoal: ${input.goal}\nTarget kind: ${targetKind}\nRequested control: ${input.requestedLabel}\nPage title: ${input.page.title}\nURL: ${input.page.url}\nViewport: ${viewport.width}x${viewport.height} CSS pixels; screenshot coordinates use the same viewport coordinate system.\nScroll: ${viewport.scrollX}, ${viewport.scrollY}\n\nVisible DOM controls (may be incomplete):\n${controlSummary || "No reliable DOM controls were found."}\n\nVisible page text excerpt:\n${input.page.text.slice(0, 3500)}\n\n${targetInstruction} Do not guess hidden or off-screen controls. Do not choose Submit, Send, Post, Publish, Purchase, Pay, Delete, Remove, Connect, Accept, Agree, or any other consequential action unless the requested control explicitly names that same action. If the requested target is ambiguous or not visibly identifiable, return confidence below 0.65. Coordinates must be the center of the target in CSS viewport pixels.\n\nReturn exactly: {"x":number,"y":number,"confidence":number,"description":"short visible target description","reason":"short reason"}`;
 
   const data = await runGemini([
     { text: prompt },

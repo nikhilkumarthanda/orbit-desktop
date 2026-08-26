@@ -9,6 +9,9 @@ const BROWSER_TOP = 114;
 const MINIMUM_BROWSER_WIDTH = 220;
 const MINIMUM_BROWSER_HEIGHT = 180;
 const MAXIMUM_AGENT_WIDTH = 720;
+const VISUAL_CONFIDENCE = 0.72;
+const BLOCKED_SECRET_INPUT = /\b(?:password|passcode|otp|mfa|2fa|verification code|auth(?:entication)? code|captcha|social security|ssn|government id|passport|driver'?s license|credit card|card number|cvv|cvc)\b/i;
+const CONSEQUENTIAL_LABEL = /\b(?:submit|send|post|publish|purchase|buy|pay|delete|remove|connect|accept|agree|confirm order|place order)\b/i;
 const HOST_LAYOUT_CSS = `
 html.orbit-browser-open main {
   grid-template-columns: ${SIDEBAR_WIDTH}px var(--orbit-agent-pane-width, 410px) minmax(0, 1fr) !important;
@@ -78,6 +81,7 @@ const CURSOR_FACTORY_JS = `(() => {
 })()`;
 
 type BrowserTab = { id: string; view: WebContentsView };
+export type BrowserAgentActivity = "idle" | "reading_dom" | "visual_inspection" | "target_found" | "acting" | "verifying";
 
 let tabs: BrowserTab[] = [];
 let activeTabId = "";
@@ -87,6 +91,7 @@ let layoutCssKey: string | null = null;
 let layoutGeneration = 0;
 let preferredAgentWidth: number | null = null;
 let visible = false;
+let agentActivity: BrowserAgentActivity = "idle";
 
 function publicUrl(value: string) {
   const url = new URL(value);
@@ -197,6 +202,7 @@ export function embeddedBrowserState() {
     canGoBack: Boolean(contents?.navigationHistory.canGoBack()),
     canGoForward: Boolean(contents?.navigationHistory.canGoForward()),
     activeTabId: current?.id || "",
+    agentActivity,
     tabs: tabs.filter(tab => !tab.view.webContents.isDestroyed()).map(tabSnapshot),
   };
 }
@@ -204,6 +210,11 @@ export function embeddedBrowserState() {
 function emitState() {
   if (!host || host.isDestroyed()) return;
   host.webContents.send("orbit:embedded-browser:state", embeddedBrowserState());
+}
+
+function setAgentActivity(activity: BrowserAgentActivity) {
+  agentActivity = activity;
+  emitState();
 }
 
 async function installAgentCursor(target: WebContents) {
@@ -228,6 +239,7 @@ function closeAllTabs() {
   }
   tabs = [];
   activeTabId = "";
+  agentActivity = "idle";
 }
 
 async function ensureHost() {
@@ -321,6 +333,7 @@ export async function showEmbeddedBrowser() {
 
 export function hideEmbeddedBrowser() {
   visible = false;
+  agentActivity = "idle";
   ++layoutGeneration;
   for (const tab of tabs) tab.view.setVisible(false);
   void syncHostLayout(false);
@@ -435,7 +448,16 @@ export async function reload() {
   return embeddedBrowserState();
 }
 
-export interface ActionSnapshot { title: string; url: string; text: string; controls: Array<{ kind: string; label: string }> }
+export interface ActionControl {
+  kind: string;
+  label: string;
+  value?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+}
+export interface ActionSnapshot { title: string; url: string; text: string; controls: ActionControl[] }
 
 export async function actionSnapshot(): Promise<ActionSnapshot> {
   await showEmbeddedBrowser();
@@ -448,14 +470,16 @@ export async function actionSnapshot(): Promise<ActionSnapshot> {
       const style = getComputedStyle(element);
       return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
     };
-    const controls = Array.from(document.querySelectorAll('button,a[href],input,textarea,select,[role="button"],[role="link"]'))
+    const controls = Array.from(document.querySelectorAll('button,a[href],input,textarea,select,[role="button"],[role="link"],[role="combobox"],[role="option"]'))
       .filter(visible)
-      .slice(0, 80)
+      .slice(0, 100)
       .map(element => {
         const label = clean(element.getAttribute('aria-label') || element.getAttribute('placeholder') || element.textContent || element.getAttribute('name') || element.getAttribute('value'));
         const tag = element.tagName.toLowerCase();
-        const kind = tag === 'input' ? (element.getAttribute('type') || 'input') : tag;
-        return { kind, label: label.slice(0, 120) };
+        const kind = tag === 'input' ? (element.getAttribute('type') || 'input') : (element.getAttribute('role') || tag);
+        const rect = element.getBoundingClientRect();
+        const value = 'value' in element ? clean(element.value) : clean(element.getAttribute('aria-valuetext') || element.getAttribute('aria-selected') || '');
+        return { kind, label: label.slice(0, 120), value: value.slice(0, 180), x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) };
       })
       .filter(item => item.label);
     return { title: document.title, url: location.href, text: clean(document.body?.innerText).slice(0, 10000), controls };
@@ -514,6 +538,117 @@ export async function clickAtPoint(x: number, y: number) {
   await new Promise(resolve => setTimeout(resolve, 180));
 }
 
+function pageChanged(before: VisualBrowserSnapshot, after: VisualBrowserSnapshot) {
+  const beforeControls = JSON.stringify(before.controls.map(control => [control.kind, control.label, control.value]));
+  const afterControls = JSON.stringify(after.controls.map(control => [control.kind, control.label, control.value]));
+  return before.url !== after.url
+    || before.title !== after.title
+    || before.text !== after.text
+    || beforeControls !== afterControls
+    || before.imageBase64 !== after.imageBase64;
+}
+
+async function valueAtPoint(x: number, y: number) {
+  const target = await contents();
+  const px = Math.round(x);
+  const py = Math.round(y);
+  return target.executeJavaScript(`(() => {
+    let element = document.elementFromPoint(${px}, ${py});
+    if (!element) return '';
+    const editable = element.closest('input,textarea,select,[contenteditable="true"],[role="combobox"]') || element;
+    if ('value' in editable) return String(editable.value || '');
+    return String(editable.getAttribute?.('aria-valuetext') || editable.textContent || '').replace(/\\s+/g, ' ').trim();
+  })()`, true) as Promise<string>;
+}
+
+async function fieldValueByLabel(label: string) {
+  const target = await contents();
+  const encoded = JSON.stringify(label.trim().toLowerCase());
+  return target.executeJavaScript(`(() => {
+    const wanted = ${encoded};
+    const clean = text => String(text || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+    const fields = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="password"]),textarea,select'));
+    const field = fields.find(element => {
+      const id = element.id;
+      const explicit = id ? document.querySelector('label[for="' + CSS.escape(id) + '"]')?.textContent : '';
+      const wrapped = element.closest('label')?.textContent || '';
+      const labels = [element.getAttribute('aria-label'), element.getAttribute('placeholder'), element.getAttribute('name'), explicit, wrapped].map(clean);
+      return labels.some(item => item && (item === wanted || item.includes(wanted) || wanted.includes(item)));
+    });
+    return field && 'value' in field ? String(field.value || '') : '';
+  })()`, true) as Promise<string>;
+}
+
+async function nativeReplaceFocusedText(value: string) {
+  const target = await contents();
+  const modifier = process.platform === "darwin" ? "meta" : "control";
+  target.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: [modifier] });
+  target.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: [modifier] });
+  target.sendInputEvent({ type: "keyDown", keyCode: "Backspace" });
+  target.sendInputEvent({ type: "keyUp", keyCode: "Backspace" });
+  await target.insertText(value);
+  await new Promise(resolve => setTimeout(resolve, 180));
+}
+
+async function visualTarget(label: string, goal: string, targetKind: "click" | "field" | "option") {
+  setAgentActivity("visual_inspection");
+  const page = await visualSnapshot();
+  const visual = await planVisualBrowserTarget({
+    goal,
+    requestedLabel: label,
+    targetKind,
+    imageBase64: page.imageBase64,
+    page: {
+      title: page.title,
+      url: page.url,
+      text: page.text,
+      controls: page.controls,
+      viewport: page.viewport,
+    },
+  });
+  if (visual.confidence < VISUAL_CONFIDENCE) throw new Error(`Orbit could not safely identify “${label}” visually (confidence ${visual.confidence.toFixed(2)})`);
+  setAgentActivity("target_found");
+  return { page, visual };
+}
+
+async function visualFill(label: string, value: string) {
+  if (BLOCKED_SECRET_INPUT.test(label)) throw new Error(`Orbit will not visually type secret or verification information into “${label}”`);
+  let lastDescription = label;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { visual } = await visualTarget(label, `Focus the visible editable field named “${label}” so Orbit can enter the user's supplied value locally.`, "field");
+    lastDescription = visual.description || label;
+    setAgentActivity("acting");
+    await clickAtPoint(visual.x, visual.y);
+    await nativeReplaceFocusedText(value);
+    setAgentActivity("verifying");
+    const actual = await valueAtPoint(visual.x, visual.y);
+    if (actual === value) { setAgentActivity("idle"); return; }
+    if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 320));
+  }
+  setAgentActivity("idle");
+  throw new Error(`Orbit visually filled “${lastDescription}”, but the field did not retain the requested value after one corrected retry`);
+}
+
+async function visualSelect(label: string, value: string) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const fieldTarget = await visualTarget(label, `Open the visible dropdown or selector named “${label}”.`, "click");
+    setAgentActivity("acting");
+    await clickAtPoint(fieldTarget.visual.x, fieldTarget.visual.y);
+    await new Promise(resolve => setTimeout(resolve, 260));
+
+    const optionTarget = await visualTarget(value, `Choose the visible option “${value}” from the open selector “${label}”.`, "option");
+    setAgentActivity("acting");
+    await clickAtPoint(optionTarget.visual.x, optionTarget.visual.y);
+    await new Promise(resolve => setTimeout(resolve, 260));
+    setAgentActivity("verifying");
+    const selected = (await valueAtPoint(fieldTarget.visual.x, fieldTarget.visual.y)).toLowerCase();
+    if (selected.includes(value.trim().toLowerCase())) { setAgentActivity("idle"); return; }
+    if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 320));
+  }
+  setAgentActivity("idle");
+  throw new Error(`Orbit visually selected “${value}” from “${label}”, but it could not verify that the selection stuck after one corrected retry`);
+}
+
 export interface YouTubeVideoResult { title: string; url: string }
 
 export async function youtubeVideoResults(limit = 12): Promise<YouTubeVideoResult[]> {
@@ -546,6 +681,7 @@ export async function youtubeVideoResults(limit = 12): Promise<YouTubeVideoResul
 }
 
 export async function clickByLabel(label: string) {
+  setAgentActivity("reading_dom");
   const target = await contents();
   const encoded = JSON.stringify(label.trim().toLowerCase());
   const result = await target.executeJavaScript(`(async () => {
@@ -578,40 +714,37 @@ export async function clickByLabel(label: string) {
     await sleep(180);
     return true;
   })()`, true);
-  if (result) return;
+  if (result) { setAgentActivity("idle"); return; }
 
-  const before = await visualSnapshot();
-  let visual;
-  try {
-    visual = await planVisualBrowserTarget({
-      goal: `Click the visible browser control requested by the user: ${label}`,
-      requestedLabel: label,
-      imageBase64: before.imageBase64,
-      page: {
-        title: before.title,
-        url: before.url,
-        text: before.text,
-        controls: before.controls,
-        viewport: before.viewport,
-      },
-    });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`Orbit could not find the control “${label}” in the DOM, and visual targeting was unavailable: ${detail}`);
+  const allowRetry = !CONSEQUENTIAL_LABEL.test(label);
+  let previous: VisualBrowserSnapshot | null = null;
+  let lastDescription = label;
+  for (let attempt = 0; attempt < (allowRetry ? 2 : 1); attempt++) {
+    let targeted;
+    try {
+      targeted = await visualTarget(label, `Click the visible browser control requested by the user: ${label}`, "click");
+    } catch (error) {
+      setAgentActivity("idle");
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`Orbit could not find the control “${label}” in the DOM, and visual targeting was unavailable: ${detail}`);
+    }
+    previous = targeted.page;
+    lastDescription = targeted.visual.description || label;
+    setAgentActivity("acting");
+    await clickAtPoint(targeted.visual.x, targeted.visual.y);
+    await new Promise(resolve => setTimeout(resolve, 720));
+    setAgentActivity("verifying");
+    const after = await visualSnapshot();
+    if (pageChanged(previous, after)) { setAgentActivity("idle"); return; }
+    if (attempt === 0 && allowRetry) await new Promise(resolve => setTimeout(resolve, 320));
   }
-  if (visual.confidence < 0.72) throw new Error(`Orbit could not safely identify “${label}” visually (confidence ${visual.confidence.toFixed(2)})`);
-
-  await clickAtPoint(visual.x, visual.y);
-  await new Promise(resolve => setTimeout(resolve, 720));
-  const after = await visualSnapshot();
-  const verified = before.url !== after.url
-    || before.title !== after.title
-    || before.text !== after.text
-    || before.imageBase64 !== after.imageBase64;
-  if (!verified) throw new Error(`Orbit visually clicked “${visual.description || label}”, but the browser did not show a verifiable change, so it stopped instead of retrying blindly`);
+  setAgentActivity("idle");
+  throw new Error(`Orbit visually clicked “${lastDescription}”, but the browser did not show a verifiable change, so it stopped instead of retrying blindly`);
 }
 
 export async function fillByLabel(label: string, value: string) {
+  if (BLOCKED_SECRET_INPUT.test(label)) throw new Error(`Orbit will not type secret or verification information into “${label}”`);
+  setAgentActivity("reading_dom");
   const target = await contents();
   const encodedLabel = JSON.stringify(label.trim().toLowerCase());
   const encodedValue = JSON.stringify(value);
@@ -660,10 +793,16 @@ export async function fillByLabel(label: string, value: string) {
     await sleep(120);
     return true;
   })()`, true);
-  if (!result) throw new Error(`Orbit could not find the field “${label}”`);
+  if (result) {
+    setAgentActivity("verifying");
+    const actual = await fieldValueByLabel(label);
+    if (actual === value) { setAgentActivity("idle"); return; }
+  }
+  await visualFill(label, value);
 }
 
 export async function selectByLabel(label: string, value: string) {
+  setAgentActivity("reading_dom");
   const target = await contents();
   const encodedLabel = JSON.stringify(label.trim().toLowerCase());
   const encodedValue = JSON.stringify(value.trim().toLowerCase());
@@ -698,7 +837,12 @@ export async function selectByLabel(label: string, value: string) {
     await sleep(140);
     return true;
   })()`, true);
-  if (!result) throw new Error(`Orbit could not select “${value}” from “${label}”`);
+  if (result) {
+    setAgentActivity("verifying");
+    const actual = (await fieldValueByLabel(label)).toLowerCase();
+    if (actual && (actual === value.trim().toLowerCase() || actual.includes(value.trim().toLowerCase()))) { setAgentActivity("idle"); return; }
+  }
+  await visualSelect(label, value);
 }
 
 export async function scroll(direction: "up" | "down" = "down", amount = 800) {

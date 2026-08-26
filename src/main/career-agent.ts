@@ -23,6 +23,7 @@ export type CareerProfile = {
 
 export type CareerProfileSetupField = "fullName" | "email" | "phone" | "location" | "linkedin" | "github";
 export type CareerApplicationStatus = "saved" | "preparing" | "ready_to_submit" | "applied" | "interview" | "rejected" | "offer";
+export type CareerSiteAdapter = "linkedin" | "greenhouse" | "lever" | "workday" | "generic";
 
 export interface CareerApplicationRecord {
   id: string;
@@ -181,14 +182,26 @@ export async function updateCareerProfileFromInstruction(instruction: string) {
   return { profile, summary: `Saved ${Object.keys(update).join(", ")} to your local Orbit Career profile. Legal, demographic, compensation, visa, and EEO answers are intentionally not stored by this shortcut.` };
 }
 
-function pageSource(url: string) {
+export function careerSiteAdapter(url: string): CareerSiteAdapter {
   try {
     const host = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
-    if (host.includes("linkedin")) return "LinkedIn";
+    if (host === "linkedin.com" || host.endsWith(".linkedin.com")) return "linkedin";
+    if (host.includes("greenhouse.io")) return "greenhouse";
+    if (host === "lever.co" || host.endsWith(".lever.co")) return "lever";
+    if (host.includes("myworkdayjobs.com") || host.includes("workdayjobs.com")) return "workday";
+  } catch {}
+  return "generic";
+}
+
+function pageSource(url: string) {
+  const adapter = careerSiteAdapter(url);
+  if (adapter === "linkedin") return "LinkedIn";
+  if (adapter === "greenhouse") return "Greenhouse";
+  if (adapter === "lever") return "Lever";
+  if (adapter === "workday") return "Workday";
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
     if (host.includes("jobright")) return "Jobright";
-    if (host.includes("greenhouse")) return "Greenhouse";
-    if (host.includes("lever")) return "Lever";
-    if (host.includes("workday")) return "Workday";
     return host || "web";
   } catch { return "web"; }
 }
@@ -215,33 +228,37 @@ export async function inspectCurrentJob() {
 
 export async function inspectCurrentApplication() {
   const snapshot = await browser.actionSnapshot();
-  const fields = snapshot.controls.filter(control => /^(?:text|email|tel|url|number|input|textarea|select|file|checkbox|radio)$/i.test(control.kind));
+  const adapter = careerSiteAdapter(snapshot.url);
+  const fields = snapshot.controls.filter(control => /^(?:text|email|tel|url|number|input|textarea|select|combobox|file|checkbox|radio)$/i.test(control.kind));
   const sensitive = fields.filter(field => sensitiveField.test(field.label));
   const fileInputs = fields.filter(field => field.kind.toLowerCase() === "file" || /\b(?:resume|cv|cover letter|upload)\b/i.test(field.label));
   const safe = fields.filter(field => !sensitive.includes(field) && !fileInputs.includes(field));
+  const multiStep = adapter === "workday" && snapshot.controls.some(control => /\b(?:next|save and continue|continue)\b/i.test(control.label));
   return {
     url: snapshot.url,
+    adapter,
     fields,
     sensitive,
     fileInputs,
     safe,
-    summary: `Orbit can see ${fields.length} application field/control(s): ${safe.length} appear safe for profile autofill, ${sensitive.length} require your review, and ${fileInputs.length} look like resume/file uploads. Orbit will not guess legal, demographic, compensation, identity, authentication, visa, sponsorship, or EEO answers and will not submit automatically.`,
+    multiStep,
+    summary: `${adapter === "generic" ? "Generic" : adapter[0].toUpperCase() + adapter.slice(1)} application adapter active. Orbit can see ${fields.length} application field/control(s): ${safe.length} appear safe for profile autofill, ${sensitive.length} require your review, and ${fileInputs.length} look like resume/file uploads.${multiStep ? " This appears to be a multi-step Workday flow." : ""} Orbit will not guess legal, demographic, compensation, identity, authentication, visa, sponsorship, or EEO answers and will not submit automatically.`,
   };
 }
 
 const aliases: Array<[keyof CareerProfile, string[]]> = [
   ["firstName", ["first name", "given name"]],
   ["lastName", ["last name", "family name", "surname"]],
-  ["fullName", ["full name", "name"]],
+  ["fullName", ["full name", "name", "legal name"]],
   ["email", ["email", "email address"]],
   ["phone", ["phone", "phone number", "mobile", "mobile phone"]],
-  ["location", ["location", "city", "current location", "address city"]],
-  ["linkedin", ["linkedin", "linkedin url", "linkedin profile"]],
-  ["github", ["github", "github url", "github profile"]],
+  ["location", ["location", "city", "current location", "address city", "city/state"]],
+  ["linkedin", ["linkedin", "linkedin url", "linkedin profile", "linkedin profile url"]],
+  ["github", ["github", "github url", "github profile", "github profile url"]],
   ["portfolio", ["portfolio", "portfolio url"]],
   ["website", ["website", "personal website", "website url"]],
-  ["currentCompany", ["current company", "company"]],
-  ["currentTitle", ["current title", "job title", "current position"]],
+  ["currentCompany", ["current company", "company", "current employer"]],
+  ["currentTitle", ["current title", "job title", "current position", "current role"]],
 ];
 
 export async function autofillCurrentApplication() {
@@ -259,28 +276,31 @@ export async function autofillCurrentApplication() {
     };
   }
   const snapshot = await browser.actionSnapshot();
+  const adapter = careerSiteAdapter(snapshot.url);
   const available = snapshot.controls.map(control => ({ ...control, lower: control.label.toLowerCase() }));
   const filled: string[] = [];
   for (const [key, names] of aliases) {
     const value = profile[key];
     if (!value) continue;
-    const match = available.find(control => !sensitiveField.test(control.label) && names.some(name => control.lower === name || control.lower.includes(name)));
+    const match = available.find(control => !sensitiveField.test(control.label) && names.some(name => control.lower === name || control.lower.includes(name) || name.includes(control.lower)));
     if (!match || ["file", "password", "checkbox", "radio"].includes(match.kind.toLowerCase())) continue;
     try {
-      if (match.kind.toLowerCase() === "select") await browser.selectByLabel(match.label, value);
+      if (["select", "combobox"].includes(match.kind.toLowerCase())) await browser.selectByLabel(match.label, value);
       else await browser.fillByLabel(match.label, value);
       filled.push(match.label);
     } catch {}
   }
   const application = await inspectCurrentApplication();
   const needsReview = application.sensitive.map(item => item.label);
+  const adapterName = adapter === "generic" ? "application" : `${adapter[0].toUpperCase() + adapter.slice(1)} application`;
   return {
+    adapter,
     filled,
     needsReview,
     fileInputs: application.fileInputs.map(item => item.label),
     summary: filled.length
-      ? `Filled ${filled.length} reusable non-sensitive field(s): ${filled.join(", ")}. ${needsReview.length ? `${needsReview.length} sensitive/review field(s) were left untouched. ` : ""}${application.fileInputs.length ? "Resume/file upload still requires file selection. " : ""}Orbit did not submit anything.`
-      : `No safe form fields matched your saved Career profile. ${needsReview.length ? `${needsReview.length} sensitive/review field(s) were intentionally left untouched.` : ""}`,
+      ? `Filled ${filled.length} reusable non-sensitive field(s) in this ${adapterName}: ${filled.join(", ")}. ${needsReview.length ? `${needsReview.length} sensitive/review field(s) were left untouched. ` : ""}${application.fileInputs.length ? "Resume/file upload still requires file selection. " : ""}Orbit did not submit anything.`
+      : `No safe form fields matched your saved Career profile in this ${adapterName}. ${needsReview.length ? `${needsReview.length} sensitive/review field(s) were intentionally left untouched.` : ""}`,
   };
 }
 

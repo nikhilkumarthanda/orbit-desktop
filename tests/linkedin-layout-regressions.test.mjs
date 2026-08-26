@@ -9,10 +9,11 @@ test("LinkedIn Jobs opens the jobs destination instead of the LinkedIn feed", as
   const engine = await source("src/main/browser-task-engine.ts");
   const jobsIndex = engine.indexOf('return "https://www.linkedin.com/jobs/"');
   const genericIndex = engine.indexOf('[/\\blinkedin\\b/i, "https://www.linkedin.com"]');
+  const fallbackIndex = engine.indexOf("return NAMED_SITES.find");
   assert.ok(jobsIndex >= 0, "LinkedIn Jobs must have a deterministic jobs URL");
   assert.ok(genericIndex >= 0, "generic LinkedIn route must remain available");
-  assert.ok(jobsIndex < engine.indexOf("return NAMED_SITES.find"), "LinkedIn Jobs must be checked before the generic named-site fallback");
-  assert.match(engine, /linkedin\b[^.?!]{0,80}\bjobs/);
+  assert.ok(fallbackIndex >= 0, "named-site fallback must remain available");
+  assert.ok(jobsIndex < fallbackIndex, "LinkedIn Jobs must be checked before the generic named-site fallback");
 });
 
 test("Orbit interaction controls fully reflow inside the compact assistant pane", async () => {

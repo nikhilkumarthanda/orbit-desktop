@@ -24,7 +24,9 @@ test("Career profile onboarding remains a resumable input task and resumes its p
   const engine = await source("src/main/browser-task-engine.ts");
 
   assert.match(engine, /let careerProfileSetup:/);
-  assert.match(engine, /status: needsProfileSetup \? "waiting_for_confirmation" : "completed"/);
+  assert.match(engine, /function applyCareerResult/);
+  assert.match(engine, /result\\.requiresProfileSetup && result\\.nextProfileField/);
+  assert.match(engine, /active\\.status = "waiting_for_confirmation"/);
   assert.match(engine, /active\.pendingKind = "input"/);
   assert.match(engine, /Career profile: \$\{careerProfileSetupFieldLabel/);
   assert.match(engine, /saveCareerProfileSetupAnswer\(currentField, cleanAnswer\)/);

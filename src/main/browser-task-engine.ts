@@ -55,6 +55,49 @@ function setPlanner(planner: "gemini"|"ollama", listener?: (event: BrowserTaskEv
   if (changed && listener) emit(listener, "status", planner === "ollama" ? "Browser planning switched to Local Ollama" : "Browser planning with Gemini");
 }
 
+function activeLinkedInJobsContext() {
+  try {
+    const url = new URL(String(browser.embeddedBrowserState().url || ""));
+    return /(?:^|\.)linkedin\.com$/i.test(url.hostname) && url.pathname.startsWith("/jobs");
+  } catch { return false; }
+}
+
+function linkedinJobKeywords(goal: string) {
+  const text = goal.trim();
+  let match = text.match(/\b(?:search|find|look\s+for|show)\s+(?:on\s+)?linkedin(?:\s+jobs?)?\s+(?:for\s+)?(.+?)(?=\s+(?:with|using|filtered|filter(?:ed)?|posted|from|in|at)\b|$)/i);
+  if (!match) match = text.match(/\b(?:search|find|look\s+for|show)\s+(?:for\s+)?(.+?)\s+(?:on|in)\s+linkedin(?:\s+jobs?)?(?=\s|$)/i);
+  if (!match && activeLinkedInJobsContext()) match = text.match(/\b(?:search|find|look\s+for|show)\s+(?:for\s+)?(.+?)(?=\s+(?:with|using|filtered|filter(?:ed)?|posted|from|in|at)\b|$)/i);
+  return String(match?.[1] || "")
+    .replace(/\b(?:new\s+grad(?:uate)?s?|recent\s+grad(?:uate)?s?|early\s+career|entry[- ]?level)\b/gi, " ")
+    .replace(/\b(?:roles?|jobs?|positions?|openings?)\b\s*$/i, "")
+    .replace(/\b(?:on|in)\s+linkedin(?:\s+jobs?)?\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function linkedinJobsSearchUrl(goal: string) {
+  const explicitLinkedIn = /\blinkedin\b/i.test(goal);
+  if (!explicitLinkedIn && !activeLinkedInJobsContext()) return "";
+  if (!/\b(?:search|find|look\s+for|show|jobs?|roles?)\b/i.test(goal)) return "";
+
+  const keywords = linkedinJobKeywords(goal);
+  const newGrad = /\b(?:new\s+grad(?:uate)?s?|recent\s+grad(?:uate)?s?|early\s+career|entry[- ]?level)\b/i.test(goal);
+  const past24Hours = /\b(?:past|last|within)\s+(?:24\s+hours?|1\s+day)|\btoday\b/i.test(goal);
+  const pastWeek = /\b(?:past|last|within)\s+(?:7\s+days?|1\s+week)\b/i.test(goal);
+  const pastMonth = /\b(?:past|last|within)\s+(?:30\s+days?|1\s+month)\b/i.test(goal);
+  const remote = /\bremote\b/i.test(goal);
+  if (!keywords && !newGrad && !past24Hours && !pastWeek && !pastMonth && !remote) return "";
+
+  const url = new URL("https://www.linkedin.com/jobs/search/");
+  if (keywords) url.searchParams.set("keywords", keywords.slice(0, 180));
+  if (newGrad) url.searchParams.set("f_E", "2");
+  if (past24Hours) url.searchParams.set("f_TPR", "r86400");
+  else if (pastWeek) url.searchParams.set("f_TPR", "r604800");
+  else if (pastMonth) url.searchParams.set("f_TPR", "r2592000");
+  if (remote) url.searchParams.set("f_WT", "2");
+  return url.toString();
+}
+
 function explicitGoalUrl(goal: string) {
   const direct = goal.match(/https?:\/\/[^\s,)]+/i)?.[0];
   if (direct) return direct;
@@ -77,6 +120,8 @@ function youtubePlayTerms(goal: string) {
 }
 
 function searchTerms(goal: string) {
+  const linkedIn = linkedinJobKeywords(goal);
+  if (linkedIn) return linkedIn;
   const play = youtubePlayTerms(goal);
   if (play) return play;
   const match = goal.match(/\b(?:search|look\s+up|find)(?:\s+(?:on|in))?\s+(?:github|wikipedia|youtube|amazon|npm(?:js)?)?\s*(?:for\s+)?(.+?)(?=,\s*(?:and|then)\b|\s+and\s+(?:tell|show|give|report|find out|open)\b|$)/i);
@@ -84,6 +129,8 @@ function searchTerms(goal: string) {
 }
 
 function deterministicSearchUrl(goal: string) {
+  const linkedIn = linkedinJobsSearchUrl(goal);
+  if (linkedIn) return linkedIn;
   const query = searchTerms(goal);
   if (!query) return "";
   if (/\bgithub\b/i.test(goal)) return `https://github.com/search?q=${encodeURIComponent(query.slice(0, 180))}&type=repositories`;
@@ -163,6 +210,11 @@ function deterministicGoalSatisfied(goal: string, pageUrl: string, pageText: str
     if (current.hostname !== expected.hostname) return false;
     const search = deterministicSearchUrl(goal);
     if (search) {
+      if (/linkedin\.com$/i.test(current.hostname)) {
+        if (!current.pathname.startsWith("/jobs/search")) return false;
+        for (const [key, value] of expected.searchParams.entries()) if (current.searchParams.get(key) !== value) return false;
+        return true;
+      }
       if (/github\.com$/i.test(current.hostname)) return current.pathname.startsWith("/search") && Boolean(current.searchParams.get("q"));
       if (/wikipedia\.org$/i.test(current.hostname)) return current.pathname.includes("/w/index.php") || current.searchParams.has("search");
       if (/youtube\.com$/i.test(current.hostname)) return current.pathname.startsWith("/results") && Boolean(current.searchParams.get("search_query"));

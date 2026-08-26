@@ -12,7 +12,7 @@ test("LinkedIn Jobs opens the jobs destination instead of the LinkedIn feed", as
   assert.ok(jobsIndex >= 0, "LinkedIn Jobs must have a deterministic jobs URL");
   assert.ok(genericIndex >= 0, "generic LinkedIn route must remain available");
   assert.ok(jobsIndex < engine.indexOf("return NAMED_SITES.find"), "LinkedIn Jobs must be checked before the generic named-site fallback");
-  assert.match(engine, /linkedin\\b[^.?!]{0,80}\\bjobs/);
+  assert.match(engine, /linkedin\b[^.?!]{0,80}\bjobs/);
 });
 
 test("Orbit interaction controls fully reflow inside the compact assistant pane", async () => {

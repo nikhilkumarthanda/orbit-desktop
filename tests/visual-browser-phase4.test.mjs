@@ -15,7 +15,8 @@ test("Phase 4 visual browser fallback is screenshot-grounded, native-clicked, ve
   assert.match(embedded, /export async function clickAtPoint/);
   assert.match(embedded, /sendInputEvent\(\{ type: "mouseDown"/);
   assert.match(embedded, /planVisualBrowserTarget/);
-  assert.match(embedded, /visual\.confidence < 0\.72/);
+  assert.ok(embedded.includes("const VISUAL_CONFIDENCE = 0.72"), "visual targeting must retain a 0.72 minimum confidence threshold");
+  assert.ok(embedded.includes("visual.confidence < VISUAL_CONFIDENCE"), "visual targets below the minimum confidence must be rejected");
   assert.match(embedded, /stopped instead of retrying blindly/);
 
   assert.match(gemini, /export async function planVisualBrowserTarget/);

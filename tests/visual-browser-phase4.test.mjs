@@ -29,11 +29,11 @@ test("LinkedIn job searches map new-grad and date constraints to deterministic f
   const engine = await source("src/main/browser-task-engine.ts");
 
   assert.match(engine, /function linkedinJobsSearchUrl/);
-  assert.match(engine, /new\s+grad/);
-  assert.match(engine, /url\.searchParams\.set\("f_E", "2"\)/);
-  assert.match(engine, /url\.searchParams\.set\("f_TPR", "r86400"\)/);
-  assert.match(engine, /url\.searchParams\.set\("f_TPR", "r604800"\)/);
-  assert.match(engine, /url\.searchParams\.set\("f_WT", "2"\)/);
-  assert.match(engine, /current\.pathname\.startsWith\("\/jobs\/search"\)/);
-  assert.match(engine, /expected\.searchParams\.entries\(\)/);
+  assert.ok(engine.includes("const newGrad = /"), "LinkedIn adapter must recognize a new-grad/entry-level constraint");
+  assert.ok(engine.includes('url.searchParams.set("f_E", "2")'), "new-grad must map to LinkedIn Entry level");
+  assert.ok(engine.includes('url.searchParams.set("f_TPR", "r86400")'), "past 24 hours must map to the LinkedIn date filter");
+  assert.ok(engine.includes('url.searchParams.set("f_TPR", "r604800")'), "past week must map to the LinkedIn date filter");
+  assert.ok(engine.includes('url.searchParams.set("f_WT", "2")'), "remote must map to the LinkedIn remote filter");
+  assert.ok(engine.includes('current.pathname.startsWith("/jobs/search")'), "Orbit must verify the LinkedIn Jobs search destination");
+  assert.ok(engine.includes("expected.searchParams.entries()"), "Orbit must verify requested LinkedIn filter params after navigation");
 });

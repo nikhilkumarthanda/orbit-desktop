@@ -53,6 +53,16 @@ function youtubeCompoundBackSearch(value) {
   return match?.[1]?.trim() || "";
 }
 
+function linkedinCompoundBackOpen(value) {
+  const text = String(value || "").trim();
+  if (!text || explicitlyRequestsExternalBrowser(text)) return "";
+  let current;
+  try { current = new URL(String(embeddedBrowserState?.url || "")); } catch { return ""; }
+  if (!/(?:^|\.)linkedin\.com$/i.test(current.hostname) || !current.pathname.startsWith("/jobs")) return "";
+  const match = text.match(/^(?:now\s+)?(?:go\s+back|back)\s*(?:,?\s*(?:and|then)\s+)?(?:open|show|view)\s+(?:the\s+)?(first|second|third|fourth|fifth|\d+(?:st|nd|rd|th)?)\s*(?:one|job|role|result)?[.!?]*$/i);
+  return match ? `open the ${match[1].toLowerCase()} job` : "";
+}
+
 function contextualOrbitBrowserFollowUp(value) {
   const text = String(value || "").trim();
   if (!embeddedBrowserVisible || !text) return false;
@@ -274,6 +284,17 @@ async function planOrbitCommand(command) {
   }
 
   const external = explicitlyRequestsExternalBrowser(value);
+  const compoundLinkedinOpen = !external ? linkedinCompoundBackOpen(value) : "";
+  if (compoundLinkedinOpen) {
+    if (browserTaskState?.status === "running") {
+      await ipcRenderer.invoke("orbit:browser:task:cancel").catch(() => null);
+      browserTaskRunning = false;
+      browserTaskState = null;
+    }
+    await ipcRenderer.invoke("orbit:embedded-browser:back").catch(() => null);
+    await new Promise(resolve => window.setTimeout(resolve, 260));
+    return { intent: "browser_task", confidence: 1, explanation: "LinkedIn filtered-result history preserved before opening the requested ordinal job", query: compoundLinkedinOpen, source: "local" };
+  }
   const compoundYoutubeSearch = !external ? youtubeCompoundBackSearch(value) : "";
   if (compoundYoutubeSearch) {
     if (browserTaskState?.status === "running") {

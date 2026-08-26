@@ -16,7 +16,8 @@ test("Career autofill turns missing reusable profile fields into conversational 
   assert.match(career, /fallbackProfileFieldValue\(field, cleanAnswer\)/);
   assert.match(career, /requiresProfileSetup: true/);
   assert.match(career, /I will resume this autofill automatically when setup is complete/);
-  assert.match(career, /Sensitive legal, compensation, demographic, visa, and authentication answers/);
+  assert.match(career, /legal\/EEO\/compensation\/visa\/authentication answers are never promoted here/);
+  assert.match(career, /safeProfileKeys/);
 });
 
 test("Career profile onboarding remains a resumable input task and resumes its parent Career action", async () => {

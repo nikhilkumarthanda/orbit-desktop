@@ -35,6 +35,20 @@ export interface CareerApplicationRecord {
   updatedAt: string;
 }
 
+export interface CareerApplicationCheckpoint {
+  adapter: CareerSiteAdapter;
+  url: string;
+  title: string;
+  stepIndex: number;
+  stepTotal?: number;
+  nextLabel?: string;
+  submitLabel?: string;
+  manualLabel?: string;
+  capturedAt: string;
+}
+
+let lastApplicationCheckpoint: CareerApplicationCheckpoint | null = null;
+
 const safeProfileKeys = new Set<keyof CareerProfile>([
   "fullName", "firstName", "lastName", "email", "phone", "location", "linkedin", "github", "website", "portfolio", "currentCompany", "currentTitle",
 ]);
@@ -218,22 +232,82 @@ function summarizeJob(snapshot: Awaited<ReturnType<typeof browser.actionSnapshot
   return { url: snapshot.url, title: h1ish.slice(0, 160), company: company.slice(0, 120), location: location.slice(0, 120), salary: salary.slice(0, 120), source: pageSource(snapshot.url), hasApplyControl: applyControls.length > 0, isJobPage, text: text.slice(0, 9000) };
 }
 
+function applicationStep(text: string) {
+  const match = text.match(/\bstep\s+(\d+)\s+(?:of|\/)\s+(\d+)\b/i)
+    || text.match(/\b(\d+)\s+of\s+(\d+)\s+(?:steps?|sections?)\b/i);
+  if (!match) return { stepIndex: 0, stepTotal: undefined as number | undefined };
+  const stepIndex = Math.max(1, Number.parseInt(match[1], 10) || 1);
+  const stepTotal = Math.max(stepIndex, Number.parseInt(match[2], 10) || stepIndex);
+  return { stepIndex, stepTotal };
+}
+
+function applicationControls(snapshot: Awaited<ReturnType<typeof browser.actionSnapshot>>) {
+  const clickable = snapshot.controls.filter(control => /^(?:button|submit|a|link)$/i.test(control.kind));
+  const submit = clickable.find(control => /^(?:submit(?: application)?|send application|finish and submit|apply now)$/i.test(control.label.trim()));
+  const next = clickable.find(control => {
+    const label = control.label.trim();
+    return /^(?:next|continue|save and continue|continue application|review|review application)$/i.test(label)
+      && !/\b(?:submit|send|agree|accept|attest|certif)/i.test(label);
+  });
+  const easyApply = clickable.find(control => /^(?:easy apply|apply|apply now)$/i.test(control.label.trim()) && !/submit/i.test(control.label));
+  const manualText = `${snapshot.title}\n${snapshot.text}`;
+  const manualLabel = /\bcaptcha\b/i.test(manualText)
+    ? "CAPTCHA"
+    : /\b(?:verification code|one[- ]?time code|otp|two[- ]factor|2fa|mfa)\b/i.test(manualText)
+      ? "MFA or verification code"
+      : /\b(?:sign in|log in|login)\b/i.test(manualText) && /\b(?:password|account)\b/i.test(manualText)
+        ? "login/password"
+        : "";
+  return { submit, next, easyApply, manualLabel };
+}
+
+function captureApplicationCheckpoint(snapshot: Awaited<ReturnType<typeof browser.actionSnapshot>>, moved = false) {
+  const adapter = careerSiteAdapter(snapshot.url);
+  const parsed = applicationStep(snapshot.text);
+  const controls = applicationControls(snapshot);
+  const prior = lastApplicationCheckpoint;
+  const sameFlow = Boolean(prior && prior.adapter === adapter);
+  const inferredStep = parsed.stepIndex || (sameFlow ? Math.max(1, prior!.stepIndex + (moved ? 1 : 0)) : 1);
+  const checkpoint: CareerApplicationCheckpoint = {
+    adapter,
+    url: snapshot.url,
+    title: snapshot.title,
+    stepIndex: inferredStep,
+    ...(parsed.stepTotal ? { stepTotal: parsed.stepTotal } : {}),
+    ...(controls.next?.label ? { nextLabel: controls.next.label } : {}),
+    ...(controls.submit?.label ? { submitLabel: controls.submit.label } : {}),
+    ...(controls.manualLabel ? { manualLabel: controls.manualLabel } : {}),
+    capturedAt: new Date().toISOString(),
+  };
+  lastApplicationCheckpoint = checkpoint;
+  return { checkpoint, controls };
+}
+
+export async function currentApplicationCheckpoint() {
+  const snapshot = await browser.actionSnapshot();
+  return captureApplicationCheckpoint(snapshot).checkpoint;
+}
+
 export async function inspectCurrentJob() {
-  const page = summarizeJob(await browser.actionSnapshot());
+  const snapshot = await browser.actionSnapshot();
+  const page = summarizeJob(snapshot);
+  const { easyApply } = applicationControls(snapshot);
   const summary = page.isJobPage
-    ? `${page.title || "Job"}${page.company ? ` at ${page.company}` : ""}${page.location ? ` · ${page.location}` : ""}${page.salary ? ` · ${page.salary}` : ""}. Source: ${page.source}. ${page.hasApplyControl ? "An application control is visible." : "No application control is currently visible."}`
+    ? `${page.title || "Job"}${page.company ? ` at ${page.company}` : ""}${page.location ? ` · ${page.location}` : ""}${page.salary ? ` · ${page.salary}` : ""}. Source: ${page.source}. ${easyApply ? `“${easyApply.label}” is available.` : page.hasApplyControl ? "An application control is visible." : "No application control is currently visible."}`
     : `This does not look like a job posting yet. Current page: ${page.title || page.url}.`;
-  return { ...page, summary };
+  return { ...page, easyApply: easyApply?.label || "", summary };
 }
 
 export async function inspectCurrentApplication() {
   const snapshot = await browser.actionSnapshot();
-  const adapter = careerSiteAdapter(snapshot.url);
+  const { checkpoint, controls } = captureApplicationCheckpoint(snapshot);
+  const adapter = checkpoint.adapter;
   const fields = snapshot.controls.filter(control => /^(?:text|email|tel|url|number|input|textarea|select|combobox|file|checkbox|radio)$/i.test(control.kind));
   const sensitive = fields.filter(field => sensitiveField.test(field.label));
   const fileInputs = fields.filter(field => field.kind.toLowerCase() === "file" || /\b(?:resume|cv|cover letter|upload)\b/i.test(field.label));
   const safe = fields.filter(field => !sensitive.includes(field) && !fileInputs.includes(field));
-  const multiStep = adapter === "workday" && snapshot.controls.some(control => /\b(?:next|save and continue|continue)\b/i.test(control.label));
+  const multiStep = adapter === "workday" || Boolean(checkpoint.nextLabel) || Boolean(checkpoint.stepTotal && checkpoint.stepTotal > 1);
+  const stepText = checkpoint.stepTotal ? ` Step ${checkpoint.stepIndex} of ${checkpoint.stepTotal}.` : multiStep ? ` Current checkpoint: step ${checkpoint.stepIndex}.` : "";
   return {
     url: snapshot.url,
     adapter,
@@ -242,7 +316,85 @@ export async function inspectCurrentApplication() {
     fileInputs,
     safe,
     multiStep,
-    summary: `${adapter === "generic" ? "Generic" : adapter[0].toUpperCase() + adapter.slice(1)} application adapter active. Orbit can see ${fields.length} application field/control(s): ${safe.length} appear safe for profile autofill, ${sensitive.length} require your review, and ${fileInputs.length} look like resume/file uploads.${multiStep ? " This appears to be a multi-step Workday flow." : ""} Orbit will not guess legal, demographic, compensation, identity, authentication, visa, sponsorship, or EEO answers and will not submit automatically.`,
+    easyApply: controls.easyApply?.label || "",
+    checkpoint,
+    summary: `${adapter === "generic" ? "Generic" : adapter[0].toUpperCase() + adapter.slice(1)} application adapter active.${stepText} Orbit can see ${fields.length} application field/control(s): ${safe.length} appear safe for profile autofill, ${sensitive.length} require your review, and ${fileInputs.length} look like resume/file uploads.${checkpoint.manualLabel ? ` Manual takeover is currently required for ${checkpoint.manualLabel}.` : ""}${checkpoint.nextLabel ? ` Safe progression control: “${checkpoint.nextLabel}”.` : ""}${checkpoint.submitLabel ? ` Final control “${checkpoint.submitLabel}” remains approval-gated.` : ""} Orbit will not guess legal, demographic, compensation, identity, authentication, visa, sponsorship, or EEO answers and will not submit automatically.`,
+  };
+}
+
+export async function startCurrentApplication() {
+  const before = await browser.actionSnapshot();
+  const { controls } = captureApplicationCheckpoint(before);
+  const label = controls.easyApply?.label || "";
+  if (!label) return { started: false, summary: "Orbit does not see an Apply or Easy Apply control on the current job page." };
+  await browser.clickByLabel(label);
+  await new Promise(resolve => setTimeout(resolve, 650));
+  const after = await browser.actionSnapshot();
+  const { checkpoint } = captureApplicationCheckpoint(after, true);
+  return {
+    started: true,
+    checkpoint,
+    summary: `Opened “${label}” without submitting anything. ${checkpoint.adapter === "linkedin" ? "LinkedIn Easy Apply" : "The application flow"} is ready at checkpoint step ${checkpoint.stepIndex}.`,
+  };
+}
+
+export async function attachResumeToCurrentApplication() {
+  const application = await inspectCurrentApplication();
+  const preferred = application.fileInputs.find(item => /\b(?:resume|curriculum vitae|\bcv\b)\b/i.test(item.label)) || application.fileInputs[0];
+  if (!preferred) return { attached: false, summary: "Orbit does not see a resume/CV file input on the current application step." };
+  const result = await browser.chooseAndAttachFileByLabel(preferred.label || "resume");
+  if (!result.attached) return { ...result, summary: "Resume selection was cancelled. The application was not changed." };
+  const checkpoint = await currentApplicationCheckpoint();
+  return { ...result, checkpoint, summary: `Attached ${result.fileName} to “${preferred.label}” and verified the browser received that file. Nothing was submitted.` };
+}
+
+export async function advanceCurrentApplication() {
+  const before = await browser.actionSnapshot();
+  const inspected = await inspectCurrentApplication();
+  const checkpoint = inspected.checkpoint;
+  if (checkpoint.manualLabel) {
+    return {
+      advanced: false,
+      requiresManualTakeover: true,
+      manualLabel: checkpoint.manualLabel,
+      checkpoint,
+      summary: `Application checkpoint ${checkpoint.stepIndex} is waiting for ${checkpoint.manualLabel}. Complete that directly on the site, then say “continue”. Orbit will re-inspect this same application workflow.`,
+    };
+  }
+
+  const unresolvedSensitive = inspected.sensitive.find(field => !String(field.value || "").trim());
+  if (unresolvedSensitive) {
+    return {
+      advanced: false,
+      requiresInput: true,
+      inputLabel: unresolvedSensitive.label,
+      checkpoint,
+      summary: `Application checkpoint ${checkpoint.stepIndex} needs your answer for “${unresolvedSensitive.label}”. Orbit will not guess this field.`,
+    };
+  }
+
+  if (checkpoint.submitLabel) {
+    return {
+      advanced: false,
+      requiresApproval: true,
+      approvalLabel: checkpoint.submitLabel,
+      checkpoint,
+      summary: `Application checkpoint ${checkpoint.stepIndex} is ready for the final “${checkpoint.submitLabel}” action. Orbit will not click it without exact approval.`,
+    };
+  }
+
+  if (!checkpoint.nextLabel) {
+    return { advanced: false, checkpoint, summary: `Orbit is at application checkpoint ${checkpoint.stepIndex}, but no safe Next/Continue control is currently visible. Review the page or fill the remaining required fields first.` };
+  }
+
+  await browser.clickByLabel(checkpoint.nextLabel);
+  await new Promise(resolve => setTimeout(resolve, 700));
+  const after = await browser.actionSnapshot();
+  const next = captureApplicationCheckpoint(after, true).checkpoint;
+  return {
+    advanced: true,
+    checkpoint: next,
+    summary: `Completed safe application step ${checkpoint.stepIndex} with “${checkpoint.nextLabel}”. Orbit verified the updated page and saved checkpoint ${next.stepIndex}${next.stepTotal ? ` of ${next.stepTotal}` : ""}. Nothing was submitted.`,
   };
 }
 
@@ -359,7 +511,14 @@ export async function handleCareerCommand(instruction: string) {
   }
   if (/\b(?:career|application)\s+profile\b/i.test(command) && /\b(?:save|set|update|remember|name|email|phone|linkedin|github|location|portfolio|current\s+title|current\s+company)\b/i.test(command)) return updateCareerProfileFromInstruction(command);
   if (/\b(?:inspect|review|analy[sz]e|read)\b.*\b(?:application|form)\b/i.test(command)) return inspectCurrentApplication();
+  if (/\b(?:where|what)\b.*\b(?:application|form)\b.*\b(?:step|checkpoint|am i)\b|\b(?:show|inspect)\b.*\bcheckpoint\b/i.test(command)) {
+    const checkpoint = await currentApplicationCheckpoint();
+    return { checkpoint, summary: `Current ${checkpoint.adapter} application checkpoint: step ${checkpoint.stepIndex}${checkpoint.stepTotal ? ` of ${checkpoint.stepTotal}` : ""} at ${checkpoint.title || checkpoint.url}.` };
+  }
   if (/\b(?:inspect|review|analy[sz]e|read|summari[sz]e)\b.*\b(?:job|role|posting|description)\b/i.test(command)) return inspectCurrentJob();
+  if (/\b(?:start|open|begin)\b.*\b(?:easy\s+apply|application)\b|\bapply\s+(?:to\s+)?(?:this|the)\s+(?:job|role)\b/i.test(command)) return startCurrentApplication();
+  if (/\b(?:upload|attach|add)\b.*\b(?:resume|cv)\b/i.test(command)) return attachResumeToCurrentApplication();
+  if (/\b(?:continue|next|advance|proceed|save\s+and\s+continue)\b.*\b(?:application|form|step)\b|^(?:continue|next)\s+(?:application|form)$/i.test(command)) return advanceCurrentApplication();
   if (/\b(?:autofill|auto-fill|fill)\b.*\b(?:application|form)\b/i.test(command)) return autofillCurrentApplication();
   if (/\b(?:draft|write|create)\b.*\b(?:recruiter|hiring manager|outreach|connection note|linkedin message)\b/i.test(command)) {
     const result = await draftRecruiterOutreach(command);
@@ -370,5 +529,5 @@ export async function handleCareerCommand(instruction: string) {
     const status: CareerApplicationStatus = /\boffer\b/i.test(command) ? "offer" : /\brejected\b/i.test(command) ? "rejected" : /\binterview\b/i.test(command) ? "interview" : /\bapplied\b/i.test(command) ? "applied" : /\bready\b/i.test(command) ? "ready_to_submit" : /\bprepar/i.test(command) ? "preparing" : "saved";
     return trackCurrentApplication(status);
   }
-  return { summary: "Career Mode is ready. I can inspect this job, inspect the application form, autofill reusable non-sensitive fields, draft recruiter outreach, save your Career profile, and track the application. Final submit/send/post/publish actions remain approval-gated." };
+  return { summary: "Career Mode is ready. I can inspect this job, open Apply/Easy Apply, inspect and autofill the application, attach a resume through a native file picker, advance safe Next/Continue checkpoints, draft recruiter outreach, save your Career profile, and track the application. Final submit/send/post/publish actions remain approval-gated." };
 }

@@ -1,5 +1,6 @@
 import { BrowserWindow, WebContentsView, ipcMain, type WebContents } from "electron";
 import { randomUUID } from "node:crypto";
+import { planVisualBrowserTarget } from "./gemini.js";
 
 const PARTITION = "persist:orbit-agent";
 const SIDEBAR_WIDTH = 276;
@@ -463,6 +464,56 @@ export async function actionSnapshot(): Promise<ActionSnapshot> {
   return snapshot;
 }
 
+export interface VisualBrowserSnapshot extends ActionSnapshot {
+  viewport: { width: number; height: number; scrollX: number; scrollY: number };
+  imageBase64: string;
+}
+
+export async function visualSnapshot(): Promise<VisualBrowserSnapshot> {
+  await showEmbeddedBrowser();
+  const target = await contents();
+  const page = await actionSnapshot();
+  const viewport = await target.executeJavaScript(`(() => ({ width: Math.max(1, innerWidth), height: Math.max(1, innerHeight), scrollX: Math.round(scrollX), scrollY: Math.round(scrollY) }))()`, true) as VisualBrowserSnapshot["viewport"];
+  const previousOpacity = await target.executeJavaScript(`(() => { const cursor = document.getElementById('__orbit_agent_cursor'); if (!cursor) return ''; const previous = cursor.style.opacity; cursor.style.opacity = '0'; return previous; })()`, true).catch(() => "");
+  await new Promise(resolve => setTimeout(resolve, 40));
+  const image = await target.capturePage();
+  await target.executeJavaScript(`(() => { const cursor = document.getElementById('__orbit_agent_cursor'); if (cursor) cursor.style.opacity = ${JSON.stringify(String(previousOpacity || ".88"))}; return true; })()`, true).catch(() => false);
+  return { ...page, viewport, imageBase64: image.toPNG().toString("base64") };
+}
+
+async function animateCursorTo(x: number, y: number) {
+  const target = await contents();
+  const px = Math.round(x);
+  const py = Math.round(y);
+  await target.executeJavaScript(`(async () => {
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const cursor = ${CURSOR_FACTORY_JS};
+    const x = Math.max(4, Math.min(innerWidth - 24, ${px} - 10));
+    const y = Math.max(4, Math.min(innerHeight - 24, ${py} - 10));
+    cursor.style.opacity = '1';
+    cursor.style.transform = 'translate3d(' + x + 'px,' + y + 'px,0)';
+    await sleep(440);
+    cursor.animate([
+      { transform: 'translate3d(' + x + 'px,' + y + 'px,0) scale(1)' },
+      { transform: 'translate3d(' + x + 'px,' + y + 'px,0) scale(.72)', boxShadow: '0 0 0 12px rgba(155,124,255,.25),0 0 28px rgba(155,124,255,.95)' },
+      { transform: 'translate3d(' + x + 'px,' + y + 'px,0) scale(1)' }
+    ], { duration: 300, easing: 'ease-out' });
+    return true;
+  })()`, true);
+}
+
+export async function clickAtPoint(x: number, y: number) {
+  const target = await contents();
+  const viewport = await target.executeJavaScript(`(() => ({ width: Math.max(1, innerWidth), height: Math.max(1, innerHeight) }))()`, true) as { width: number; height: number };
+  const px = Math.max(1, Math.min(viewport.width - 2, Math.round(Number(x))));
+  const py = Math.max(1, Math.min(viewport.height - 2, Math.round(Number(y))));
+  await animateCursorTo(px, py);
+  target.sendInputEvent({ type: "mouseMove", x: px, y: py });
+  target.sendInputEvent({ type: "mouseDown", x: px, y: py, button: "left", clickCount: 1 });
+  target.sendInputEvent({ type: "mouseUp", x: px, y: py, button: "left", clickCount: 1 });
+  await new Promise(resolve => setTimeout(resolve, 180));
+}
+
 export interface YouTubeVideoResult { title: string; url: string }
 
 export async function youtubeVideoResults(limit = 12): Promise<YouTubeVideoResult[]> {
@@ -527,7 +578,37 @@ export async function clickByLabel(label: string) {
     await sleep(180);
     return true;
   })()`, true);
-  if (!result) throw new Error(`Orbit could not find the control “${label}”`);
+  if (result) return;
+
+  const before = await visualSnapshot();
+  let visual;
+  try {
+    visual = await planVisualBrowserTarget({
+      goal: `Click the visible browser control requested by the user: ${label}`,
+      requestedLabel: label,
+      imageBase64: before.imageBase64,
+      page: {
+        title: before.title,
+        url: before.url,
+        text: before.text,
+        controls: before.controls,
+        viewport: before.viewport,
+      },
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Orbit could not find the control “${label}” in the DOM, and visual targeting was unavailable: ${detail}`);
+  }
+  if (visual.confidence < 0.72) throw new Error(`Orbit could not safely identify “${label}” visually (confidence ${visual.confidence.toFixed(2)})`);
+
+  await clickAtPoint(visual.x, visual.y);
+  await new Promise(resolve => setTimeout(resolve, 720));
+  const after = await visualSnapshot();
+  const verified = before.url !== after.url
+    || before.title !== after.title
+    || before.text !== after.text
+    || before.imageBase64 !== after.imageBase64;
+  if (!verified) throw new Error(`Orbit visually clicked “${visual.description || label}”, but the browser did not show a verifiable change, so it stopped instead of retrying blindly`);
 }
 
 export async function fillByLabel(label: string, value: string) {

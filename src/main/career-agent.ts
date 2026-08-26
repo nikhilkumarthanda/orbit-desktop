@@ -21,6 +21,7 @@ export type CareerProfile = {
   currentTitle?: string;
 };
 
+export type CareerProfileSetupField = "fullName" | "email" | "phone" | "location" | "linkedin" | "github";
 export type CareerApplicationStatus = "saved" | "preparing" | "ready_to_submit" | "applied" | "interview" | "rejected" | "offer";
 
 export interface CareerApplicationRecord {
@@ -37,6 +38,15 @@ const safeProfileKeys = new Set<keyof CareerProfile>([
   "fullName", "firstName", "lastName", "email", "phone", "location", "linkedin", "github", "website", "portfolio", "currentCompany", "currentTitle",
 ]);
 const sensitiveField = /\b(?:password|passcode|otp|verification|social security|ssn|government id|date of birth|dob|race|ethnicity|gender|sex|disability|veteran|military|religion|sexual orientation|citizen|citizenship|work authori[sz]ation|visa|sponsor|sponsorship|salary|compensation|desired pay|eeo|equal employment|self.identif|signature|attest|agree|consent)\b/i;
+const careerProfileSetupOrder: CareerProfileSetupField[] = ["fullName", "email", "phone", "location", "linkedin", "github"];
+const careerProfileSetupLabels: Record<CareerProfileSetupField, string> = {
+  fullName: "full name",
+  email: "email address",
+  phone: "phone number",
+  location: "location",
+  linkedin: "LinkedIn profile URL",
+  github: "GitHub profile URL",
+};
 
 function careerDir() { return path.join(app.getPath("userData"), "career"); }
 function profileFile() { return path.join(careerDir(), "profile.json"); }
@@ -96,6 +106,70 @@ function profileFromInstruction(instruction: string): CareerProfile {
   if (currentTitle) update.currentTitle = currentTitle;
   if (currentCompany) update.currentCompany = currentCompany;
   return update;
+}
+
+export function careerProfileSetupFieldLabel(field: CareerProfileSetupField) {
+  return careerProfileSetupLabels[field];
+}
+
+export function careerProfileSetupQuestion(field: CareerProfileSetupField) {
+  if (field === "fullName") return "What full name should Orbit use on job applications?";
+  if (field === "email") return "What email address should Orbit use on job applications?";
+  if (field === "phone") return "What phone number should Orbit use on job applications?";
+  if (field === "location") return "What city/state or location should Orbit use on job applications?";
+  if (field === "linkedin") return "What is your LinkedIn profile URL?";
+  return "What is your GitHub profile URL?";
+}
+
+export async function missingCareerProfileFields(profile?: CareerProfile) {
+  const current = profile || await careerProfile();
+  return careerProfileSetupOrder.filter(field => !String(current[field] || "").trim());
+}
+
+function fallbackProfileFieldValue(field: CareerProfileSetupField, answer: string) {
+  let value = answer.trim().slice(0, 500);
+  if (field === "fullName") value = value.replace(/^(?:my\s+)?(?:full\s+)?name\s+(?:is\s+)?/i, "").trim();
+  if (field === "location") value = value.replace(/^(?:i\s+(?:live|am)\s+(?:in|at)\s+|my\s+location\s+(?:is\s+)?)/i, "").trim();
+  if (field === "email") return /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(value) ? value : "";
+  if (field === "phone") return /^(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}$/.test(value) ? value : "";
+  if (field === "linkedin") return /^https?:\/\/(?:www\.)?linkedin\.com\/in\/[A-Za-z0-9_%.-]+\/?$/i.test(value) ? value : "";
+  if (field === "github") return /^https?:\/\/(?:www\.)?github\.com\/[A-Za-z0-9_.-]+\/?$/i.test(value) ? value : "";
+  return value.length >= 2 ? value : "";
+}
+
+export async function saveCareerProfileSetupAnswer(field: CareerProfileSetupField, answer: string) {
+  const cleanAnswer = String(answer || "").trim().slice(0, 1_000);
+  if (!cleanAnswer) return { saved: false, profile: await careerProfile(), missing: await missingCareerProfileFields(), summary: `I still need your ${careerProfileSetupFieldLabel(field)}.` };
+
+  // Parse any explicitly labeled fields first so users can answer one question or
+  // provide the entire reusable profile in a single sentence.
+  const parsed = profileFromInstruction(cleanAnswer);
+  if (!parsed[field]) {
+    const fallback = fallbackProfileFieldValue(field, cleanAnswer);
+    if (fallback) (parsed as Record<string, string>)[field] = fallback;
+  }
+  if (!parsed[field]) {
+    return {
+      saved: false,
+      profile: await careerProfile(),
+      missing: await missingCareerProfileFields(),
+      summary: `That does not look like a complete ${careerProfileSetupFieldLabel(field)}. ${careerProfileSetupQuestion(field)}`,
+    };
+  }
+
+  // Only the allowlisted reusable fields extracted above are persisted. Sensitive
+  // legal/EEO/compensation/visa/authentication answers are never promoted here.
+  const profile = await saveCareerProfile(parsed);
+  const missing = await missingCareerProfileFields(profile);
+  return {
+    saved: true,
+    profile,
+    missing,
+    savedFields: Object.keys(parsed),
+    summary: missing.length
+      ? `Saved ${Object.keys(parsed).join(", ")}. ${careerProfileSetupQuestion(missing[0])}`
+      : "Career profile setup is complete. Resuming the task you originally asked Orbit to do.",
+  };
 }
 
 export async function updateCareerProfileFromInstruction(instruction: string) {
@@ -172,7 +246,18 @@ const aliases: Array<[keyof CareerProfile, string[]]> = [
 
 export async function autofillCurrentApplication() {
   const profile = await careerProfile();
-  if (!Object.keys(profile).length) return { filled: [], needsReview: [], summary: "Your Orbit Career profile is empty. Say something like “Save Career profile: name …, email …, phone …, location …, LinkedIn …, GitHub …” first." };
+  const missingProfileFields = await missingCareerProfileFields(profile);
+  if (missingProfileFields.length) {
+    const nextProfileField = missingProfileFields[0];
+    return {
+      filled: [],
+      needsReview: [],
+      requiresProfileSetup: true,
+      missingProfileFields,
+      nextProfileField,
+      summary: `Before I autofill this application, I need to finish your reusable Career profile. ${careerProfileSetupQuestion(nextProfileField)} You can answer one field at a time or give several labeled fields in one sentence. I will resume this autofill automatically when setup is complete.`,
+    };
+  }
   const snapshot = await browser.actionSnapshot();
   const available = snapshot.controls.map(control => ({ ...control, lower: control.label.toLowerCase() }));
   const filled: string[] = [];

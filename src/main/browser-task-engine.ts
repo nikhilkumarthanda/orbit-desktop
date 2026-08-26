@@ -1,7 +1,7 @@
 import { ipcMain } from "electron";
 import { randomUUID } from "node:crypto";
 import * as browser from "./embedded-browser.js";
-import { handleCareerCommand } from "./career-agent.js";
+import { careerProfileSetupFieldLabel, careerProfileSetupQuestion, handleCareerCommand, saveCareerProfileSetupAnswer, type CareerProfileSetupField } from "./career-agent.js";
 import { answerWithGemini, geminiStatus } from "./gemini.js";
 import { ollamaStatus, planBrowserActionWithOllama } from "./ollama.js";
 import type { BrowserTask, BrowserTaskAction, BrowserTaskEvent, EmbeddedBrowserState } from "../shared/contracts.js";
@@ -32,6 +32,7 @@ let stagnantPageRounds = 0;
 let loopRecoveryAttempts = 0;
 let approvedConsequentialLabel = "";
 let resumeInputContext: { question: string; answer: string } | null = null;
+let careerProfileSetup: { originalGoal: string; currentField: CareerProfileSetupField } | null = null;
 
 function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string) {
   return new Promise<T>((resolve, reject) => {
@@ -637,12 +638,23 @@ export async function startBrowserTask(goal: string, listener: (event: BrowserTa
     cancelled = false;
     approvedConsequentialLabel = "";
     resumeInputContext = null;
-    const result = await handleCareerCommand(cleanGoal);
+    careerProfileSetup = null;
+    const result = await handleCareerCommand(cleanGoal) as { summary?: string; requiresProfileSetup?: boolean; nextProfileField?: CareerProfileSetupField };
     const state = browser.embeddedBrowserState();
+    const needsProfileSetup = Boolean(result.requiresProfileSetup && result.nextProfileField);
     active = {
-      id: randomUUID(), goal: cleanGoal, status: "completed", steps: [], summary: String(result.summary || "Career Mode action completed"),
+      id: randomUUID(), goal: cleanGoal, status: needsProfileSetup ? "waiting_for_confirmation" : "completed", steps: [], summary: String(result.summary || "Career Mode action completed"),
       url: state.url || "", title: state.title || "Orbit Career Mode",
     };
+    if (needsProfileSetup && result.nextProfileField) {
+      careerProfileSetup = { originalGoal: cleanGoal, currentField: result.nextProfileField };
+      active.pendingKind = "input";
+      active.pendingAction = {
+        type: "ask_user",
+        label: `Career profile: ${careerProfileSetupFieldLabel(result.nextProfileField)}`,
+        reason: active.summary,
+      };
+    }
     emit(listener, "status", active.summary);
     return active;
   }
@@ -654,6 +666,7 @@ export async function startBrowserTask(goal: string, listener: (event: BrowserTa
   cancelled = false;
   approvedConsequentialLabel = "";
   resumeInputContext = null;
+  careerProfileSetup = null;
   lastPageFingerprint = "";
   stagnantPageRounds = 0;
   loopRecoveryAttempts = 0;
@@ -731,6 +744,64 @@ export async function submitBrowserTaskInput(answer: string, listener: (event: B
     emit(listener, "status", active.summary);
     return active;
   }
+
+  if (careerProfileSetup) {
+    const currentField = careerProfileSetup.currentField;
+    const result = await saveCareerProfileSetupAnswer(currentField, cleanAnswer);
+    if (!result.saved) {
+      active.summary = result.summary;
+      emit(listener, "status", active.summary);
+      return active;
+    }
+
+    active.steps.push({
+      at: new Date().toISOString(),
+      action: pending,
+      outcome: `Saved reusable Career profile field(s): ${(result.savedFields || [currentField]).join(", ")}. Sensitive legal, compensation, demographic, visa, and authentication answers were not promoted into the profile.`,
+    });
+
+    if (result.missing.length) {
+      const nextField = result.missing[0];
+      careerProfileSetup.currentField = nextField;
+      active.pendingKind = "input";
+      active.pendingAction = {
+        type: "ask_user",
+        label: `Career profile: ${careerProfileSetupFieldLabel(nextField)}`,
+        reason: result.summary,
+      };
+      active.summary = result.summary;
+      emit(listener, "step", `Career profile updated · ${result.missing.length} reusable field(s) remaining`);
+      emit(listener, "status", active.summary);
+      return active;
+    }
+
+    const originalGoal = careerProfileSetup.originalGoal;
+    careerProfileSetup = null;
+    active.pendingAction = undefined;
+    active.pendingKind = undefined;
+    active.status = "running";
+    active.summary = "Career profile setup complete. Resuming the Career task you originally requested.";
+    emit(listener, "step", "Career profile setup complete · resuming original Career task");
+
+    const resumed = await handleCareerCommand(originalGoal) as { summary?: string; requiresProfileSetup?: boolean; nextProfileField?: CareerProfileSetupField };
+    if (resumed.requiresProfileSetup && resumed.nextProfileField) {
+      careerProfileSetup = { originalGoal, currentField: resumed.nextProfileField };
+      active.status = "waiting_for_confirmation";
+      active.pendingKind = "input";
+      active.pendingAction = {
+        type: "ask_user",
+        label: `Career profile: ${careerProfileSetupFieldLabel(resumed.nextProfileField)}`,
+        reason: String(resumed.summary || careerProfileSetupQuestion(resumed.nextProfileField)),
+      };
+      active.summary = String(resumed.summary || careerProfileSetupQuestion(resumed.nextProfileField));
+    } else {
+      active.status = "completed";
+      active.summary = `Career profile setup complete. ${String(resumed.summary || "The original Career task is complete.")}`;
+    }
+    emit(listener, "status", active.summary);
+    return active;
+  }
+
   const question = String(pending.label || pending.reason || active.summary || "the pending browser question").trim().slice(0, 300);
   const manualOnly = manualOnlyInput.test(`${question} ${pending.reason || ""}`);
   if (manualOnly) {
@@ -757,6 +828,11 @@ export async function continueBrowserTask(listener: (event: BrowserTaskEvent) =>
   if (active.status === "waiting_for_confirmation") {
     const pending = active.pendingAction;
     const question = String(pending?.label || pending?.reason || active.summary || "");
+    if (careerProfileSetup) {
+      active.summary = `Orbit is still setting up your reusable Career profile. ${careerProfileSetupQuestion(careerProfileSetup.currentField)}`;
+      emit(listener, "status", active.summary);
+      return active;
+    }
     if (active.pendingKind === "input" && manualOnlyInput.test(`${question} ${pending?.reason || ""}`)) {
       active.steps.push({ at: new Date().toISOString(), action: pending || { type: "wait", reason: "Manual browser takeover" }, outcome: "User completed the manual-only browser step; Orbit did not capture the secret, code, identifier, or CAPTCHA response." });
       active.pendingAction = undefined;
@@ -793,6 +869,7 @@ export function cancelBrowserTask() {
   cancelled = true;
   approvedConsequentialLabel = "";
   resumeInputContext = null;
+  careerProfileSetup = null;
   if (active && !["completed", "failed", "cancelled"].includes(active.status)) {
     active.status = "cancelled";
     active.summary = "Browser task stopped";

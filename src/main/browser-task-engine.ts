@@ -60,6 +60,7 @@ function explicitGoalUrl(goal: string) {
   if (direct) return direct;
   const domain = goal.match(/\b(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s,)]+)?\b/i)?.[0];
   if (domain) return `https://${domain}`;
+  if (/\blinkedin\b[^.?!]{0,80}\bjobs?\b|\bjobs?\b[^.?!]{0,80}\blinkedin\b/i.test(goal)) return "https://www.linkedin.com/jobs/";
   return NAMED_SITES.find(([pattern]) => pattern.test(goal))?.[1] || "";
 }
 

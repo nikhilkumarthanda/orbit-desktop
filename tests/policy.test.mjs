@@ -271,7 +271,7 @@ test("explicit Outlook drafts override stale browser and GitHub context", async 
   assert.match(main, /right\\s\+now\|now\|please\|for\\s\+me/);
   assert.match(main, /inferEmailSubject/);
   assert.doesNotMatch(main, /fallbackEmailBody/);
-  assert.match(main, /parseGeneratedEmail/);
+  assert.match(main, /emailWithGemini/);
   assert.match(main, /natural and not robotic/);
   assert.match(main, /Preserve material facts and requested outcomes/);
   assert.doesNotMatch(main, /Rescheduling the Task Manager Meeting/);
@@ -593,7 +593,7 @@ test("all Mac diagnostics route locally before general research", async () => {
 
 test("Ollama releases model memory shortly after fallback use", async () => {
   const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/main/ollama.ts", import.meta.url), "utf8"));
-  assert.equal((source.match(/keep_alive: "30s"/g) || []).length, 3);
+  assert.equal((source.match(/keep_alive: "30s"/g) || []).length, 4);
   assert.equal(source.includes('keep_alive: "10m"'), false);
 });
 

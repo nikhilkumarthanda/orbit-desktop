@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ConversationTurn, ResearchSource } from "../shared/contracts.js";
 import { finalAnswerOnly } from "./ollama.js";
+import { EMAIL_SCHEMA, parseGeneratedEmail } from "./email-drafting.js";
 
 const KEYCHAIN_SERVICE = "com.orbit.desktop.gemini";
 // Prefer a current stable multimodal model, but keep an alias and stable fallbacks.
@@ -102,6 +103,15 @@ async function runGemini(parts: Array<Record<string, unknown>>, generationConfig
   if (!data) throw new Error(`Screen understanding is temporarily unavailable because Google retired or restricted Orbit's Gemini models. ${lastModelError}`);
   recordUsage(data);
   return data;
+}
+
+export async function emailWithGemini(prompt: string, runner: typeof runGemini = runGemini) {
+  const data = await runner([{ text: prompt }], {
+    temperature: 0.15, maxOutputTokens: 4096,
+    responseMimeType: "application/json", responseJsonSchema: EMAIL_SCHEMA,
+  });
+  const raw = data.candidates?.[0]?.content?.parts?.map(part => part.text || "").join("\n") || "";
+  return parseGeneratedEmail(raw);
 }
 
 export async function answerWithGemini(input: { query: string; history: ConversationTurn[]; sources?: ResearchSource[]; imageBase64?: string }) {

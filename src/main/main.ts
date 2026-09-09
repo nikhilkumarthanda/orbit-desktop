@@ -9,8 +9,8 @@ import { fileURLToPath } from "node:url";
 import { AuditStore } from "./audit.js";
 import { policies, policy } from "./policy.js";
 import { cleanupPlan, findFiles, gitContexts, recentWork, systemSnapshot } from "./tools.js";
-import { answerWithOllama, ollamaStatus, OLLAMA_MODEL, planWithOllama } from "./ollama.js";
-import { answerWithGemini, geminiKey, geminiStatus, saveGeminiKey, setGeminiBudget } from "./gemini.js";
+import { answerWithOllama, emailWithOllama, ollamaStatus, OLLAMA_MODEL, planWithOllama } from "./ollama.js";
+import { answerWithGemini, emailWithGemini, geminiKey, geminiStatus, saveGeminiKey, setGeminiBudget } from "./gemini.js";
 import { amazonSearchWithPriceFilter, youtubePlayFirst } from "./browser-workflows.js";
 import { describeCurrentPage, findOnPage, summarizeCurrentPage } from "./browser-intelligence.js";
 import { browserTaskStatus, cancelBrowserTask, resumeBrowserTask, startBrowserTask } from "./browser-task-engine.js";
@@ -26,7 +26,7 @@ import { executeMacControl, macPermissionStatus } from "./macos-control.js";
 import { researchPublicWeb, shouldReadTheWeb } from "./web-research.js";
 import { contactsForName } from "./recipients.js";
 import { destinationAdapter, destinationsFor } from "./destination-adapters.js";
-import { parseGeneratedEmail, inferEmailSubject, emailVerificationScript } from "./email-drafting.js";
+import { emailFailureReason, inferEmailSubject, emailVerificationScript } from "./email-drafting.js";
 import type { CommandPlan, ConversationEntry, ConversationTurn, GitHubWorkflowStatus, OrbitPlayGesture, OrbitPlayMode, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -743,14 +743,17 @@ async function generateEmail(displayName: string, instruction: string) {
   const configured = `${writingPreferences.length}, ${writingPreferences.tone}, ${writingPreferences.natural ? "natural and not robotic" : "neutral"}; greeting ${writingPreferences.greeting}; sign as ${writingPreferences.signature}`;
   const preferences = [configured, ...saved];
   const prompt = `Write a complete polished email to ${displayName}. Preserve material facts and requested outcomes. Follow these writing preferences: ${preferences.join("; ")}. User instruction: ${instruction}. Return only JSON with string fields subject and body. Write a short meaningful subject and a body with greeting and sign-off. Apply tone, length, and browser instructions without including those instructions in the message. Do not invent dates, reasons, promises, or details.`;
-  const errors: unknown[] = [];
-  if (geminiStatus().available) {
-    try { return parseGeneratedEmail(await answerWithGemini({ query: prompt, sources: [], history: conversation })); } catch (error) { errors.push(error); }
+  const errors: string[] = [];
+  const gemini = geminiStatus();
+  if (gemini.available) {
+    try { return await emailWithGemini(prompt); } catch (error) { errors.push(`Gemini: ${emailFailureReason(error)}`); }
+  } else if (gemini.configured && gemini.usage.blocked) {
+    errors.push("Gemini: Orbit's monthly usage limit has been reached; review usage in Settings");
   }
   if ((await ollamaStatus()).available) {
-    try { return parseGeneratedEmail(await answerWithOllama({ query: prompt, sources: [], history: conversation })); } catch (error) { errors.push(error); }
+    try { return await emailWithOllama(prompt); } catch (error) { errors.push(`Ollama: ${emailFailureReason(error)}`); }
   }
-  throw new Error(errors.length ? "Email generation failed. Your existing draft is unchanged. Please retry." : "Connect Gemini or start your local Ollama model to write this email. No draft has been opened.");
+  throw new Error(errors.length ? `Email generation failed. ${errors.join(". ")}. Your existing draft is unchanged.` : "Connect Gemini or start your local Ollama model to write this email. No draft has been opened.");
 }
 
 async function rewriteEmail(request: { recipient?: string; subject?: string; body?: string; instruction: string }) {

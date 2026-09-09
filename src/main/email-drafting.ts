@@ -1,5 +1,23 @@
 export interface EmailWritingPreferences { tone: string; length: string; greeting: string; signature: string; natural: boolean }
 
+export const EMAIL_SCHEMA = {
+  type: "object",
+  properties: { subject: { type: "string" }, body: { type: "string" } },
+  required: ["subject", "body"],
+  additionalProperties: false,
+} as const;
+
+// Classify failures without displaying provider payloads, credentials, or email content.
+export function emailFailureReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (/429|quota|rate.limit|resource.exhausted/i.test(message)) return "request quota reached; check your provider usage";
+  if (/401|403|api.key|unauth|permission.denied/i.test(message)) return "authentication failed; check the API key in Settings";
+  if (/timeout|timed.out|abort/i.test(message)) return "request timed out; retry when the model is ready";
+  if (/fetch|network|ECONN|connect/i.test(message)) return "connection failed; check that the provider is reachable";
+  if (/JSON|incomplete email|drafting instructions|empty|no answer|truncated/i.test(message)) return "model returned an invalid or incomplete draft";
+  return "provider could not generate a draft; check its status in Settings";
+}
+
 export function emailVerificationScript(provider: "gmail" | "outlook", recipient: string, subject: string, body: string) {
   return `(()=>{
     if(location.hostname!==${JSON.stringify(provider === "gmail" ? "mail.google.com" : "outlook.office.com")})return 'UNVERIFIED';
@@ -18,7 +36,9 @@ export function emailVerificationScript(provider: "gmail" | "outlook", recipient
 
 export function parseGeneratedEmail(output: string): { subject: string; body: string } {
   const text = output.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  const value = JSON.parse(text);
+  let value;
+  try { value = JSON.parse(text); }
+  catch { throw new Error("The writing model returned invalid JSON."); }
   if (!value || typeof value.subject !== "string" || typeof value.body !== "string" ||
       !value.subject.trim() || !value.body.trim() || value.subject.length > 200 || value.body.length > 5000 ||
       /[\r\n]/.test(value.subject)) throw new Error("The writing model returned an incomplete email. Please retry.");

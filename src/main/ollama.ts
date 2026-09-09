@@ -1,4 +1,5 @@
 import type { AIStatus, BrowserTaskAction, CommandPlan, ConversationTurn, ResearchSource } from "../shared/contracts.js";
+import { EMAIL_SCHEMA, parseGeneratedEmail } from "./email-drafting.js";
 
 export const OLLAMA_MODEL = "qwen3:4b";
 const OLLAMA_URL = "http://127.0.0.1:11434";
@@ -113,6 +114,20 @@ export async function planBrowserActionWithOllama(args: { prompt: string; fetche
     const detail = error instanceof Error ? error.message : "invalid JSON";
     throw new Error(`Local browser planner returned invalid JSON (${detail}): ${content.slice(0, 120)}`);
   }
+}
+
+export async function emailWithOllama(prompt: string, fetcher: typeof fetch = fetch) {
+  const response = await fetcher(`${OLLAMA_URL}/api/chat`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60_000),
+    body: JSON.stringify({ model: OLLAMA_MODEL, stream: false, think: false, keep_alive: "30s",
+      format: EMAIL_SCHEMA, options: { temperature: 0.15, num_predict: 2048 },
+      messages: [{ role: "system", content: "You write emails. Return only JSON matching the supplied schema, with subject and body. No commentary." }, { role: "user", content: prompt }],
+    }),
+  });
+  if (!response.ok) throw new Error(`Ollama returned status ${response.status}`);
+  const data = await response.json() as { message?: { content?: string }; done_reason?: string };
+  if (data.done_reason === "length") throw new Error("Ollama returned a truncated email");
+  return parseGeneratedEmail(data.message?.content || "");
 }
 
 export async function answerWithOllama(args: { query: string; sources: ResearchSource[]; history: ConversationTurn[]; fetcher?: typeof fetch }): Promise<string> {

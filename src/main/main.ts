@@ -26,7 +26,7 @@ import { executeMacControl, macPermissionStatus } from "./macos-control.js";
 import { researchPublicWeb, shouldReadTheWeb } from "./web-research.js";
 import { contactsForName } from "./recipients.js";
 import { destinationAdapter, destinationsFor } from "./destination-adapters.js";
-import { fallbackEmailBody, inferEmailSubject } from "./email-drafting.js";
+import { parseGeneratedEmail, inferEmailSubject, emailVerificationScript } from "./email-drafting.js";
 import type { CommandPlan, ConversationEntry, ConversationTurn, GitHubWorkflowStatus, OrbitPlayGesture, OrbitPlayMode, ResearchAnswer, ResearchSource } from "../shared/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -347,13 +347,8 @@ function planLocal(value: string): CommandPlan {
   if (/\b(?:outlook|gmail|apple mail|mail|email|e-mail)\b/.test(command) && /\b(?:draft|write|compose)\b/.test(command)) {
     const provider = /\bgmail\b/.test(command) ? "gmail" : /\boutlook\b/.test(command) ? "outlook" : /\b(?:apple mail|mail app)\b/.test(command) ? "mail" : undefined;
     const recipient = cleanRecipientName(command.match(/\b(?:to|for)\s+(.+?)(?=\s+(?:regarding|about|saying|telling|with subject)\b|[,.;]|$)/)?.[1]?.trim());
-    const leaveTomorrow = /\bleave\b/.test(command) && /\b(?:tomorrow|tomo)\b/.test(command);
-    const sender = command.match(/,\s*([a-z][a-z .'-]+)[.!]*$/i)?.[1]?.trim() || "Nikhil";
-    const displayName = recipient?.replace(/\b\w/g, letter => letter.toUpperCase()) || "";
-    const subject = leaveTomorrow ? "Leave Request" : inferEmailSubject(value);
-    const body = leaveTomorrow
-      ? `Hi ${displayName || "there"},\n\nI would like to request leave for tomorrow.\n\nThank you,\n${sender}`
-      : "";
+    const subject = "";
+    const body = "";
     return { intent: "email_draft", confidence: 1, explanation: "Email draft action, destination, and recipient parsed independently", recipient, subject, body, provider, query: value, requiresConfirmation: true, source: "local" };
   }
   if (activeEmailDraft && /^(?:please\s+)?(?:make|rewrite|change|update|add|remove|shorten|expand)\b|^(?:more|less)\s+(?:formal|professional|friendly|casual|detailed)/.test(command)) return { intent: "email_rewrite", confidence: 1, explanation: "Active email revision matched", query: value, source: "local" };
@@ -711,14 +706,14 @@ async function draftEmail(request: { recipient?: string; subject: string; body: 
   let recipient = requested;
   let displayName = requested;
   const providers = destinationsFor("email").map(adapter => adapter.id) as ("gmail"|"outlook"|"mail")[];
-  if (!request.provider) {
+  if (!request.provider || request.instruction) {
     const contacts = !requested.includes("@") ? contactsForName(requested).filter(match => match.emails.length) : [];
     if (contacts.length > 1 && contacts[0].score - contacts[1].score < 12) return { drafted: false, summary: `I found more than one ${requested}. Choose the correct recipient before I open the draft.`, recipient: requested, recipients: contacts };
     const contact = contacts[0];
     if (contact) { recipient = contact.emails[0]; displayName = contact.name; }
     let subject = String(request.subject && request.subject !== "Draft Email" ? request.subject : inferEmailSubject(request.instruction || "")).slice(0, 200);
     let body = String(request.body || "").slice(0, 5_000);
-    if (!body && request.instruction) body = await generateEmailBody(displayName, request.instruction);
+    if (request.instruction) ({ subject, body } = await generateEmail(displayName, request.instruction));
     activeEmailDraft = { recipient, displayName, subject, body };
     return { drafted: false, summary: `Review the draft for ${displayName}, then choose where to open it.`, recipient, displayName, subject, body, providers };
   }
@@ -732,30 +727,37 @@ async function draftEmail(request: { recipient?: string; subject: string; body: 
   }
   let subject = String(request.subject && request.subject !== "Draft Email" ? request.subject : inferEmailSubject(request.instruction || "")).slice(0, 200);
   let body = String(request.body || "").slice(0, 5_000);
-  if (!body && request.instruction) body = await generateEmailBody(displayName, request.instruction);
+  if (!/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(recipient)) return { drafted: false, summary: "Enter the recipient's full email address in the preview before opening the draft.", recipient, displayName, subject, body, providers };
+  if (!subject.trim() || !body.trim()) throw new Error("Review a complete subject and message before opening the draft.");
   const mailto = new URL(`mailto:${recipient}`); mailto.searchParams.set("subject", subject); mailto.searchParams.set("body", body);
   if (request.provider === "gmail" || request.provider === "outlook") {
     const resolved = await openWebEmailDraft(request.provider, recipient, subject, body);
-    return { drafted: true, summary: resolved ? `I opened the complete editable ${adapter.label} draft for ${displayName}. Recipient, subject, and body were inserted; it has not been sent.` : `I opened ${adapter.label} with the subject and body. Verify ${displayName} in the To suggestions before sending.`, recipient, displayName, subject, body, verifiedFields: resolved ? ["recipient","subject","body"] : ["subject","body"] };
+    return { drafted: true, summary: resolved ? `I verified the recipient, subject, and body in ${adapter.label}. It has not been sent.` : `I opened the ${adapter.label} compose link, but could not verify its fields. Check the recipient, subject, and message in the browser. It has not been sent.`, recipient, displayName, subject, body, verifiedFields: resolved ? ["recipient","subject","body"] : [] };
   }
   else await shell.openExternal(mailto.toString());
-  return { drafted: true, summary: `I opened the complete editable ${adapter.label} draft for ${displayName}. It has not been sent.`, recipient, displayName, subject, body, verifiedFields: ["recipient","subject","body"] };
+  return { drafted: true, summary: `I opened the compose link in ${adapter.label}. Check its fields; Orbit has not verified them or sent the email.`, recipient, displayName, subject, body, verifiedFields: [] };
 }
 
-async function generateEmailBody(displayName: string, instruction: string) {
+async function generateEmail(displayName: string, instruction: string) {
   const saved = (await recall("")).map(item => item.content).filter(value => /\b(?:writing|email|message|tone|style|signature|professional|formal|casual|concise|direct)\b/i.test(value));
   const configured = `${writingPreferences.length}, ${writingPreferences.tone}, ${writingPreferences.natural ? "natural and not robotic" : "neutral"}; greeting ${writingPreferences.greeting}; sign as ${writingPreferences.signature}`;
   const preferences = [configured, ...saved];
-  const prompt = `Write a complete polished email to ${displayName} from Nikhil. Preserve every material fact and requested outcome from the user's instruction, but rewrite it naturally rather than copying it verbatim. Follow these writing preferences: ${preferences.join("; ")}. User instruction: ${instruction}. Return only the email body with greeting, message, and sign-off. Do not add invented dates, reasons, promises, or details.`;
-  try { return geminiStatus().available ? await answerWithGemini({ query: prompt, sources: [], history: conversation }) : (await ollamaStatus()).available ? await answerWithOllama({ query: prompt, sources: [], history: conversation }) : fallbackEmailBody(displayName, instruction, writingPreferences); }
-  catch { return fallbackEmailBody(displayName, instruction, writingPreferences); }
+  const prompt = `Write a complete polished email to ${displayName}. Preserve material facts and requested outcomes. Follow these writing preferences: ${preferences.join("; ")}. User instruction: ${instruction}. Return only JSON with string fields subject and body. Write a short meaningful subject and a body with greeting and sign-off. Apply tone, length, and browser instructions without including those instructions in the message. Do not invent dates, reasons, promises, or details.`;
+  const errors: unknown[] = [];
+  if (geminiStatus().available) {
+    try { return parseGeneratedEmail(await answerWithGemini({ query: prompt, sources: [], history: conversation })); } catch (error) { errors.push(error); }
+  }
+  if ((await ollamaStatus()).available) {
+    try { return parseGeneratedEmail(await answerWithOllama({ query: prompt, sources: [], history: conversation })); } catch (error) { errors.push(error); }
+  }
+  throw new Error(errors.length ? "Email generation failed. Your existing draft is unchanged. Please retry." : "Connect Gemini or start your local Ollama model to write this email. No draft has been opened.");
 }
 
 async function rewriteEmail(request: { recipient?: string; subject?: string; body?: string; instruction: string }) {
   const current = request.body ? { recipient: request.recipient || "", displayName: request.recipient || "the recipient", subject: request.subject || "Email Draft", body: request.body } : activeEmailDraft;
   if (!current) return { drafted: false, summary: "There is no active email draft to revise. Ask me to draft one first." };
   const prompt = `Rewrite this email according to the instruction while preserving all facts. Instruction: ${request.instruction}. Current email:\n${current.body}`;
-  const body = await generateEmailBody(current.displayName, prompt);
+  const { body } = await generateEmail(current.displayName, prompt);
   activeEmailDraft = { ...current, body };
   return { drafted: false, summary: "I updated the active draft. Review it before opening an email app.", recipient: current.recipient, displayName: current.displayName, subject: current.subject, body, providers: destinationsFor("email").map(adapter => adapter.id) as ("gmail"|"outlook"|"mail")[] };
 }
@@ -773,10 +775,8 @@ async function openWebEmailDraft(provider: "gmail"|"outlook", recipient: string,
   openChromeTab(url.toString());
   await new Promise(resolve => setTimeout(resolve, 2_800));
   if (emailAddress) {
-    const expectedSubject = JSON.stringify(subject);
-    const expectedBody = JSON.stringify(body.slice(0, 80));
-    const verification = `(()=>{const subject=${expectedSubject},body=${expectedBody};const values=[...document.querySelectorAll('input,textarea,[contenteditable="true"]')].map(e=>String(e.value||e.innerText||e.textContent||''));const page=document.body.innerText||'';return values.some(v=>v.includes(subject))&&(values.some(v=>v.includes(body))||page.includes(body))?'VERIFIED':'UNVERIFIED'})()`;
-    try { return (await executeActiveChromeJavaScript(verification)).includes("VERIFIED"); } catch { return false; }
+    const verification = emailVerificationScript(provider, recipient, subject, body);
+    try { return (await executeActiveChromeJavaScript(verification)).trim() === "VERIFIED"; } catch { return false; }
   }
   const value = JSON.stringify(recipient);
   const typeScript = `(()=>{const value=${value};const visible=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&!e.disabled};const selectors=${JSON.stringify(provider === "gmail" ? ["input[peoplekit-id]","input[aria-label*='To' i]","textarea[name='to']"] : ["input[aria-label*='To' i]","input[placeholder*='To' i]","input[role='combobox']"])};const input=selectors.flatMap(s=>[...document.querySelectorAll(s)]).find(visible);if(!input)return 'NO_TO';input.focus();const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set||Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')?.set;setter?setter.call(input,value):input.value=value;input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));input.dispatchEvent(new Event('change',{bubbles:true}));return 'TYPED'})()`;

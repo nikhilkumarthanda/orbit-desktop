@@ -1,5 +1,33 @@
 export interface EmailWritingPreferences { tone: string; length: string; greeting: string; signature: string; natural: boolean }
 
+export function emailVerificationScript(provider: "gmail" | "outlook", recipient: string, subject: string, body: string) {
+  return `(()=>{
+    if(location.hostname!==${JSON.stringify(provider === "gmail" ? "mail.google.com" : "outlook.office.com")})return 'UNVERIFIED';
+    const visible=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0};
+    const normalize=v=>String(v||'').replace(/\\r\\n/g,'\\n').trim();
+    const roots=[...document.querySelectorAll('[role="dialog"],form')].filter(visible);
+    const expected=${JSON.stringify({ recipient, subject, body })};
+    return roots.some(root=>{
+      const subjects=[...root.querySelectorAll('input[name="subjectbox"],input[aria-label="Subject"],input[placeholder="Add a subject"]')].filter(visible);
+      const bodies=[...root.querySelectorAll('[contenteditable="true"][role="textbox"],[contenteditable="true"][aria-label*="Message body"],textarea[name="body"]')].filter(visible);
+      const recipients=[...root.querySelectorAll('[email],[data-email-address]')].filter(visible);
+      return subjects.some(e=>normalize(e.value)===normalize(expected.subject))&&bodies.some(e=>normalize(e.value||e.innerText)===normalize(expected.body))&&recipients.some(e=>String(e.getAttribute('email')||e.getAttribute('data-email-address')||'').toLowerCase()===expected.recipient.toLowerCase());
+    })?'VERIFIED':'UNVERIFIED';
+  })()`;
+}
+
+export function parseGeneratedEmail(output: string): { subject: string; body: string } {
+  const text = output.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const value = JSON.parse(text);
+  if (!value || typeof value.subject !== "string" || typeof value.body !== "string" ||
+      !value.subject.trim() || !value.body.trim() || value.subject.length > 200 || value.body.length > 5000 ||
+      /[\r\n]/.test(value.subject)) throw new Error("The writing model returned an incomplete email. Please retry.");
+  if (/\b(?:keep it (?:short|professional|friendly)|open (?:it )?in gmail|do not send it)\b/i.test(value.subject + "\n" + value.body)) {
+    throw new Error("The writing model copied drafting instructions into the email. Please retry.");
+  }
+  return { subject: value.subject.trim(), body: value.body.trim() };
+}
+
 export function emailRequestDetails(instruction: string) {
   return instruction
     .replace(/^.*?\b(?:draft|write|compose)\s+(?:an?\s+)?(?:email|e-mail)(?:\s+(?:to|for)\s+.+?)?\s+(?:saying|telling|about|regarding)\s+/i, "")
